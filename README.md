@@ -3,7 +3,7 @@
 This repository contains all code, notes, and resources for our P4P project.
 
 ## 🧠 Project Summary
-We're working on a research project for the P4P course focused on detecting early stages of Alzheimer’s Disease (AD) and Parkinson’s Disease (PD) using a machine learning approach applied to PET and MRI scans.
+We're working on a research project for the P4P course focused on detecting early stages of Alzheimer’s Disease (AD) and Parkinson’s Disease (PD) using a machine learning approach applied to PET,MRI and DatTSPECT Medical Imaging scans.
 
 ## 📁 Project Structure
 - `feature_extraction/` – pyRadiomMics testing currently 6/5/25
