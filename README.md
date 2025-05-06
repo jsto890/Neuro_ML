@@ -18,7 +18,7 @@ We're working on a research project for the P4P course focused on detecting earl
    ```
 2. Navigate into the folder:
    ```
-   cd p4p-project
+   cd P4P
    ```
 3. (Optional) Create a virtual environment and install any dependencies.
 
