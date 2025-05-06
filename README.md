@@ -7,14 +7,14 @@ We're working on a research project for the P4P course focused on detecting earl
 
 ## 📁 Project Structure
 - `feature_extraction/` – pyRadiomMics testing currently 6/5/25
-- `test_data/` – Python or other automation scripts
-- `docs/` – Reports, posters, and notes
-- `data/` – Any datasets or data files (can be .gitignored)
+- `test_data/` – 3-10 actual data files from each dataset for testing scripts and NESI/HASEL
+- `preprocessing_scripts/` – data standardiastion scripts and pre-processing
+
 
 ## 🚀 How to Get Started
 1. Clone this repository:
    ```
-   git clone https://github.com/YOUR_USERNAME/p4p-project.git
+   git clone https://github.com/YOUR_USERNAME/P4P.git
    ```
 2. Navigate into the folder:
    ```
