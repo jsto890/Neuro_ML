@@ -1,0 +1,130 @@
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+env/
+venv/
+ENV/
+env.bak/
+.venv/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# PyCharm
+.idea/
+
+# VSCode
+.vscode/
+
+# macOS system files
+.DS_Store
+
+# Jupyter runtime
+~/.local/share/jupyter/runtime/
+
+# Hidden logs and cache
+*.log
+*.out
+*.bak
+*.swp
+.cache/
+*.tmp
+
+# Test/coverage reports
+.coverage
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Data files (can manually include clean sample sets if needed)
+data/
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.h5
+*.json
+*.pickle
+*.pkl
+*.joblib
+
+# Model files
+*.h5
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.pb
+
+# Environment files
+*.env
+.env.*
+.envrc
+
+# Conda
+conda-meta/
+*.conda
+*.yml
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Output files
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+
+# Backup files
+*.orig
+*.bak
+*.tmp
+*~
+
+# Temporary project files
+project.log
+tags
+
+# Jupyter Notebook specific
+*.nbconvert.ipynb
+
+# Ignore local database or analysis outputs
+*.sqlite
+*.db
+*.sql
+
+# TensorBoard logs
+logs/
+events.out.tfevents.*
+
+# AWS/GCP/Secrets
+*.pem
+*.key
+*.crt
+*.der
+*.s3cfg
+
+# MyPy
+.mypy_cache/
+
+# Pytest
+.pytest_cache/
+
+# Local secrets
+secrets.yaml
+config.yaml
+*.secret
+
+# Ignore notebook HTML exports
+*.nbconvert.html
