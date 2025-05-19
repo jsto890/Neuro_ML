@@ -13,8 +13,12 @@ Pipeline:
 Author: Joseph Storey, 2025-04-23 (updated 2025-05-19)
 """
 
-import json, logging, subprocess, re
+import json
+import logging
+import subprocess
+import re
 from pathlib import Path
+from typing import Tuple
 
 import ants
 import nibabel as nib
@@ -70,7 +74,7 @@ def motion_correct_pet4d(pet4d: Path) -> Path:
     return out
 
 # --- Frame averaging ---------------------------------------------------------
-def average_frames(pet4d: Path, fr: tuple[int, int]) -> nib.Nifti1Image:
+def average_frames(pet4d: Path, fr: Tuple[int, int]) -> nib.Nifti1Image:
     img  = nib.load(str(pet4d))
     data = img.get_fdata(dtype=np.float32)[..., fr[0]: fr[1]].mean(axis=3)
     return nib.Nifti1Image(data, img.affine)
@@ -100,8 +104,11 @@ def register_to_mni(suvr_img: nib.Nifti1Image) -> ants.ANTsImage:
     )
 
 # --- Cropping ----------------------------------------------------------------
-def crop_nifti(img: nib.Nifti1Image, mask: nib.Nifti1Image,
-               box: tuple[int,int,int]) -> nib.Nifti1Image:
+def crop_nifti(
+    img: nib.Nifti1Image,
+    mask: nib.Nifti1Image,
+    box: Tuple[int, int, int]
+) -> nib.Nifti1Image:
     data = img.get_fdata(dtype=np.float32)
     m    = mask.get_fdata().astype(bool)
     com  = np.array(ndimage.center_of_mass(m))[[2,1,0]]
