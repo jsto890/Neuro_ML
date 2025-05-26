@@ -40,6 +40,7 @@ import subprocess  # run external commands
 import logging  # log pipeline progress and errors
 import sys  # access system-specific parameters and functions
 import tempfile  # create temporary files
+from fs_nipype import fs_recon_all_nipype
 
 # Import imaging libraries
 import ants as ants  # ANTsPy for advanced image registration
@@ -53,12 +54,12 @@ from tqdm import tqdm  # progress bar for iterables
 # CONFIGURATION
 # ============================
 # Define paths for tools and data directories
-FREESURFER_HOME = "/Applications/freesurfer/8.0.0"  # FreeSurfer installation directory
-SUBJECTS_DIR   = "/Users/josephstorey/Desktop/Part_4_Project/data/FS_subjects"  # where FreeSurfer subjects live
-RAW_DIR        = "/Users/josephstorey/Desktop/Part_4_Project/data/test_data/mri/BRAINLAT/AD"  # raw NIfTI inputs
-FINAL_DIR      = "/Users/josephstorey/Desktop/Part_4_Project/data/processed_data/MRI"  # output directory for processed images
+FREESURFER_HOME = "/home/jsto890/freesurfer-8.0.0/8.0.0"  # FreeSurfer installation directory
+SUBJECTS_DIR   = "/home/jsto890/reseng202500013-ndd-ml/data/raw/MRI/FS_Staged"  # where FreeSurfer subjects live
+RAW_DIR        = "/home/jsto890/reseng202500013-ndd-ml/data/raw/MRI"  # raw NIfTI inputs
+FINAL_DIR      = "/home/jsto890/reseng202500013-ndd-ml/data/preprocessed/MRI"  # output directory for processed images
 LOG_FILE       = os.path.join(FINAL_DIR, "pipeline.log")  # pipeline log file
-mni_template_path = "/Users/josephstorey/Desktop/Part_4_Project/data/test_data/Templates/MRI_refs/MNI152_T1_1mm_brain.nii.gz"  # MNI template
+mni_template_path = "/home/jsto890/reseng202500013-ndd-ml/P4P/Templates/MRI_refs/MNI152_T1_1mm_brain.nii.gz"  # MNI template
 
 # Ensure required directories exist (will create if missing)
 for d in (SUBJECTS_DIR, RAW_DIR, FINAL_DIR):
@@ -75,24 +76,6 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout)  # also output logs to console
     ]
 )
-
-# ============================
-# FREE SURFER RECON-ALL FUNCTION
-# ============================
-def fs_recon_all(input_nii, subj):
-    """
-    Run FreeSurfer's recon-all on the input NIfTI image:
-    - Sets up FreeSurfer environment
-    - Calls recon-all with full processing pipeline
-    """
-    # Construct shell command to source FreeSurfer and run recon-all
-    cmd = (
-        f"export FREESURFER_HOME={FREESURFER_HOME} && "
-        f"source $FREESURFER_HOME/SetUpFreeSurfer.sh && "
-        f"recon-all -i \"{input_nii}\" -s \"{subj}\" -sd \"{SUBJECTS_DIR}\" -all"
-    )
-    # Execute the command in a bash shell, raising error if it fails
-    subprocess.run(["bash", "-lc", cmd], check=True)
 
 # ============================
 # POST-PROCESSING FUNCTIONS
@@ -221,7 +204,9 @@ def center_crop_pad(nib_img, shape=(160,192,192)):
 # ============================
 # SUBJECT PROCESSING PIPELINE
 # ============================
-def process_subject(subj, raw_path, mni_template_path=None):
+def process_subject(subj, raw_path, mni_template_path,
+                    fs_subj_dir, out_subdir):
+    os.makedirs(out_subdir, exist_ok=True)
     """
     Run full preprocessing for a single subject:
       1) Orientation standardization
@@ -246,15 +231,26 @@ def process_subject(subj, raw_path, mni_template_path=None):
     temp_std_path = tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False).name
     nib.save(img, temp_std_path)
 
-    # Step 2: run recon-all
-    logging.info("[2/9] recon-all")
-    fs_recon_all(temp_std_path, subj)
-    os.remove(temp_std_path)  # remove temp file
+    # STEP 2 PREP: ensure a clean FS subject directory
+    subj_dir = os.path.join(fs_subj_dir, subj)
+    if os.path.isdir(subj_dir):
+        logging.info(f"→ Removing existing FreeSurfer outputs for {subj}")
+        import shutil
+        shutil.rmtree(subj_dir)
 
-    # Step 3: load FreeSurfer outputs
+    # Step 2: run nipye
+    logging.info("[2/9] recon-all via NiPype")
+    fs_recon_all_nipype(
+        input_nii=temp_std_path,
+        subj_id=subj,
+        subjects_dir=fs_subj_dir,
+        num_threads=4
+    )
+
+    # Step 3: load FreeSurfer outputs from the fs_subj_dir you passed in
     logging.info("[3/9] loading brain and mask")
-    brain_img = nib.load(os.path.join(SUBJECTS_DIR, subj, "mri", "brain.mgz"))
-    mask_img  = nib.load(os.path.join(SUBJECTS_DIR, subj, "mri", "brainmask.mgz"))
+    brain_img = nib.load(os.path.join(fs_subj_dir, "mri", "brain.mgz"))
+    mask_img  = nib.load(os.path.join(fs_subj_dir, "mri", "brainmask.mgz"))
 
     # Step 4: apply mask
     logging.info("[4/9] apply mask")
@@ -284,7 +280,7 @@ def process_subject(subj, raw_path, mni_template_path=None):
 
     # Save final processed image
     out_path = os.path.join(FINAL_DIR, f"{subj}_final.nii.gz")
-    nib.save(img, out_path, compress=True)
+    nib.save(img, os.path.join(out_subdir, f"{subj}_final.nii.gz"))
     logging.info(f"Saved final image ➔ {out_path}")
     logging.info(f"--- FINISHED {subj} ---\n")
 
@@ -292,13 +288,33 @@ def process_subject(subj, raw_path, mni_template_path=None):
 # MAIN EXECUTION
 # ============================
 if __name__ == "__main__":
-    # Gather all raw NIfTI files
-    files = [f for f in os.listdir(RAW_DIR) if f.endswith(".nii.gz")]
-    # Process each subject with progress bar
-    for f in tqdm(files, desc="Processing subjects"):
-        subj     = f[:-7]  # strip `.nii.gz` to get subject ID
-        raw_path = os.path.join(RAW_DIR, f)
-        try:
-            process_subject(subj, raw_path)
-        except Exception:
-            logging.exception(f"FAILED {subj}")
+    logging.info(f"Walking RAW_DIR = {RAW_DIR}")
+    # Walk raw data tree: RAW_DIR/site/disease/subj_folder/*.nii.gz
+    for root, _, files in os.walk(RAW_DIR):
+        # Only process .nii.gz files
+        for fname in files:
+            if not fname.endswith((".nii", ".nii.gz")):
+                continue
+
+            # 1) Compute the relative path from RAW_DIR
+            rel_dir = os.path.relpath(root, RAW_DIR)  
+            #    e.g. "SiteA/AD/sub-001_SiteA_T1_AD"
+            site, disease, subj_folder = rel_dir.split(os.sep)
+
+            # 2) Derive subject ID and modality from the filename
+            #    e.g. 'sub-001_SiteA_T1_AD.nii.gz' → subj_id = 'sub-001_SiteA_T1_AD'
+            subj_id = fname[:-7]
+
+            # 3) Make a matching FS subject directory
+            #    e.g. SUBJECTS_DIR/SiteA/AD/sub-001_SiteA_T1_AD
+            fs_subj_dir = os.path.join(SUBJECTS_DIR, site, disease, subj_id)
+            os.makedirs(fs_subj_dir, exist_ok=True)
+
+            # 4) Run the full pipeline
+            raw_path = os.path.join(root, fname)
+            try:
+                process_subject(subj_id, raw_path, mni_template_path,
+                                fs_subj_dir=fs_subj_dir,
+                                out_subdir=os.path.join(FINAL_DIR, site, disease, subj_id))
+            except Exception:
+                logging.exception(f"FAILED {subj_id}")
