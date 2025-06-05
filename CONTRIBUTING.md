@@ -14,11 +14,11 @@ We use a **feature-branch workflow**. All changes must be made in a branch and s
 ## 🧩 Step-by-Step Workflow
 
 ### 1. Before You Start Work
-Always pull the latest version of `main`:
+Always pull the latest version of `master`:
 
 ```bash
-git checkout main
-git pull origin main
+git checkout master
+git pull origin master
 ```
 
 Then create a new branch for your work:
@@ -62,8 +62,8 @@ Once reviewed, we’ll merge it into `main`.
 To stay in sync, always run this before starting new work:
 
 ```bash
-git checkout main
-git pull origin main
+git checkout master
+git pull origin master
 ```
 
 ---
