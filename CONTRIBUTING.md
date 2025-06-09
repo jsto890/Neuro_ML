@@ -57,7 +57,7 @@ Then go to GitHub, open a Pull Request (PR) from your branch into `main`, and ad
 ---
 
 ### 4. After Review and Approval
-Once reviewed, we’ll merge it into `main`.
+Once reviewed, we’ll merge it into `master`.
 
 To stay in sync, always run this before starting new work:
 
