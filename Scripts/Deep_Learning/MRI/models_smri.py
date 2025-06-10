@@ -5,7 +5,7 @@ import torch.nn as nn
 
 class Simple3DCNN(nn.Module):
     """
-    A straightforward 3DxCNN for binary classification (e.g. AD vs CN).
+    A straightforward 3DxCNN for binary classification (e.g. AD vs PD vs CN).
     Input:  [B, 1, D, H, W]  single‐channel sMRI
     Output: [B, num_classes] logits
     """

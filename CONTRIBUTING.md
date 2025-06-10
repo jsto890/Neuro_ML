@@ -52,7 +52,7 @@ Push your branch to GitHub:
 git push origin feature/your-branch-name
 ```
 
-Then go to GitHub, open a Pull Request (PR) from your branch into `main`, and add a short description of what you did.
+Then go to GitHub, open a Pull Request (PR) from your branch into `master`, and add a short description of what you did.
 
 ---
 

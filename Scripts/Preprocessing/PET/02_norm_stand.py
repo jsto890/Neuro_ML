@@ -13,12 +13,12 @@ Automatically preprocess raw 4D/3D amyloid PET scans from ADNI:
  8. Record QC statistics at each stage and write per-subject & master CSVs.
 
 Usage:
-  python3 04JUNE.py \
-    --input_root /home/jsto890/.../data/raw/PET/ADNI \
-    --output_root /home/jsto890/.../data/preprocessed/PET/ADNI \
-    --lowres_template /home/jsto890/.../FDG-PET-template_padded.nii.gz \
-    --cerebellum_mask /home/jsto890/.../cereb_in_petspace.nii.gz \
-    --brain_mask_template /home/jsto890/.../brain_in_petspace.nii.gz \
+  python3 02_norm_stand.py \
+    --input_root /home/jsto890/reseng202500013-ndd-ml/data/raw/PET/ADNI \
+    --output_root /home/jsto890/reseng202500013-ndd-ml/data/preprocessed/PET/ADNI \
+    --lowres_template ~/reseng202500013-ndd-ml/P4P/Templates/PET_refs/FDG-PET-template_padded.nii.gz \
+    --cerebellum_mask ~/reseng202500013-ndd-ml/P4P/Templates/PET_refs/cereb_in_petspace.nii.gz \
+    --brain_mask_template ~/reseng202500013-ndd-ml/P4P/Templates/PET_refs/brain_in_petspace.nii.gz \
     --crop_dims 160 192 192 \
     --threads 8
 """
