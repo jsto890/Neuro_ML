@@ -123,7 +123,6 @@ events.out.tfevents.*
 
 # Local secrets
 secrets.yaml
-config.yaml
 *.secret
 
 # Ignore notebook HTML exports

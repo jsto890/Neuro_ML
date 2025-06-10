@@ -52,12 +52,12 @@ Push your branch to GitHub:
 git push origin feature/your-branch-name
 ```
 
-Then go to GitHub, open a Pull Request (PR) from your branch into `main`, and add a short description of what you did.
+Then go to GitHub, open a Pull Request (PR) from your branch into `master`, and add a short description of what you did.
 
 ---
 
 ### 4. After Review and Approval
-Once reviewed, we’ll merge it into `main`.
+Once reviewed, we’ll merge it into `master`.
 
 To stay in sync, always run this before starting new work:
 
