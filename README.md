@@ -1,78 +1,98 @@
-# P4P Research Project
+# P4P Research Project: Early Detection of Neurodegenerative Diseases
 
-This repository contains all code, notes, and resources for our P4P project.
+## 🧠 Project Overview
+This research project focuses on developing machine learning models for early detection of Alzheimer's Disease (AD) and Parkinson's Disease (PD) using multimodal medical imaging data. The project leverages PET, MRI, and DaTSPECT scans to identify early biomarkers of these neurodegenerative conditions.
 
-## 🧠 Project Summary
-We're working on a research project for the P4P course focused on detecting early stages of Alzheimer’s Disease (AD) and Parkinson’s Disease (PD) using a machine learning approach applied to PET,MRI and DatTSPECT Medical Imaging scans.
+## 📋 Key Features
+- **Multimodal Data Processing**: Integrated pipeline for PET, MRI, and DaTSPECT image processing
+- **Standardized Preprocessing**: Automated data standardization and quality control
+- **Feature Extraction**: Advanced feature extraction using pyRadiomics
+- **Machine Learning Pipeline**: End-to-end ML workflow for disease classification
+- **Quality Control**: Comprehensive QC reports and validation metrics
 
 ## 📁 Project Structure
-- `feature_extraction/` – pyRadiomMics testing currently 6/5/25
-- `test_data/` – 3-10 actual data files from each dataset for testing scripts and NESI/HASEL
-- `preprocessing_scripts/` – data standardiastion scripts and pre-processing
+```
+P4P/
+├── Scripts/                    # Main processing scripts
+│   ├── Preprocessing/          # Data preprocessing pipelines
+│   │   ├── PET/                # PET image processing
+│   │   ├── MRI/                # MRI processing
+│   │   └── DaTSPECT/           # DaTSPECT processing
+│   ├── Feature_Extraction/     # Feature extraction using pyRadiomics
+│   ├── Deep_Learning/          # Deep learning models and training
+│   │   └── MRI/                # MRI-specific deep learning
+│   └── Visualise/              # Visualization tools
+├── Templates/                  # Reference templates
+│   ├── PET/                    # PET templates
+│   ├── MRI/                    # MRI templates
+│   └── SPECT/                  # SPECT templates
+├── requirements.txt            # Python package requirements
+├── environment.yml             # Conda environment configuration
+└── config.yaml                 # Global configuration file
+```
 
+## 🚀 Getting Started
 
-## 🚀 How to Get Started
-1. Clone this repository:
-   ```
-   git clone https://github.com/YOUR_USERNAME/P4P.git
-   ```
-2. Navigate into the folder:
-   ```
+### Prerequisites
+- Python 3.8 or higher
+- Git
+- (Optional) Virtual environment manager (conda/venv)
+
+### Installation
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/Jackson-Schofield/P4P.git
    cd P4P
    ```
-3. (Optional) Create a virtual environment and install any dependencies.
 
-## 🧑‍🤝‍🧑 Collaborators
-- Jackson Schofield
+2. Choose your preferred installation method:
+
+   #### Option 1: Using pip (requirements.txt)
+   ```bash
+   # Create and activate virtual environment (recommended)
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+   # Install dependencies
+   pip install -r requirements.txt
+   ```
+
+   #### Option 2: Using conda (environment.yml)
+   ```bash
+   # Create and activate conda environment
+   conda env create -f environment.yml
+   conda activate p4p
+   ```
+
+### Usage
+
+## 📊 Data Processing Pipeline
+
+### 1. Preprocessing
+- DICOM to NIfTI conversion
+- Motion correction
+- Intensity normalization
+- Quality control checks
+
+### 2. Feature Extraction
+- Radiomics feature calculation
+- Feature selection and reduction
+- Feature validation
+
+### 3. Machine Learning
+- Data splitting and validation
+- Model training and evaluation
+- Performance metrics calculation
+
+## 📝 Documentation
+- Detailed documentation is available in the `docs/` directory
+- API documentation can be generated using Sphinx
+- Example notebooks are provided in `docs/examples/`
+
+## 👥 Collaborators
 - Joseph Storey
+- Jackson Schofield
 
-
-# sMRI‐Only 3D-CNN + Grad-CAM
-
-## Overview
-
-This mini‐project trains a simple 3D convolutional network on structural MRI (sMRI) volumes (160×192×192) for binary classification, and then uses Grad-CAM to visualize saliency maps on a few validation subjects.
-
-- **Data location**: `data/preprocessed/sMRI/`
-- **Labels**: `labels/train_labels.csv` and `labels/val_labels.csv`
-- **Scripts**: everything under `scripts/`
-- **Checkpoints**: best model saved to `checkpoints/best_smri_model.pth`
-- **Grad-CAM outputs**: saved under `gradcam_outputs/`
-
-## 1. Create a conda/pip environment
-
-```bash
-# Example using conda
-conda create -n sMRI3d python=3.10
-conda activate sMRI3d
-
-# Install PyTorch (adjust CUDA version as needed)
-conda install pytorch torchvision torchaudio cudatoolkit=11.7 -c pytorch
-
-# Install other dependencies
-pip install nibabel pandas scikit-learn matplotlib tqdm
-
-
-Train the simple 3D-CNN on sMRI
-
-python scripts/train_smri.py \
-  --train_csv labels/train_labels.csv \
-  --val_csv labels/val_labels.csv \
-  --data_root data/preprocessed/sMRI \
-  --epochs 30 \
-  --batch_size 2 \
-  --num_workers 4 \
-  --checkpoint_dir checkpoints \
-  --device cuda
-
-
-Run Grad-CAM visualization
-
-Once best_smri_model.pth exists, run:
-
-python scripts/visualize_gradcam.py \
-  --val_csv labels/val_labels.csv \
-  --data_root data/preprocessed/sMRI \
-  --checkpoint checkpoints/best_smri_model.pth \
-  --device cuda \
-  --output_dir gradcam_outputs
+## 📞 Support
+For questions and support, please open an issue in the GitHub repository.
