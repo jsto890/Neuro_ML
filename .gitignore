@@ -1,4 +1,3 @@
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -126,3 +125,7 @@ secrets.yaml
 
 # Ignore notebook HTML exports
 *.nbconvert.html
+
+# Generated file lists
+file_list.txt
+*.filelist
