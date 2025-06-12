@@ -16,9 +16,9 @@ Usage:
   python3 02_norm_stand.py \
     --input_root /home/jsto890/reseng202500013-ndd-ml/data/raw/PET/ADNI \
     --output_root /home/jsto890/reseng202500013-ndd-ml/data/preprocessed/PET/ADNI \
-    --lowres_template ~/reseng202500013-ndd-ml/P4P/Templates/PET_refs/FDG-PET-template_padded.nii.gz \
-    --cerebellum_mask ~/reseng202500013-ndd-ml/P4P/Templates/PET_refs/cereb_in_petspace.nii.gz \
-    --brain_mask_template ~/reseng202500013-ndd-ml/P4P/Templates/PET_refs/brain_in_petspace.nii.gz \
+    --lowres_template ~/reseng202500013-ndd-ml/P4P/Templates/PET/FDG_PET.nii.gz \
+    --cerebellum_mask ~/reseng202500013-ndd-ml/P4P/Templates/PET/cereb_mask25_bin.nii.gz \
+    --brain_mask_template ~/reseng202500013-ndd-ml/P4P/Templates/PET/MNI152_T1_1mm_brain_mask.nii.gz \
     --crop_dims 160 192 192 \
     --threads 8
 """
@@ -34,6 +34,7 @@ import numpy as np
 import pandas as pd
 import nibabel as nib
 from nibabel.processing import resample_to_output
+from nibabel.processing import resample_from_to
 
 
 # -----------------------------
@@ -301,11 +302,17 @@ def main():
         sys.exit(1)
     try:
         cereb_img = nib.load(str(args.cerebellum_mask))
+        if cereb_img.shape != tmpl_img.shape or not np.allclose(cereb_img.affine, tmpl_img.affine, atol=1e-6):
+            logging.info(f"Resampling cerebellum mask {cereb_img.shape} → {tmpl_img.shape}")
+        cereb_img = resample_from_to(cereb_img, tmpl_img, order=0)  # nearest-neighbor
     except Exception as e:
         logging.error(f"Failed to load cerebellum mask: {e}")
         sys.exit(1)
     try:
         brain_img = nib.load(str(args.brain_mask_template))
+        if brain_img.shape != tmpl_img.shape or not np.allclose(brain_img.affine, tmpl_img.affine, atol=1e-6):
+            logging.info(f"Resampling brain mask {brain_img.shape} → {tmpl_img.shape}")
+        brain_img = resample_from_to(brain_img, tmpl_img, order=0)  # nearest‐neighbor
     except Exception as e:
         logging.error(f"Failed to load brain mask template: {e}")
         sys.exit(1)
@@ -367,7 +374,7 @@ def main():
             # ---------------------
             try:
                 logging.info(f"[{sub_id}] Resampling static to 2 mm isotropic (low-res)")
-                lowres_img = resample_to_output(static_img, (2.0, 2.0, 2.0))
+                lowres_img = resample_from_to(static_img, tmpl_img, order=1)
                 nib.save(lowres_img, str(lowres_path))
                 if not lowres_path.is_file():
                     raise RuntimeError("Failed to save low-res image")
@@ -400,6 +407,7 @@ def main():
                 "--float", "1",
                 "--output", f"[{out_prefix},{out_prefix}Warped.nii.gz]",
                 "--interpolation", "Linear",
+                "--initial-moving-transform", f"[{args.lowres_template},{lowres_path},1]",
                 # Rigid stage
                 "--transform", "Rigid[0.1]",
                 "--metric", f"MI[{args.lowres_template},{lowres_path},1,32]",
@@ -407,11 +415,11 @@ def main():
                 "--shrink-factors", "8x4x2x1",
                 "--smoothing-sigmas", "3x2x1x0vox",
                 # SyN stage
-                "--transform", "SyN[0.1,3,0]",
+                "--transform", "BSplineSyN[0.1,26,0]",
                 "--metric", f"CC[{args.lowres_template},{lowres_path},1,4]",
-                "--convergence", "100x70x50x20",
+                "--convergence", "50x30x20x10",
                 "--shrink-factors", "8x4x2x1",
-                "--smoothing-sigmas", "3x2x1x0vox"
+                "--smoothing-sigmas", "4x3x2x1vox"
             ]
             try:
                 logging.info(f"[{sub_id}] About to run antsRegistration with the following command:")
@@ -546,31 +554,68 @@ def main():
                 write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
                 write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
                 continue
-
+            
             # ---------------------
-            # STEP 5: Center-Crop/Pad SUVR to target dims (COM-based)
+            # STEP 5: Robust subject-based crop & affine update
             # ---------------------
             try:
-                logging.info(f"[{sub_id}] Cropping/padding around whole-brain COM to {tuple(args.crop_dims)}")
-                suvr_img = nib.load(str(suvr_path))
-                if not ensure_matched_affine_and_shape(suvr_img, brain_img):
-                    raise RuntimeError("Brain mask/SUVR template mismatch")
+                logging.info(f"[{sub_id}] Robust cropping/padding around subject COM to {tuple(args.crop_dims)}")
 
+                # 5.1 load SUVR
+                suvr_img   = nib.load(str(suvr_path))
                 suvr_array = suvr_img.get_fdata(dtype=np.float32)
-                brain_array = brain_img.get_fdata(dtype=np.float32)
-                brain_bool = brain_array > 0
 
-                cropped_array = crop_around_com(suvr_array, brain_bool, tuple(args.crop_dims), pad_value=0.0)
-                if cropped_array.shape != tuple(args.crop_dims):
-                    raise RuntimeError(f"Cropped shape mismatch: got {cropped_array.shape}")
+                # 5.2 compute a data-driven threshold: 25th percentile of non-zero SUVR
+                nonzero = suvr_array[suvr_array>0]
+                if nonzero.size < 100:             # too few non-zero voxels → bad SUVR?
+                    raise RuntimeError("Too few nonzero SUVR voxels for reliable mask.")
+                thresh = np.percentile(nonzero, 25)
 
-                cropped_img = nib.Nifti1Image(cropped_array, suvr_img.affine, suvr_img.header)
+                # 5.3 build initial mask & keep only largest CC
+                init_mask = suvr_array > thresh
+                labels, num = label(init_mask)
+                if num == 0:
+                    raise RuntimeError("Empty mask after threshold.")
+                # pick largest component (ignore background label 0)
+                counts = np.bincount(labels.flat)
+                counts[0] = 0
+                main_lbl = counts.argmax()
+                subj_mask = (labels == main_lbl)
+
+                # 5.4 if the mask is too small, fallback to template COM
+                vol_frac = subj_mask.sum() / subj_mask.size
+                if vol_frac < 0.10:
+                    logging.warning(f"[{sub_id}] Mask too small ({vol_frac:.1%}); using template COM.")
+                    # compute COM of template brain mask
+                    coords = np.argwhere(brain_img.get_fdata()>0)
+                else:
+                    coords = np.argwhere(subj_mask)
+
+                com = coords.mean(axis=0).astype(int)  # [z, y, x]
+
+                # 5.5 crop/pad
+                z_t, y_t, x_t = tuple(args.crop_dims)
+                cropped_array = crop_around_com(suvr_array, subj_mask, (z_t, y_t, x_t), pad_value=0.0)
+
+                # 5.6 fix the affine translation
+                vs = np.array([suvr_img.affine[0,0], suvr_img.affine[1,1], suvr_img.affine[2,2]])
+                # recalc start indices for affine shift
+                z_start = int(com[0] - z_t // 2)
+                y_start = int(com[1] - y_t // 2)
+                x_start = int(com[2] - x_t // 2)
+
+                new_affine = suvr_img.affine.copy()
+                new_affine[:3,3] += np.array([x_start, y_start, z_start]) * vs
+
+                # 5.7 save
+                cropped_img = nib.Nifti1Image(cropped_array, new_affine, suvr_img.header)
                 nib.save(cropped_img, str(suvr_cropped_path))
                 if not suvr_cropped_path.is_file():
                     raise RuntimeError("Failed to save SUVR cropped image")
 
                 qc_stats["crop_status"] = "SUCCESS"
                 logging.info(f"[{sub_id}] Cropping/padding successful")
+
             except Exception as e:
                 logging.error(f"[{sub_id}] Error during cropping/padding: {e}")
                 qc_stats["crop_status"] = "CROP_ERROR"

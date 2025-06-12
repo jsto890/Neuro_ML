@@ -71,7 +71,6 @@ data/
 # Conda
 conda-meta/
 *.conda
-*.yml
 
 # Build artifacts
 build/
