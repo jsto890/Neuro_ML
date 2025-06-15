@@ -9,7 +9,7 @@ class Simple3DCNN(nn.Module):
     Input:  [B, 1, D, H, W]  single‐channel sMRI
     Output: [B, num_classes] logits
     """
-    def __init__(self, in_channels=1, base_channels=16, num_classes=3):
+    def __init__(self, in_channels=1, base_channels=16, num_classes=2):
         super().__init__()
         # Convolutional stem
         self.conv1 = nn.Conv3d(in_channels, base_channels, kernel_size=3, padding=1)

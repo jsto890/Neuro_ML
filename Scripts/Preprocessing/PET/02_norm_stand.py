@@ -423,7 +423,6 @@ def main():
             ]
             try:
                 logging.info(f"[{sub_id}] About to run antsRegistration with the following command:")
-                logging.info("  " + " \\\n  ".join(ants_reg_cmd))
 
                 result = subprocess.run(
                     ants_reg_cmd,
