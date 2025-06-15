@@ -52,7 +52,7 @@ class SMRIDataset(Dataset):
             "smriprep",
             sid,
             "anat",
-            f"{sid}_desc-preproc_T1w_brain_zscore.nii.gz"
+            f"{sid}_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w_brain_zscore.nii.gz"
         )
 
         img = nib.load(img_path)
