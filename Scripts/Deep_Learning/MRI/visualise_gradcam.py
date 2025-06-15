@@ -46,7 +46,7 @@ def main():
                                              num_workers=2)
 
     # 2) Instantiate and load model
-    model = SMRI_GradCAM_3DCNN(in_channels=1, base_channels=16, num_classes=3)
+    model = SMRI_GradCAM_3DCNN(in_channels=1, base_channels=16, num_classes=2)
     checkpoint = torch.load(args.checkpoint, map_location=args.device)
     model.load_state_dict(checkpoint)
     model.to(args.device)
