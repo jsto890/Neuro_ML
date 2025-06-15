@@ -59,9 +59,9 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         val_logits = np.concatenate(val_logits, axis=0)  # [N_val, 2]
         val_labels = np.concatenate(val_labels, axis=0)  # [N_val]
 
-        # Convert logits → probabilities for class=1
-        probs = nn.Softmax(dim=1)(torch.from_numpy(val_logits)).numpy()[:, 1]
-        val_auc = roc_auc_score(val_labels, probs)
+        # Convert logits → probabilities for all classes
+        probs = nn.Softmax(dim=1)(torch.from_numpy(val_logits)).numpy()
+        val_auc = roc_auc_score(val_labels, probs, multi_class='ovr')
         val_preds = np.argmax(val_logits, axis=1)
         val_acc = accuracy_score(val_labels, val_preds)
 
