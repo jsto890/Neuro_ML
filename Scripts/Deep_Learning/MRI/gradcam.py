@@ -15,6 +15,10 @@ def compute_gradcam_3d(model, smri_tensor, target_class, device="cuda"):
 
     Returns:
       cam_norm (np.ndarray) : 3D array [D, H, W], normalized to [0,1].
+      
+    Authors:
+      Joseph Storey
+      Jackson Schofield
     """
     model.to(device)
     model.eval()
@@ -26,7 +30,7 @@ def compute_gradcam_3d(model, smri_tensor, target_class, device="cuda"):
         nonlocal fmap_grad
         fmap_grad = grad_output[0].detach()  # shape: [1, C, d, h, w]
 
-    handle_bw = model.features.register_backward_hook(save_grad)
+    handle_bw = model.features.register_full_backward_hook(save_grad)
 
     # 2) Forward pass
     smri_tensor = smri_tensor.to(device).requires_grad_(True)
