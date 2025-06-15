@@ -111,7 +111,7 @@ def main():
                             num_workers=args.num_workers)
 
     # Instantiate model
-    model = Simple3DCNN(in_channels=1, base_channels=16, num_classes=2)
+    model = Simple3DCNN(in_channels=1, base_channels=16, num_classes=3)
 
     # Train and save best checkpoint
     trained_model = train_sMRI_model(model,
