@@ -7,21 +7,59 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import numpy as np
 from sklearn.metrics import roc_auc_score, accuracy_score
+import csv
+from datetime import datetime
+import uuid
 
 from dataset import SMRIDataset
 from models_smri import Simple3DCNN
 
-def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint_dir):
+def log_metrics(run_id, model_name, args, best_val_auc, best_val_acc, final_train_loss, final_train_acc, notes=""):
+    """Log training metrics to CSV file."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Prepare the row data
+    row = {
+        'run_id': run_id,
+        'timestamp': timestamp,
+        'model_name': model_name,
+        'epochs': args.epochs,
+        'batch_size': args.batch_size,
+        'learning_rate': args.learning_rate,
+        'weight_decay': args.weight_decay,
+        'device': args.device,
+        'data_root': args.data_root,
+        'checkpoint_dir': args.checkpoint_dir,
+        'best_val_auc': best_val_auc,
+        'best_val_acc': best_val_acc,
+        'final_train_loss': final_train_loss,
+        'final_train_acc': final_train_acc,
+        'notes': notes
+    }
+    
+    # Check if file exists to determine if we need to write headers
+    file_exists = os.path.isfile('logging.csv')
+    
+    with open('logging.csv', 'a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=row.keys())
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+
+def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint_dir, args):
     """
     Trains model; saves best checkpoint by validation AUC into checkpoint_dir.
     Returns the model loaded with best weights.
     """
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
 
     model.to(device)
     best_val_auc = 0.0
-    best_state   = None
+    best_val_acc = 0.0
+    best_state = None
+    final_train_loss = 0.0
+    final_train_acc = 0.0
 
     for epoch in range(1, epochs + 1):
         # --- Training phase ---
@@ -43,6 +81,10 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
 
         epoch_loss = running_loss / len(train_loader.dataset)
         epoch_acc  = running_corrects / len(train_loader.dataset)
+        
+        if epoch == epochs:
+            final_train_loss = epoch_loss
+            final_train_acc = epoch_acc
 
         # --- Validation phase ---
         model.eval()
@@ -72,6 +114,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         # Checkpoint if this is the best AUC so far
         if val_auc > best_val_auc:
             best_val_auc = val_auc
+            best_val_acc = val_acc
             best_state = model.state_dict().copy()
             os.makedirs(checkpoint_dir, exist_ok=True)
             torch.save(best_state, os.path.join(checkpoint_dir, "best_smri_model.pth"))
@@ -80,7 +123,8 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     # Load best model weights before returning
     if best_state is not None:
         model.load_state_dict(best_state)
-    return model
+    
+    return model, best_val_auc, best_val_acc, final_train_loss, final_train_acc
 
 def main():
     parser = argparse.ArgumentParser(description="Train a 3D‐CNN on sMRI volumes")
@@ -95,6 +139,8 @@ def main():
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
     parser.add_argument("--device",      type=str, default="cuda")
+    parser.add_argument("--learning_rate", type=float, default=1e-4)
+    parser.add_argument("--weight_decay", type=float, default=1e-5)
     args = parser.parse_args()
 
     # Create Datasets and DataLoaders
@@ -114,12 +160,30 @@ def main():
     model = Simple3DCNN(in_channels=1, base_channels=16, num_classes=3)
 
     # Train and save best checkpoint
-    trained_model = train_sMRI_model(model,
-                                     train_loader,
-                                     val_loader,
-                                     epochs=args.epochs,
-                                     device=args.device,
-                                     checkpoint_dir=args.checkpoint_dir)
+    trained_model, best_val_auc, best_val_acc, final_train_loss, final_train_acc = train_sMRI_model(
+        model,
+        train_loader,
+        val_loader,
+        epochs=args.epochs,
+        device=args.device,
+        checkpoint_dir=args.checkpoint_dir,
+        args=args
+    )
+
+    # Generate a unique run ID
+    run_id = str(uuid.uuid4())[:8]
+    
+    # Log the metrics
+    log_metrics(
+        run_id=run_id,
+        model_name="Simple3DCNN",
+        args=args,
+        best_val_auc=best_val_auc,
+        best_val_acc=best_val_acc,
+        final_train_loss=final_train_loss,
+        final_train_acc=final_train_acc,
+        notes="Training run with default parameters"
+    )
 
 if __name__ == "__main__":
     main()
