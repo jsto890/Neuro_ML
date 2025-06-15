@@ -4,12 +4,13 @@ import os
 import argparse
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, SubsetRandomSampler
 import numpy as np
 from sklearn.metrics import roc_auc_score, accuracy_score
 import csv
 from datetime import datetime
 import uuid
+from sklearn.model_selection import KFold
 
 from dataset import SMRIDataset
 from models_smri import Simple3DCNN
@@ -53,6 +54,15 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     """
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    
+    # Add learning rate scheduler
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, 
+        mode='max', 
+        factor=0.5, 
+        patience=5, 
+        verbose=True
+    )
 
     model.to(device)
     best_val_auc = 0.0
@@ -107,9 +117,13 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         val_preds = np.argmax(val_logits, axis=1)
         val_acc = accuracy_score(val_labels, val_preds)
 
+        # Update learning rate based on validation AUC
+        scheduler.step(val_auc)
+
         print(f"Epoch {epoch}/{epochs}  "
               f"Train loss={epoch_loss:.4f}, acc={epoch_acc:.4f}  "
-              f"Val AUC={val_auc:.4f}, acc={val_acc:.4f}")
+              f"Val AUC={val_auc:.4f}, acc={val_acc:.4f}  "
+              f"LR={optimizer.param_groups[0]['lr']:.6f}")
 
         # Checkpoint if this is the best AUC so far
         if val_auc > best_val_auc:
@@ -126,6 +140,85 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     
     return model, best_val_auc, best_val_acc, final_train_loss, final_train_acc
 
+def k_fold_training(args, k_folds=5):
+    """
+    Perform k-fold cross validation training.
+    """
+    # Create dataset
+    dataset = SMRIDataset(csv_path=args.train_csv, data_root=args.data_root)
+    
+    # Initialize k-fold
+    kfold = KFold(n_splits=k_folds, shuffle=True, random_state=42)
+    
+    # Store results for each fold
+    fold_results = []
+    
+    for fold, (train_ids, val_ids) in enumerate(kfold.split(dataset)):
+        print(f'\nFOLD {fold + 1}/{k_folds}')
+        
+        # Create data samplers for this fold
+        train_sampler = SubsetRandomSampler(train_ids)
+        val_sampler = SubsetRandomSampler(val_ids)
+        
+        # Create data loaders for this fold
+        train_loader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            sampler=train_sampler,
+            num_workers=args.num_workers
+        )
+        val_loader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            sampler=val_sampler,
+            num_workers=args.num_workers
+        )
+        
+        # Initialize model for this fold
+        model = Simple3DCNN(in_channels=1, base_channels=16, num_classes=3)
+        
+        # Train model for this fold
+        trained_model, best_val_auc, best_val_acc, final_train_loss, final_train_acc = train_sMRI_model(
+            model,
+            train_loader,
+            val_loader,
+            epochs=args.epochs,
+            device=args.device,
+            checkpoint_dir=os.path.join(args.checkpoint_dir, f'fold_{fold+1}'),
+            args=args
+        )
+        
+        # Store results
+        fold_results.append({
+            'fold': fold + 1,
+            'best_val_auc': best_val_auc,
+            'best_val_acc': best_val_acc,
+            'final_train_loss': final_train_loss,
+            'final_train_acc': final_train_acc
+        })
+        
+        # Log metrics for this fold
+        run_id = str(uuid.uuid4())[:8]
+        log_metrics(
+            run_id=run_id,
+            model_name="Simple3DCNN",
+            args=args,
+            best_val_auc=best_val_auc,
+            best_val_acc=best_val_acc,
+            final_train_loss=final_train_loss,
+            final_train_acc=final_train_acc,
+            notes=f"Fold {fold+1}/{k_folds}"
+        )
+    
+    # Calculate and print average results
+    avg_auc = np.mean([r['best_val_auc'] for r in fold_results])
+    avg_acc = np.mean([r['best_val_acc'] for r in fold_results])
+    print(f"\nK-Fold Cross Validation Results:")
+    print(f"Average Validation AUC: {avg_auc:.4f}")
+    print(f"Average Validation Accuracy: {avg_acc:.4f}")
+    
+    return fold_results
+
 def main():
     parser = argparse.ArgumentParser(description="Train a 3D‐CNN on sMRI volumes")
     parser.add_argument("--train_csv",   type=str, required=True,
@@ -141,49 +234,12 @@ def main():
     parser.add_argument("--device",      type=str, default="cuda")
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-5)
+    parser.add_argument("--k_folds",     type=int, default=5,
+                        help="Number of folds for cross-validation")
     args = parser.parse_args()
 
-    # Create Datasets and DataLoaders
-    train_dataset = SMRIDataset(csv_path=args.train_csv, data_root=args.data_root)
-    val_dataset   = SMRIDataset(csv_path=args.val_csv,   data_root=args.data_root)
-
-    train_loader = DataLoader(train_dataset,
-                              batch_size=args.batch_size,
-                              shuffle=True,
-                              num_workers=args.num_workers)
-    val_loader = DataLoader(val_dataset,
-                            batch_size=args.batch_size,
-                            shuffle=False,
-                            num_workers=args.num_workers)
-
-    # Instantiate model
-    model = Simple3DCNN(in_channels=1, base_channels=16, num_classes=3)
-
-    # Train and save best checkpoint
-    trained_model, best_val_auc, best_val_acc, final_train_loss, final_train_acc = train_sMRI_model(
-        model,
-        train_loader,
-        val_loader,
-        epochs=args.epochs,
-        device=args.device,
-        checkpoint_dir=args.checkpoint_dir,
-        args=args
-    )
-
-    # Generate a unique run ID
-    run_id = str(uuid.uuid4())[:8]
-    
-    # Log the metrics
-    log_metrics(
-        run_id=run_id,
-        model_name="Simple3DCNN",
-        args=args,
-        best_val_auc=best_val_auc,
-        best_val_acc=best_val_acc,
-        final_train_loss=final_train_loss,
-        final_train_acc=final_train_acc,
-        notes="Training run with default parameters"
-    )
+    # Perform k-fold cross validation
+    fold_results = k_fold_training(args, k_folds=args.k_folds)
 
 if __name__ == "__main__":
     main()
