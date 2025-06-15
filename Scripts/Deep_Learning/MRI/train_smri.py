@@ -11,13 +11,28 @@ import csv
 from datetime import datetime
 import uuid
 from sklearn.model_selection import KFold
+import pandas as pd
 
 from dataset import SMRIDataset
 from models_smri import Simple3DCNN
 
+def filter_labels(csv_path, labels):
+    """Filter the CSV file to only include specified labels."""
+    df = pd.read_csv(csv_path)
+    filtered_df = df[df.iloc[:, 1].isin(labels)]
+    return filtered_df
+
+def get_label_description(labels):
+    """Convert numeric labels to descriptive names."""
+    label_map = {0: 'CN', 1: 'AD', 2: 'PD'}
+    return ' vs '.join([label_map[label] for label in sorted(labels)])
+
 def log_metrics(run_id, model_name, args, best_val_auc, best_val_acc, final_train_loss, final_train_acc, notes=""):
     """Log training metrics to CSV file."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Get descriptive label names
+    label_description = get_label_description(args.labels)
     
     # Prepare the row data
     row = {
@@ -31,6 +46,7 @@ def log_metrics(run_id, model_name, args, best_val_auc, best_val_acc, final_trai
         'device': args.device,
         'data_root': args.data_root,
         'checkpoint_dir': args.checkpoint_dir,
+        'labels': label_description,
         'best_val_auc': best_val_auc,
         'best_val_acc': best_val_acc,
         'final_train_loss': final_train_loss,
@@ -144,8 +160,18 @@ def k_fold_training(args, k_folds=5):
     """
     Perform k-fold cross validation training.
     """
-    # Create dataset
-    dataset = SMRIDataset(csv_path=args.train_csv, data_root=args.data_root)
+    # Filter the datasets based on labels
+    train_df = filter_labels(args.train_csv, args.labels)
+    val_df = filter_labels(args.val_csv, args.labels)
+    
+    # Create temporary CSV files for filtered data
+    temp_train_csv = 'temp_train_filtered.csv'
+    temp_val_csv = 'temp_val_filtered.csv'
+    train_df.to_csv(temp_train_csv, index=False)
+    val_df.to_csv(temp_val_csv, index=False)
+    
+    # Create dataset with filtered data
+    dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root)
     
     # Initialize k-fold
     kfold = KFold(n_splits=k_folds, shuffle=True, random_state=42)
@@ -175,7 +201,7 @@ def k_fold_training(args, k_folds=5):
         )
         
         # Initialize model for this fold
-        model = Simple3DCNN(in_channels=1, base_channels=16, num_classes=3)
+        model = Simple3DCNN(in_channels=1, base_channels=16, num_classes=len(args.labels))
         
         # Train model for this fold
         trained_model, best_val_auc, best_val_acc, final_train_loss, final_train_acc = train_sMRI_model(
@@ -210,6 +236,10 @@ def k_fold_training(args, k_folds=5):
             notes=f"Fold {fold+1}/{k_folds}"
         )
     
+    # Clean up temporary files
+    os.remove(temp_train_csv)
+    os.remove(temp_val_csv)
+    
     # Calculate and print average results
     avg_auc = np.mean([r['best_val_auc'] for r in fold_results])
     avg_acc = np.mean([r['best_val_acc'] for r in fold_results])
@@ -236,6 +266,8 @@ def main():
     parser.add_argument("--weight_decay", type=float, default=1e-5)
     parser.add_argument("--k_folds",     type=int, default=5,
                         help="Number of folds for cross-validation")
+    parser.add_argument("--labels",      type=int, nargs='+', required=True,
+                        help="Labels to include in training (e.g., 0 1 for CN vs AD)")
     args = parser.parse_args()
 
     # Perform k-fold cross validation
