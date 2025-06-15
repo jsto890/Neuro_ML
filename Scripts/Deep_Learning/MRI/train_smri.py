@@ -76,8 +76,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         optimizer, 
         mode='max', 
         factor=0.5, 
-        patience=5, 
-        verbose=True
+        patience=5
     )
 
     model.to(device)
@@ -127,19 +126,26 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         val_logits = np.concatenate(val_logits, axis=0)  # [N_val, 2]
         val_labels = np.concatenate(val_labels, axis=0)  # [N_val]
 
-        # Convert logits → probabilities for all classes
-        probs = nn.Softmax(dim=1)(torch.from_numpy(val_logits)).numpy()
-        val_auc = roc_auc_score(val_labels, probs, multi_class='ovr')
+        # Convert logits → probabilities for binary classification
+        probs = nn.Softmax(dim=1)(torch.from_numpy(val_logits)).numpy()[:, 1]  # Take probability of positive class
+        val_auc = roc_auc_score(val_labels, probs)  # Binary classification
         val_preds = np.argmax(val_logits, axis=1)
         val_acc = accuracy_score(val_labels, val_preds)
 
         # Update learning rate based on validation AUC
+        old_lr = optimizer.param_groups[0]['lr']
         scheduler.step(val_auc)
+        new_lr = optimizer.param_groups[0]['lr']
+        
+        # Print learning rate change if it occurred
+        lr_change = ""
+        if new_lr != old_lr:
+            lr_change = f"  [LR reduced to {new_lr:.6f}]"
 
         print(f"Epoch {epoch}/{epochs}  "
               f"Train loss={epoch_loss:.4f}, acc={epoch_acc:.4f}  "
               f"Val AUC={val_auc:.4f}, acc={val_acc:.4f}  "
-              f"LR={optimizer.param_groups[0]['lr']:.6f}")
+              f"LR={new_lr:.6f}{lr_change}")
 
         # Checkpoint if this is the best AUC so far
         if val_auc > best_val_auc:
