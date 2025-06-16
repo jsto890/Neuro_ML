@@ -45,7 +45,6 @@ coverage.xml
 # Data files (can manually include clean sample sets if needed)
 data/
 *.csv
-!Scripts/Deep_Learning/MRI/logging.csv
 *.tsv
 *.xlsx
 *.xls
