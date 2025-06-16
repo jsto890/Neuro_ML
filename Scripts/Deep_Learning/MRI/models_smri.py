@@ -34,19 +34,31 @@ class Simple3DCNN(nn.Module):
             nn.Dropout3d(0.2)
         )
         
-        # Calculate the size of the flattened features
-        self._to_linear = None
-        
-        # Classifier
+        # Initialize classifier with a placeholder
         self.classifier = nn.Sequential(
-            nn.Linear(base_channels*4 * 8 * 10 * 8, 512),
+            nn.Linear(1, 512),  # Placeholder, will be replaced in first forward pass
             nn.ReLU(),
             nn.Dropout(0.5),
             nn.Linear(512, num_classes)
         )
+        
+        self._initialized = False
+
+    def _initialize_classifier(self, x):
+        # Get the size of the flattened features
+        with torch.no_grad():
+            x = self.features(x)
+            n_features = x.view(x.size(0), -1).size(1)
+        
+        # Replace the first linear layer with the correct size
+        self.classifier[0] = nn.Linear(n_features, 512)
+        self._initialized = True
 
     def forward(self, x):
         # x shape = [B, 1, D, H, W]
+        if not self._initialized:
+            self._initialize_classifier(x)
+            
         x = self.features(x)
         x = x.view(x.size(0), -1)
         logits = self.classifier(x)
