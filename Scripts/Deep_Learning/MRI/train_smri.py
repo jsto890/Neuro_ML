@@ -77,7 +77,19 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     class_weights = class_weights / class_weights.sum()
     class_weights = torch.FloatTensor(class_weights).to(device)
     
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    class FocalLoss(nn.Module):
+        def __init__(self, alpha=0.25, gamma=2):
+            super().__init__()
+            self.alpha = alpha
+            self.gamma = gamma
+        
+        def forward(self, inputs, targets):
+            ce_loss = nn.CrossEntropyLoss(reduction='none')(inputs, targets)
+            pt = torch.exp(-ce_loss)
+            focal_loss = self.alpha * (1-pt)**self.gamma * ce_loss
+            return focal_loss.mean()
+
+    criterion = FocalLoss(alpha=0.25, gamma=2)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     
     # Add learning rate scheduler with more patience
