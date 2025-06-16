@@ -9,7 +9,7 @@ class Simple3DCNN(nn.Module):
     Input:  [B, 1, D, H, W]  single‐channel sMRI
     Output: [B, num_classes] logits
     """
-    def __init__(self, num_classes=2, base_channels=32):
+    def __init__(self, num_classes=2, base_channels=16):  # Reduced base channels
         super().__init__()
         self.features = nn.Sequential(
             # First conv block
@@ -17,29 +17,26 @@ class Simple3DCNN(nn.Module):
             nn.BatchNorm3d(base_channels),
             nn.ReLU(),
             nn.MaxPool3d(2),
-            nn.Dropout3d(0.2),
             
             # Second conv block
             nn.Conv3d(base_channels, base_channels*2, kernel_size=3, padding=1),
             nn.BatchNorm3d(base_channels*2),
             nn.ReLU(),
             nn.MaxPool3d(2),
-            nn.Dropout3d(0.2),
             
             # Third conv block
             nn.Conv3d(base_channels*2, base_channels*4, kernel_size=3, padding=1),
             nn.BatchNorm3d(base_channels*4),
             nn.ReLU(),
-            nn.MaxPool3d(2),
-            nn.Dropout3d(0.2)
+            nn.MaxPool3d(2)
         )
         
         # Initialize classifier with a placeholder
         self.classifier = nn.Sequential(
-            nn.Linear(1, 512),  # Placeholder, will be replaced in first forward pass
+            nn.Linear(1, 256),  # Reduced intermediate size
             nn.ReLU(),
             nn.Dropout(0.5),
-            nn.Linear(512, num_classes)
+            nn.Linear(256, num_classes)
         )
         
         self._initialized = False
@@ -51,7 +48,7 @@ class Simple3DCNN(nn.Module):
             n_features = x.view(x.size(0), -1).size(1)
         
         # Replace the first linear layer with the correct size
-        self.classifier[0] = nn.Linear(n_features, 512)
+        self.classifier[0] = nn.Linear(n_features, 256)
         self._initialized = True
 
     def forward(self, x):
