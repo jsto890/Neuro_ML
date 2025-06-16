@@ -68,15 +68,25 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     Trains model; saves best checkpoint by validation AUC into checkpoint_dir.
     Returns the model loaded with best weights.
     """
-    criterion = nn.CrossEntropyLoss()
+    # Calculate class weights for imbalanced data
+    labels = []
+    for _, label in train_loader:
+        labels.extend(label.numpy())
+    class_counts = np.bincount(labels)
+    class_weights = 1.0 / class_counts
+    class_weights = class_weights / class_weights.sum()
+    class_weights = torch.FloatTensor(class_weights).to(device)
+    
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     
-    # Add learning rate scheduler
+    # Add learning rate scheduler with more patience
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, 
         mode='max', 
         factor=0.5, 
-        patience=5
+        patience=10,  # Increased patience
+        min_lr=1e-6   # Minimum learning rate
     )
 
     model.to(device)
@@ -85,12 +95,14 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     best_state = None
     final_train_loss = 0.0
     final_train_acc = 0.0
+    no_improvement_count = 0
 
     for epoch in range(1, epochs + 1):
         # --- Training phase ---
         model.train()
         running_loss = 0.0
         running_corrects = 0
+        total_samples = 0
 
         for smri, labels in train_loader:
             smri, labels = smri.to(device), labels.to(device)
@@ -103,9 +115,10 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             running_loss += loss.item() * smri.size(0)
             preds = torch.argmax(logits, dim=1)
             running_corrects += (preds == labels).sum().item()
+            total_samples += smri.size(0)
 
-        epoch_loss = running_loss / len(train_loader.dataset)
-        epoch_acc  = running_corrects / len(train_loader.dataset)
+        epoch_loss = running_loss / total_samples
+        epoch_acc  = running_corrects / total_samples
         
         if epoch == epochs:
             final_train_loss = epoch_loss
@@ -155,6 +168,14 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             os.makedirs(checkpoint_dir, exist_ok=True)
             torch.save(best_state, os.path.join(checkpoint_dir, "best_smri_model.pth"))
             print(f"  [Checkpoint] Saved new best model (AUC={val_auc:.4f})")
+            no_improvement_count = 0
+        else:
+            no_improvement_count += 1
+            
+        # Early stopping if no improvement for 20 epochs
+        if no_improvement_count >= 20:
+            print(f"\nEarly stopping triggered after {epoch} epochs")
+            break
 
     # Load best model weights before returning
     if best_state is not None:
@@ -164,7 +185,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
 
 def k_fold_training(args, k_folds=5):
     """
-    Perform k-fold cross validation training.
+    Perform k-fold cross validation on training set, with fixed validation set.
     """
     # Filter the datasets based on labels
     train_df = filter_labels(args.train_csv, args.labels)
@@ -176,8 +197,17 @@ def k_fold_training(args, k_folds=5):
     train_df.to_csv(temp_train_csv, index=False)
     val_df.to_csv(temp_val_csv, index=False)
     
-    # Create dataset with filtered data
-    dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root)
+    # Create datasets with filtered data
+    train_dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root)
+    val_dataset = SMRIDataset(csv_path=temp_val_csv, data_root=args.data_root)
+    
+    # Create fixed validation loader
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers
+    )
     
     # Initialize k-fold
     kfold = KFold(n_splits=k_folds, shuffle=True, random_state=42)
@@ -185,39 +215,35 @@ def k_fold_training(args, k_folds=5):
     # Store results for each fold
     fold_results = []
     
-    for fold, (train_ids, val_ids) in enumerate(kfold.split(dataset)):
+    for fold, (train_ids, test_ids) in enumerate(kfold.split(train_dataset)):
         print(f'\nFOLD {fold + 1}/{k_folds}')
+        print(f'Training on {len(train_ids)} subjects, testing on {len(test_ids)} subjects')
         
         # Create data samplers for this fold
         train_sampler = SubsetRandomSampler(train_ids)
-        val_sampler = SubsetRandomSampler(val_ids)
+        test_sampler = SubsetRandomSampler(test_ids)
         
         # Create data loaders for this fold
         train_loader = DataLoader(
-            dataset,
+            train_dataset,
             batch_size=args.batch_size,
             sampler=train_sampler,
             num_workers=args.num_workers
         )
-        val_loader = DataLoader(
-            dataset,
+        
+        test_loader = DataLoader(
+            train_dataset,
             batch_size=args.batch_size,
-            sampler=val_sampler,
+            sampler=test_sampler,
             num_workers=args.num_workers
         )
         
         # Initialize model for this fold
-        model = Simple3DCNN(in_channels=1, base_channels=16, num_classes=len(args.labels))
+        model = Simple3DCNN(num_classes=len(args.labels))
         
-        # Train model for this fold
-        trained_model, best_val_auc, best_val_acc, final_train_loss, final_train_acc = train_sMRI_model(
-            model,
-            train_loader,
-            val_loader,
-            epochs=args.epochs,
-            device=args.device,
-            checkpoint_dir=os.path.join(args.checkpoint_dir, f'fold_{fold+1}'),
-            args=args
+        # Train the model using training set and test on validation set
+        model, best_val_auc, best_val_acc, final_train_loss, final_train_acc = train_sMRI_model(
+            model, train_loader, val_loader, args.epochs, args.device, args.checkpoint_dir, args
         )
         
         # Store results
@@ -230,7 +256,7 @@ def k_fold_training(args, k_folds=5):
         })
         
         # Log metrics for this fold
-        run_id = str(uuid.uuid4())[:8]
+        run_id = f"fold_{fold + 1}_{uuid.uuid4().hex[:8]}"
         log_metrics(
             run_id=run_id,
             model_name="Simple3DCNN",
@@ -239,19 +265,19 @@ def k_fold_training(args, k_folds=5):
             best_val_acc=best_val_acc,
             final_train_loss=final_train_loss,
             final_train_acc=final_train_acc,
-            notes=f"Fold {fold+1}/{k_folds}"
+            notes=f"Fold {fold + 1}/{k_folds}"
         )
     
     # Clean up temporary files
     os.remove(temp_train_csv)
     os.remove(temp_val_csv)
     
-    # Calculate and print average results
-    avg_auc = np.mean([r['best_val_auc'] for r in fold_results])
-    avg_acc = np.mean([r['best_val_acc'] for r in fold_results])
-    print(f"\nK-Fold Cross Validation Results:")
-    print(f"Average Validation AUC: {avg_auc:.4f}")
-    print(f"Average Validation Accuracy: {avg_acc:.4f}")
+    # Print average results across folds
+    avg_val_auc = np.mean([r['best_val_auc'] for r in fold_results])
+    avg_val_acc = np.mean([r['best_val_acc'] for r in fold_results])
+    print(f"\nAverage across {k_folds} folds:")
+    print(f"Validation AUC: {avg_val_auc:.4f}")
+    print(f"Validation Accuracy: {avg_val_acc:.4f}")
     
     return fold_results
 
