@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 class Simple3DCNN(nn.Module):
     """
@@ -11,32 +12,23 @@ class Simple3DCNN(nn.Module):
     """
     def __init__(self, num_classes=2, base_channels=32):
         super().__init__()
-        self.features = nn.Sequential(
-            # First conv block
+        
+        # Initial conv block
+        self.init_conv = nn.Sequential(
             nn.Conv3d(1, base_channels, kernel_size=3, padding=1),
             nn.BatchNorm3d(base_channels),
-            nn.ReLU(),
-            nn.MaxPool3d(2),
-            nn.Dropout3d(0.2),
-            
-            # Second conv block
-            nn.Conv3d(base_channels, base_channels*2, kernel_size=3, padding=1),
-            nn.BatchNorm3d(base_channels*2),
-            nn.ReLU(),
-            nn.MaxPool3d(2),
-            nn.Dropout3d(0.2),
-            
-            # Third conv block
-            nn.Conv3d(base_channels*2, base_channels*4, kernel_size=3, padding=1),
-            nn.BatchNorm3d(base_channels*4),
-            nn.ReLU(),
-            nn.MaxPool3d(2),
-            nn.Dropout3d(0.2)
+            nn.ReLU()
         )
         
-        # Initialize classifier with a placeholder
+        # Residual blocks
+        self.block1 = ResidualBlock(base_channels, base_channels*2)
+        self.block2 = ResidualBlock(base_channels*2, base_channels*4)
+        self.block3 = ResidualBlock(base_channels*4, base_channels*8)
+        
+        # Final pooling and classifier
+        self.pool = nn.AdaptiveAvgPool3d(1)
         self.classifier = nn.Sequential(
-            nn.Linear(1, 512),  # Placeholder, will be replaced in first forward pass
+            nn.Linear(base_channels*8, 512),
             nn.ReLU(),
             nn.Dropout(0.5),
             nn.Linear(512, num_classes)
@@ -45,25 +37,65 @@ class Simple3DCNN(nn.Module):
         self._initialized = False
 
     def _initialize_classifier(self, x):
-        # Get the size of the flattened features
         with torch.no_grad():
-            x = self.features(x)
+            x = self.init_conv(x)
+            x = self.block1(x)
+            x = self.block2(x)
+            x = self.block3(x)
+            x = self.pool(x)
             n_features = x.view(x.size(0), -1).size(1)
         
-        # Replace the first linear layer with the correct size
         self.classifier[0] = nn.Linear(n_features, 512)
         self._initialized = True
 
     def forward(self, x):
-        # x shape = [B, 1, D, H, W]
         if not self._initialized:
             self._initialize_classifier(x)
             
-        x = self.features(x)
+        x = self.init_conv(x)
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
+        x = self.pool(x)
         x = x.view(x.size(0), -1)
-        logits = self.classifier(x)
-        return logits
+        return self.classifier(x)
 
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm3d(out_channels)
+        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm3d(out_channels)
+        
+        # Skip connection
+        self.skip = nn.Sequential()
+        if in_channels != out_channels:
+            self.skip = nn.Sequential(
+                nn.Conv3d(in_channels, out_channels, kernel_size=1),
+                nn.BatchNorm3d(out_channels)
+            )
+        
+        self.pool = nn.MaxPool3d(2)
+        self.dropout = nn.Dropout3d(0.2)
+        
+    def forward(self, x):
+        identity = self.skip(x)
+        
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = F.relu(out)
+        
+        out = self.conv2(out)
+        out = self.bn2(out)
+        
+        out += identity
+        out = F.relu(out)
+        
+        out = self.pool(out)
+        out = self.dropout(out)
+        
+        return out
 
 class SMRI_GradCAM_3DCNN(nn.Module):
     """
