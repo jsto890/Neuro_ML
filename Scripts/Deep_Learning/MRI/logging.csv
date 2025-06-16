@@ -1,2 +1,2 @@
-run_id,timestamp,model_name,epochs,batch_size,learning_rate,weight_decay,device,data_root,checkpoint_dir,best_val_auc,best_val_acc,final_train_loss,final_train_acc,notes
-1,2024-03-21,Simple3DCNN,30,2,0.0001,0.00001,cpu,~/reseng202500013-ndd-ml/data/preprocessed/MRI,checkpoints,0.6620,0.3333,1.0983,0.3380,Initial run with default parameters 
+run_id, timestamp , model_name , epochs, batch_size, learning_rate, weight_decay, device, data_root                                     , checkpoint_dir, best_val_auc, best_val_acc, final_train_loss, final_train_acc, notes
+     1, 2024-03-21, Simple3DCNN,     30,          2,        0.0001,      0.00001, cpu   , ~/reseng202500013-ndd-ml/data/preprocessed/MRI, checkpoints   ,       0.6620,       0.3333,           1.0983,          0.3380, Initial run with default parameters
