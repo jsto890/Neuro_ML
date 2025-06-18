@@ -26,15 +26,16 @@ def find_mni_files(anat_dir, keyword):
 
 
 def process_folder(anat_dir):
-    # delete any existing z-score outputs
+    # check if z-score output already exists
+    existing_zscore = None
     for f in os.listdir(anat_dir):
         if f.endswith('_desc-preproc_T1w_brain_zscore.nii.gz'):
-            path = os.path.join(anat_dir, f)
-            try:
-                os.remove(path)
-                print(f"  → Deleted   {path}")
-            except OSError as e:
-                print(f"  ! Failed to delete {path}: {e}")
+            existing_zscore = os.path.join(anat_dir, f)
+            break
+    
+    if existing_zscore:
+        print(f"  → Skipped   {existing_zscore} (already exists)")
+        return
 
     # find MNI-space preproc and mask files flexibly
     preproc_list = find_mni_files(anat_dir, '_desc-preproc_T1w.nii.gz')
