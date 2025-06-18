@@ -7,7 +7,7 @@ raw_data:
   spect: /home/jsto890/reseng202500013-ndd-ml/data/raw/PET
 
 preprocessed_data:
-  smri_p: /home/jsto890/reseng202500013-ndd-ml/data/preprocessed/smriprep
+  smri_p: /home/jsto890/reseng202500013-ndd-ml/data/preprocessed/MRI/smriprep
   pet_p: /home/jsto890/reseng202500013-ndd-ml/data/preprocessed/PET
   spect_p: /home/jsto890/reseng202500013-ndd-ml/data/preprocessed/SPECT
 
