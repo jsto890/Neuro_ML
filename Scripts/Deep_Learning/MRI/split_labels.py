@@ -45,11 +45,14 @@ def split_labels(input_csv, train_csv, val_csv, test_size=0.2, random_state=42):
         print(f"  Label {label}: {count} subjects")
 
 if __name__ == "__main__":
-    # Define paths
+    # Define paths using absolute paths
     data_dir = Path.home() / "reseng202500013-ndd-ml" / "data"
     input_csv = data_dir / "mri_labels.csv"
-    train_csv = Path("Scripts/Deep_Learning/MRI/train.csv")
-    val_csv = Path("Scripts/Deep_Learning/MRI/val.csv")
+    
+    # Get the current script directory and create output paths
+    current_dir = Path(__file__).parent
+    train_csv = current_dir / "train.csv"
+    val_csv = current_dir / "val.csv"
     
     # Create the split
     split_labels(input_csv, train_csv, val_csv) 
