@@ -20,7 +20,6 @@ def debug_mri_paths():
     for subject_id in test_subjects:
         image_path = os.path.join(
             data_root,
-            "smriprep",
             subject_id,
             "anat",
             f"{subject_id}_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w_brain_zscore.nii.gz"
