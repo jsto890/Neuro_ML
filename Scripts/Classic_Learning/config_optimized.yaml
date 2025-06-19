@@ -201,4 +201,37 @@ f_statistic_k: 50
 
 # Additional logging configuration
 log_level: "INFO"
-save_log: true 
+save_log: true
+
+# Bayesian optimization and advanced models
+bayesian_optimization:
+  enabled: true
+  iterations: 50
+  method: "bayesian"  # "bayesian" or "grid"
+  grid_search_cv: 5
+
+# Advanced models
+advanced_models:
+  xgboost:
+    enabled: true
+    bayesian_iterations: 30
+    cv_folds: 5
+  lightgbm:
+    enabled: true
+    bayesian_iterations: 30
+    cv_folds: 5
+
+# Preprocessing configuration
+preprocessing:
+  scaler: "robust"  # "standard" or "robust"
+  handle_missing: "median"  # "median", "mean", or "drop"
+  remove_diagnostic: true
+
+# Output configuration
+output:
+  save_model: true
+  save_scaler: true
+  save_feature_importance: true
+  save_plots: true
+  save_results: true
+  save_config: true 

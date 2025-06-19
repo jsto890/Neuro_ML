@@ -10,41 +10,60 @@ This optimized version focuses on:
 - Clinical interpretability and robustness
 """
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from pathlib import Path
-import pickle
+import os
+import sys
 import json
+import pickle
 import logging
 import argparse
-import sys
+import numpy as np
+import pandas as pd
 from datetime import datetime
-from sklearn.model_selection import (
-    StratifiedKFold, GridSearchCV, cross_val_score,
-    train_test_split, RandomizedSearchCV, validation_curve
-)
-from sklearn.svm import SVC, LinearSVC
-from sklearn.ensemble import VotingClassifier, StackingClassifier
+from pathlib import Path
+from typing import Dict, List, Tuple, Any
+
+from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score
+from sklearn.preprocessing import RobustScaler, StandardScaler
+from sklearn.feature_selection import RFECV, SelectKBest, f_classif, mutual_info_classif
+from sklearn.ensemble import RandomForestClassifier, VotingClassifier
+from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler, RobustScaler, PolynomialFeatures
-from sklearn.feature_selection import (
-    SelectKBest, f_classif, mutual_info_classif, 
-    RFE, SelectFromModel, VarianceThreshold, RFECV
-)
 from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score,
+    accuracy_score, precision_score, recall_score, f1_score, 
     roc_auc_score, confusion_matrix, classification_report,
-    roc_curve, precision_recall_curve, make_scorer
+    roc_curve, precision_recall_curve
 )
-from sklearn.impute import SimpleImputer
-from sklearn.pipeline import Pipeline
-import warnings
-import os
+from sklearn.feature_selection import VarianceThreshold
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Advanced ML libraries
+try:
+    import xgboost as xgb
+    XGBOOST_AVAILABLE = True
+except ImportError:
+    XGBOOST_AVAILABLE = False
+    print("Warning: XGBoost not available. Install with: pip install xgboost")
+
+try:
+    import lightgbm as lgb
+    LIGHTGBM_AVAILABLE = True
+except ImportError:
+    LIGHTGBM_AVAILABLE = False
+    print("Warning: LightGBM not available. Install with: pip install lightgbm")
+
+try:
+    from skopt import BayesSearchCV
+    from skopt.space import Real, Integer, Categorical
+    BAYESIAN_AVAILABLE = True
+except ImportError:
+    BAYESIAN_AVAILABLE = False
+    print("Warning: Bayesian optimization not available. Install with: pip install scikit-optimize")
+
 from scipy.stats import skew, kurtosis
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import cross_val_predict
+from scipy import stats
 
 # Custom JSON encoder for NumPy types
 class NumpyEncoder(json.JSONEncoder):
@@ -338,9 +357,22 @@ class OptimizedRadiomicsClassifier:
             self.logger.info(f"After feature engineering: {X_combined.shape}")
             self.logger.info(f"Feature types: {len(selected_features)} original, {len(feature_names)} engineered")
             
-            # 4. Scaling
+            # 4. Remove outliers to improve convergence
+            z_scores = stats.zscore(X_combined, axis=0)
+            outlier_mask = np.all(np.abs(z_scores) < 3, axis=1)  # Remove samples with z-score > 3
+            X_cleaned = X_combined[outlier_mask]
+            y_cleaned = self.y[outlier_mask]
+            
+            if np.sum(outlier_mask) < len(self.y):
+                self.logger.info(f"Removed {len(self.y) - np.sum(outlier_mask)} outliers")
+                self.X = X_cleaned
+                self.y = y_cleaned
+            else:
+                self.X = X_combined
+            
+            # 5. Scaling with StandardScaler for better convergence
             self.scaler = StandardScaler()
-            self.X = self.scaler.fit_transform(X_combined)
+            self.X = self.scaler.fit_transform(self.X)
             self.logger.info("Features scaled using StandardScaler")
             
             return True
@@ -438,54 +470,104 @@ class OptimizedRadiomicsClassifier:
             return False
     
     def optimize_svm_hyperparameters(self):
-        """Stage 4: Simplified SVM hyperparameter optimization."""
-        self.logger.info("Stage 4: Optimizing SVM hyperparameters...")
+        """Stage 4: Bayesian optimization of SVM hyperparameters."""
+        self.logger.info("Stage 4: Optimizing SVM hyperparameters with Bayesian optimization...")
         
         try:
             X_train, y_train, _ = self.splits['train']
             
-            # Simplified parameter grid to reduce complexity
-            param_grid = {
-                'C': [0.1, 1.0, 10.0],  # Reduced from 6 to 3 values
-                'gamma': ['scale', 'auto'],  # Reduced from 5 to 2 values
-                'kernel': ['linear', 'rbf'],  # Removed poly kernel
-                'class_weight': ['balanced'],  # Only balanced
-                'max_iter': [5000],  # Higher max_iter to prevent convergence warnings
-                'tol': [1e-3]  # Relaxed tolerance for convergence
-            }
-            
             # Create base SVM
             base_svm = SVC(probability=True, random_state=self.random_state)
             
-            # Grid search with cross-validation
-            grid_search = GridSearchCV(
-                estimator=base_svm,
-                param_grid=param_grid,
-                cv=3,  # Reduced from 5 to 3 folds
-                scoring='accuracy',
-                n_jobs=-1,
-                verbose=1
-            )
-            
-            grid_search.fit(X_train, y_train)
-            
-            # Store best model and parameters
-            self.svm_model = grid_search.best_estimator_
-            best_params = grid_search.best_params_
-            
-            # Store optimization results
-            self.feature_engineering_results['svm_optimization'] = {
-                'best_params': best_params,
-                'best_cv_score': grid_search.best_score_,
-                'cv_results': {
-                    'mean_fit_time': grid_search.cv_results_['mean_fit_time'].tolist(),
-                    'mean_test_score': grid_search.cv_results_['mean_test_score'].tolist(),
-                    'rank_test_score': grid_search.cv_results_['rank_test_score'].tolist()
+            if BAYESIAN_AVAILABLE:
+                # Bayesian optimization search space
+                search_spaces = {
+                    'C': Real(0.01, 100.0, prior='log-uniform'),
+                    'gamma': Categorical(['scale', 'auto']),
+                    'kernel': Categorical(['linear', 'rbf']),
+                    'class_weight': Categorical(['balanced']),
+                    'max_iter': Integer(5000, 15000),
+                    'tol': Real(1e-4, 1e-1, prior='log-uniform')
                 }
-            }
-            
-            self.logger.info(f"Best SVM parameters: {best_params}")
-            self.logger.info(f"Best CV score: {grid_search.best_score_:.4f}")
+                
+                # Bayesian optimization
+                bayes_search = BayesSearchCV(
+                    estimator=base_svm,
+                    search_spaces=search_spaces,
+                    n_iter=50,  # Number of iterations for Bayesian optimization
+                    cv=5,
+                    scoring='accuracy',
+                    n_jobs=-1,
+                    verbose=1,
+                    random_state=self.random_state
+                )
+                
+                bayes_search.fit(X_train, y_train)
+                
+                # Store best model and parameters
+                self.svm_model = bayes_search.best_estimator_
+                best_params = bayes_search.best_params_
+                
+                # Store optimization results
+                self.feature_engineering_results['svm_optimization'] = {
+                    'method': 'Bayesian Optimization',
+                    'best_params': best_params,
+                    'best_cv_score': bayes_search.best_score_,
+                    'n_iterations': 50,
+                    'cv_results': {
+                        'mean_fit_time': bayes_search.cv_results_['mean_fit_time'].tolist(),
+                        'mean_test_score': bayes_search.cv_results_['mean_test_score'].tolist(),
+                        'rank_test_score': bayes_search.cv_results_['rank_test_score'].tolist()
+                    }
+                }
+                
+                self.logger.info(f"Bayesian optimization completed")
+                self.logger.info(f"Best SVM parameters: {best_params}")
+                self.logger.info(f"Best CV score: {bayes_search.best_score_:.4f}")
+                
+            else:
+                # Fallback to simplified grid search
+                self.logger.info("Bayesian optimization not available, using grid search...")
+                
+                param_grid = {
+                    'C': [0.1, 1.0, 10.0],
+                    'gamma': ['scale'],
+                    'kernel': ['linear', 'rbf'],
+                    'class_weight': ['balanced'],
+                    'max_iter': [10000],
+                    'tol': [1e-2]
+                }
+                
+                grid_search = GridSearchCV(
+                    estimator=base_svm,
+                    param_grid=param_grid,
+                    cv=5,
+                    scoring='accuracy',
+                    n_jobs=-1,
+                    verbose=1
+                )
+                
+                grid_search.fit(X_train, y_train)
+                
+                # Store best model and parameters
+                self.svm_model = grid_search.best_estimator_
+                best_params = grid_search.best_params_
+                
+                # Store optimization results
+                self.feature_engineering_results['svm_optimization'] = {
+                    'method': 'Grid Search (Fallback)',
+                    'best_params': best_params,
+                    'best_cv_score': grid_search.best_score_,
+                    'cv_results': {
+                        'mean_fit_time': grid_search.cv_results_['mean_fit_time'].tolist(),
+                        'mean_test_score': grid_search.cv_results_['mean_test_score'].tolist(),
+                        'rank_test_score': grid_search.cv_results_['rank_test_score'].tolist()
+                    }
+                }
+                
+                self.logger.info(f"Grid search completed")
+                self.logger.info(f"Best SVM parameters: {best_params}")
+                self.logger.info(f"Best CV score: {grid_search.best_score_:.4f}")
             
             return True
             
@@ -493,17 +575,143 @@ class OptimizedRadiomicsClassifier:
             self.logger.error(f"Error in SVM optimization: {e}")
             return False
     
+    def optimize_advanced_models(self):
+        """Stage 4.5: Bayesian optimization of XGBoost and LightGBM hyperparameters."""
+        self.logger.info("Stage 4.5: Optimizing XGBoost and LightGBM hyperparameters...")
+        
+        try:
+            X_train, y_train, _ = self.splits['train']
+            self.advanced_models = {}
+            
+            # Optimize XGBoost if available
+            if XGBOOST_AVAILABLE and BAYESIAN_AVAILABLE:
+                self.logger.info("Optimizing XGBoost hyperparameters...")
+                
+                base_xgb = xgb.XGBClassifier(
+                    random_state=self.random_state,
+                    eval_metric='logloss',
+                    use_label_encoder=False
+                )
+                
+                xgb_search_spaces = {
+                    'n_estimators': Integer(50, 300),
+                    'max_depth': Integer(3, 10),
+                    'learning_rate': Real(0.01, 0.3, prior='log-uniform'),
+                    'subsample': Real(0.6, 1.0),
+                    'colsample_bytree': Real(0.6, 1.0),
+                    'reg_alpha': Real(0.0, 10.0, prior='log-uniform'),
+                    'reg_lambda': Real(0.0, 10.0, prior='log-uniform'),
+                    'min_child_weight': Integer(1, 10)
+                }
+                
+                xgb_bayes = BayesSearchCV(
+                    estimator=base_xgb,
+                    search_spaces=xgb_search_spaces,
+                    n_iter=30,
+                    cv=5,
+                    scoring='accuracy',
+                    n_jobs=-1,
+                    verbose=1,
+                    random_state=self.random_state
+                )
+                
+                xgb_bayes.fit(X_train, y_train)
+                self.advanced_models['xgboost'] = xgb_bayes.best_estimator_
+                
+                self.feature_engineering_results['xgboost_optimization'] = {
+                    'method': 'Bayesian Optimization',
+                    'best_params': xgb_bayes.best_params_,
+                    'best_cv_score': xgb_bayes.best_score_,
+                    'n_iterations': 30
+                }
+                
+                self.logger.info(f"XGBoost optimization completed - Best CV score: {xgb_bayes.best_score_:.4f}")
+            
+            # Optimize LightGBM if available
+            if LIGHTGBM_AVAILABLE and BAYESIAN_AVAILABLE:
+                self.logger.info("Optimizing LightGBM hyperparameters...")
+                
+                base_lgb = lgb.LGBMClassifier(
+                    random_state=self.random_state,
+                    verbose=-1
+                )
+                
+                lgb_search_spaces = {
+                    'n_estimators': Integer(50, 300),
+                    'max_depth': Integer(3, 10),
+                    'learning_rate': Real(0.01, 0.3, prior='log-uniform'),
+                    'subsample': Real(0.6, 1.0),
+                    'colsample_bytree': Real(0.6, 1.0),
+                    'reg_alpha': Real(0.0, 10.0, prior='log-uniform'),
+                    'reg_lambda': Real(0.0, 10.0, prior='log-uniform'),
+                    'min_child_samples': Integer(10, 100),
+                    'num_leaves': Integer(20, 100)
+                }
+                
+                lgb_bayes = BayesSearchCV(
+                    estimator=base_lgb,
+                    search_spaces=lgb_search_spaces,
+                    n_iter=30,
+                    cv=5,
+                    scoring='accuracy',
+                    n_jobs=-1,
+                    verbose=1,
+                    random_state=self.random_state
+                )
+                
+                lgb_bayes.fit(X_train, y_train)
+                self.advanced_models['lightgbm'] = lgb_bayes.best_estimator_
+                
+                self.feature_engineering_results['lightgbm_optimization'] = {
+                    'method': 'Bayesian Optimization',
+                    'best_params': lgb_bayes.best_params_,
+                    'best_cv_score': lgb_bayes.best_score_,
+                    'n_iterations': 30
+                }
+                
+                self.logger.info(f"LightGBM optimization completed - Best CV score: {lgb_bayes.best_score_:.4f}")
+            
+            # Fallback for when Bayesian optimization is not available
+            if not BAYESIAN_AVAILABLE:
+                self.logger.info("Bayesian optimization not available, using default parameters...")
+                
+                if XGBOOST_AVAILABLE:
+                    self.advanced_models['xgboost'] = xgb.XGBClassifier(
+                        n_estimators=100,
+                        max_depth=6,
+                        learning_rate=0.1,
+                        random_state=self.random_state,
+                        eval_metric='logloss',
+                        use_label_encoder=False
+                    )
+                
+                if LIGHTGBM_AVAILABLE:
+                    self.advanced_models['lightgbm'] = lgb.LGBMClassifier(
+                        n_estimators=100,
+                        max_depth=6,
+                        learning_rate=0.1,
+                        random_state=self.random_state,
+                        verbose=-1
+                    )
+            
+            self.logger.info(f"Advanced models optimization completed. Models: {list(self.advanced_models.keys())}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error in advanced models optimization: {e}")
+            return False
+    
     def create_optimized_ensemble(self):
-        """Stage 5: Creating advanced stacking ensemble with cross-validation."""
+        """Stage 5: Creating advanced stacking ensemble with diverse base models."""
         self.logger.info("Stage 5: Creating advanced stacking ensemble...")
         
         try:
             X_train, y_train, _ = self.splits['train']
             
-            # 1. Define base models
+            # 1. Define diverse base models
             base_models = {
-                'svm_linear': SVC(kernel='linear', probability=True, random_state=self.random_state, max_iter=5000, tol=1e-3),
-                'svm_rbf': SVC(kernel='rbf', probability=True, random_state=self.random_state, max_iter=5000, tol=1e-3),
+                'svm_linear': SVC(kernel='linear', probability=True, random_state=self.random_state, max_iter=10000, tol=1e-2),
+                'svm_rbf': SVC(kernel='rbf', probability=True, random_state=self.random_state, max_iter=10000, tol=1e-2),
                 'random_forest': RandomForestClassifier(
                     n_estimators=200, 
                     max_depth=10, 
@@ -515,9 +723,44 @@ class OptimizedRadiomicsClassifier:
                     C=1.0, 
                     class_weight='balanced', 
                     random_state=self.random_state,
-                    max_iter=5000
+                    max_iter=10000
                 )
             }
+            
+            # Add XGBoost if available
+            if XGBOOST_AVAILABLE:
+                if hasattr(self, 'advanced_models') and 'xgboost' in self.advanced_models:
+                    base_models['xgboost'] = self.advanced_models['xgboost']
+                    self.logger.info("Using optimized XGBoost model")
+                else:
+                    base_models['xgboost'] = xgb.XGBClassifier(
+                        n_estimators=100,
+                        max_depth=6,
+                        learning_rate=0.1,
+                        subsample=0.8,
+                        colsample_bytree=0.8,
+                        random_state=self.random_state,
+                        eval_metric='logloss',
+                        use_label_encoder=False
+                    )
+                    self.logger.info("Added XGBoost with default parameters")
+            
+            # Add LightGBM if available
+            if LIGHTGBM_AVAILABLE:
+                if hasattr(self, 'advanced_models') and 'lightgbm' in self.advanced_models:
+                    base_models['lightgbm'] = self.advanced_models['lightgbm']
+                    self.logger.info("Using optimized LightGBM model")
+                else:
+                    base_models['lightgbm'] = lgb.LGBMClassifier(
+                        n_estimators=100,
+                        max_depth=6,
+                        learning_rate=0.1,
+                        subsample=0.8,
+                        colsample_bytree=0.8,
+                        random_state=self.random_state,
+                        verbose=-1
+                    )
+                    self.logger.info("Added LightGBM with default parameters")
             
             # 2. Train base models and get cross-validation predictions
             base_predictions = {}
@@ -546,13 +789,13 @@ class OptimizedRadiomicsClassifier:
                 C=1.0, 
                 class_weight='balanced', 
                 random_state=self.random_state,
-                max_iter=1000
+                max_iter=10000
             )
             
             # Use cross-validation to train meta-learner
             meta_learner.fit(meta_features, y_train)
             
-            # 5. Create stacking ensemble class
+            # 5. Create final ensemble
             self.ensemble_model = StackingEnsemble(base_models, meta_learner, meta_feature_names)
             
             # 6. Store ensemble information
@@ -561,12 +804,18 @@ class OptimizedRadiomicsClassifier:
                 'meta_learner': type(meta_learner).__name__,
                 'meta_feature_names': meta_feature_names,
                 'base_predictions': base_predictions,
-                'base_probabilities': base_probabilities
+                'base_probabilities': base_probabilities,
+                'diversity_models': {
+                    'xgboost_available': XGBOOST_AVAILABLE,
+                    'lightgbm_available': LIGHTGBM_AVAILABLE,
+                    'total_models': len(base_models)
+                }
             }
             
             self.logger.info("Advanced stacking ensemble created successfully")
             self.logger.info(f"Base models: {list(base_models.keys())}")
             self.logger.info(f"Meta-learner: {type(meta_learner).__name__}")
+            self.logger.info(f"Total models in ensemble: {len(base_models)}")
             
             return True
             
@@ -827,6 +1076,7 @@ class OptimizedRadiomicsClassifier:
             ("Optimized Feature Selection", self.optimized_feature_selection),
             ("Data Splitting", self.split_data),
             ("SVM Hyperparameter Optimization", self.optimize_svm_hyperparameters),
+            ("Advanced Models Optimization", self.optimize_advanced_models),
             ("Ensemble Creation", self.create_optimized_ensemble),
             ("Model Evaluation", self.evaluate_optimized_models),
             ("Saving Optimized Artifacts", self.save_optimized_artifacts)

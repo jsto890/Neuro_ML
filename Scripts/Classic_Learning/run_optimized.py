@@ -46,6 +46,19 @@ def main():
     
     # Initialize and run pipeline
     classifier = OptimizedRadiomicsClassifier(input_path, output_dir, random_state, binary_only)
+    
+    # Define pipeline stages with advanced models optimization
+    pipeline_stages = [
+        ("Data Loading", classifier.load_data),
+        ("Feature Engineering", classifier.engineer_features),
+        ("Data Splitting", classifier.split_data),
+        ("SVM Hyperparameter Optimization", classifier.optimize_svm_hyperparameters),
+        ("Advanced Models Optimization", classifier.optimize_advanced_models),
+        ("Ensemble Creation", classifier.create_optimized_ensemble),
+        ("Model Evaluation", classifier.evaluate_optimized_models),
+        ("Results Saving", classifier.save_optimized_results)
+    ]
+    
     success = classifier.run_optimized_pipeline()
     
     if success:
@@ -62,10 +75,10 @@ def main():
         print(f"  • optimized_results_summary.json - Detailed results")
         print(f"  • optimized_pipeline.log - Execution log")
         print("\nKey Optimizations:")
-        print(f"  • Advanced feature engineering based on cross-model analysis")
-        print(f"  • RFECV feature selection optimized for SVM")
-        print(f"  • Fine-tuned SVM hyperparameters")
-        print(f"  • Ensemble with SVM as primary model")
+        print(f"  • Bayesian optimization for hyperparameter tuning")
+        print(f"  • Advanced models: XGBoost, LightGBM")
+        print(f"  • Advanced feature engineering with polynomial features")
+        print(f"  • Stacking ensemble with diverse base models")
         print(f"  • Clinical interpretability focus")
         print("\nClinical Recommendations:")
         print(f"  • Use optimized_svm_model.pkl for primary predictions")
