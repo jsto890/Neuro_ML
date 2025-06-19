@@ -1,0 +1,61 @@
+# Configuration for Radiomics Classical Learning Pipeline
+
+# Data paths
+data:
+  input_file: "~/reseng202500013-ndd-ml/data/radiomics_MRI_mri_labels.csv"
+  output_dir: "~/reseng202500013-ndd-ml/data/classical_results"
+
+# Data preprocessing
+preprocessing:
+  remove_missing: true
+  variance_threshold: 0.01
+  feature_selection:
+    enabled: true
+    method: "k_best"
+    n_features: 100
+  scaling:
+    method: "standard"  # standard, robust, minmax
+
+# Data splitting
+splitting:
+  test_size: 0.2
+  val_size: 0.2
+  random_state: 42
+  stratify: true
+
+# Model parameters
+model:
+  type: "random_forest"
+  random_state: 42
+  class_weight: "balanced"
+  n_jobs: -1
+  
+  # Hyperparameter grid for GridSearchCV
+  param_grid:
+    n_estimators: [100, 200, 500]
+    max_depth: [None, 10, 20, 30]
+    min_samples_split: [2, 5, 10]
+    min_samples_leaf: [1, 2, 4]
+    max_features: ["sqrt", "log2", None]
+  
+  # Cross-validation
+  cv_folds: 5
+  scoring: "roc_auc"
+
+# Evaluation
+evaluation:
+  metrics: ["accuracy", "precision", "recall", "f1", "auc"]
+  plots:
+    roc_curve: true
+    confusion_matrix: true
+    feature_importance: true
+    performance_comparison: true
+
+# Output
+output:
+  save_model: true
+  save_scaler: true
+  save_predictions: true
+  save_feature_importance: true
+  plot_dpi: 300
+  plot_format: "png" 
