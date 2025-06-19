@@ -59,6 +59,34 @@ class NumpyEncoder(json.JSONEncoder):
             return bool(obj)
         return super(NumpyEncoder, self).default(obj)
 
+# Stacking Ensemble class
+class StackingEnsemble:
+    def __init__(self, base_models, meta_learner, meta_feature_names):
+        self.base_models = base_models
+        self.meta_learner = meta_learner
+        self.meta_feature_names = meta_feature_names
+    
+    def predict_proba(self, X):
+        # Get predictions from base models
+        base_probs = []
+        for name, model in self.base_models.items():
+            prob = model.predict_proba(X)[:, 1]
+            base_probs.append(prob)
+        
+        # Create meta-features
+        meta_features = np.column_stack(base_probs)
+        
+        # Get meta-learner predictions
+        meta_probs = self.meta_learner.predict_proba(meta_features)
+        return meta_probs
+    
+    def predict(self, X):
+        probs = self.predict_proba(X)
+        return np.argmax(probs, axis=1)
+    
+    def __str__(self):
+        return f"StackingEnsemble(base_models={list(self.base_models.keys())}, meta_learner={type(self.meta_learner).__name__})"
+
 class OptimizedRadiomicsClassifier:
     """Optimized radiomics classifier focusing on SVM with advanced feature engineering."""
     
@@ -525,37 +553,9 @@ class OptimizedRadiomicsClassifier:
             meta_learner.fit(meta_features, y_train)
             
             # 5. Create stacking ensemble class
-            class StackingEnsemble:
-                def __init__(self, base_models, meta_learner, meta_feature_names):
-                    self.base_models = base_models
-                    self.meta_learner = meta_learner
-                    self.meta_feature_names = meta_feature_names
-                
-                def predict_proba(self, X):
-                    # Get predictions from base models
-                    base_probs = []
-                    for name, model in self.base_models.items():
-                        prob = model.predict_proba(X)[:, 1]
-                        base_probs.append(prob)
-                    
-                    # Create meta-features
-                    meta_features = np.column_stack(base_probs)
-                    
-                    # Get meta-learner predictions
-                    meta_probs = self.meta_learner.predict_proba(meta_features)
-                    return meta_probs
-                
-                def predict(self, X):
-                    probs = self.predict_proba(X)
-                    return np.argmax(probs, axis=1)
-                
-                def __str__(self):
-                    return f"StackingEnsemble(base_models={list(self.base_models.keys())}, meta_learner={type(self.meta_learner).__name__})"
-            
-            # 6. Create final ensemble
             self.ensemble_model = StackingEnsemble(base_models, meta_learner, meta_feature_names)
             
-            # 7. Store ensemble information
+            # 6. Store ensemble information
             self.ensemble_info = {
                 'base_models': list(base_models.keys()),
                 'meta_learner': type(meta_learner).__name__,
