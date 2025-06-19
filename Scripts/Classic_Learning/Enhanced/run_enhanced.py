@@ -18,7 +18,7 @@ from pathlib import Path
 # Add the current directory to Python path
 sys.path.append(str(Path(__file__).parent))
 
-from enhanced_classifier import EnhancedRadiomicsClassifier
+from Scripts.Classic_Learning.Enhanced.enhanced_classifier import EnhancedRadiomicsClassifier
 
 def main():
     """Run the enhanced radiomics classification pipeline."""

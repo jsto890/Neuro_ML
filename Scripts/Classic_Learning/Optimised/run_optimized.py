@@ -18,7 +18,7 @@ from pathlib import Path
 # Add the current directory to Python path
 sys.path.append(str(Path(__file__).parent))
 
-from optimized_classifier import OptimizedRadiomicsClassifier
+from Scripts.Classic_Learning.Optimised.optimized_classifier import OptimizedRadiomicsClassifier
 
 def main():
     """Run the optimized radiomics classification pipeline."""

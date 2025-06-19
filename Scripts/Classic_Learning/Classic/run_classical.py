@@ -18,7 +18,7 @@ from pathlib import Path
 # Add the current directory to Python path
 sys.path.append(str(Path(__file__).parent))
 
-from radiomics_classifier import RadiomicsClassifier
+from Scripts.Classic_Learning.Classic.radiomics_classifier import RadiomicsClassifier
 
 def main():
     parser = argparse.ArgumentParser(description='Run Radiomics Classical Learning Pipeline')
