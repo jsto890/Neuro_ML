@@ -1,0 +1,666 @@
+"""
+Enhanced Radiomics Classification Pipeline
+==========================================
+
+This enhanced version includes:
+- Multiple algorithms (Random Forest, SVM, Logistic Regression, Gradient Boosting)
+- Advanced feature engineering and selection
+- Better regularization to prevent overfitting
+- Comprehensive model comparison
+- Ensemble methods
+"""
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from pathlib import Path
+import pickle
+import json
+import logging
+import argparse
+import sys
+from datetime import datetime
+from sklearn.model_selection import (
+    StratifiedKFold, GridSearchCV, cross_val_score,
+    train_test_split, RandomizedSearchCV
+)
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.feature_selection import (
+    SelectKBest, f_classif, mutual_info_classif, 
+    RFE, SelectFromModel, VarianceThreshold
+)
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score,
+    roc_auc_score, confusion_matrix, classification_report,
+    roc_curve, precision_recall_curve
+)
+from sklearn.impute import SimpleImputer
+import warnings
+warnings.filterwarnings('ignore')
+
+class EnhancedRadiomicsClassifier:
+    """Enhanced radiomics classifier with multiple algorithms and advanced feature engineering."""
+    
+    def __init__(self, input_path, output_dir, random_state=42, binary_only=True):
+        """
+        Initialize the Enhanced Radiomics Classifier.
+        
+        Args:
+            input_path (str): Path to radiomics CSV file
+            output_dir (str): Output directory for results
+            random_state (int): Random seed for reproducibility
+            binary_only (bool): If True, only use labels 0 and 1
+        """
+        self.input_path = input_path
+        self.output_dir = Path(output_dir)
+        self.random_state = random_state
+        self.binary_only = binary_only
+        
+        # Create output directory
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize components
+        self.scaler = RobustScaler()  # More robust to outliers
+        self.feature_selector = None
+        self.models = {}
+        self.best_models = {}
+        self.feature_importance = {}
+        self.results = {}
+        
+        # Setup logging
+        self.setup_logging()
+        
+        # Initialize data containers
+        self.data = None
+        self.X = None
+        self.y = None
+        self.subject_ids = None
+        self.feature_names = None
+        self.selected_features = None
+        self.splits = None
+        
+    def setup_logging(self):
+        """Setup logging configuration."""
+        log_file = self.output_dir / 'enhanced_pipeline.log'
+        
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+        
+    def load_data(self):
+        """Stage 0: Load and validate input data."""
+        self.logger.info("Stage 0: Loading data...")
+        
+        try:
+            self.data = pd.read_csv(self.input_path)
+            self.logger.info(f"Loaded {len(self.data)} samples with {len(self.data.columns)} columns")
+            
+            # Remove diagnostic columns (PyRadiomics metadata)
+            diagnostic_cols = [col for col in self.data.columns if col.startswith('diagnostics_')]
+            if diagnostic_cols:
+                self.data = self.data.drop(columns=diagnostic_cols)
+                self.logger.info(f"Removed {len(diagnostic_cols)} diagnostic columns")
+            
+            # Validate required columns
+            required_cols = ['subject_id', 'label']
+            missing_cols = [col for col in required_cols if col not in self.data.columns]
+            if missing_cols:
+                raise ValueError(f"Missing required columns: {missing_cols}")
+            
+            # Filter for binary classification if requested
+            if self.binary_only:
+                initial_count = len(self.data)
+                self.data = self.data[self.data['label'].isin([0, 1])]
+                final_count = len(self.data)
+                self.logger.info(f"Filtered to binary classification: {initial_count} → {final_count} samples")
+                
+                if final_count == 0:
+                    raise ValueError("No samples remaining after binary filtering")
+            
+            # Extract components
+            self.subject_ids = self.data['subject_id'].values
+            self.y = self.data['label'].values
+            self.feature_names = [col for col in self.data.columns if col not in ['subject_id', 'label']]
+            self.X = self.data[self.feature_names].values
+            
+            self.logger.info(f"Data shape: {self.X.shape}")
+            self.logger.info(f"Labels: {np.unique(self.y)} (counts: {np.bincount(self.y)})")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error loading data: {e}")
+            return False
+    
+    def advanced_preprocessing(self):
+        """Stage 1: Advanced preprocessing with feature engineering."""
+        self.logger.info("Stage 1: Advanced preprocessing...")
+        
+        try:
+            # Handle missing values with imputation
+            if hasattr(self.X, 'dtype') and np.issubdtype(self.X.dtype, np.number):
+                missing_count = np.isnan(self.X).sum()
+            else:
+                X_numeric = pd.DataFrame(self.X, columns=self.feature_names).apply(pd.to_numeric, errors='coerce')
+                missing_count = X_numeric.isnull().sum().sum()
+            
+            if missing_count > 0:
+                self.logger.info(f"Found {missing_count} missing values - using imputation")
+                imputer = SimpleImputer(strategy='median')
+                
+                if hasattr(self.X, 'dtype') and np.issubdtype(self.X.dtype, np.number):
+                    self.X = imputer.fit_transform(self.X)
+                else:
+                    X_numeric = pd.DataFrame(self.X, columns=self.feature_names).apply(pd.to_numeric, errors='coerce')
+                    X_imputed = imputer.fit_transform(X_numeric)
+                    self.X = X_imputed
+            
+            # Remove constant and quasi-constant features
+            variance_selector = VarianceThreshold(threshold=0.01)
+            self.X = variance_selector.fit_transform(self.X)
+            kept_features = variance_selector.get_support()
+            self.feature_names = [f for f, keep in zip(self.feature_names, kept_features) if keep]
+            self.logger.info(f"After variance threshold: {self.X.shape}")
+            
+            # Advanced feature selection
+            self.logger.info("Performing advanced feature selection...")
+            
+            # Method 1: Mutual Information (captures non-linear relationships)
+            mi_selector = SelectKBest(score_func=mutual_info_classif, k=min(50, self.X.shape[1]))
+            X_mi = mi_selector.fit_transform(self.X, self.y)
+            mi_scores = mi_selector.scores_
+            mi_features = [f for f, selected in zip(self.feature_names, mi_selector.get_support()) if selected]
+            
+            # Method 2: F-statistic (captures linear relationships)
+            f_selector = SelectKBest(score_func=f_classif, k=min(50, self.X.shape[1]))
+            X_f = f_selector.fit_transform(self.X, self.y)
+            f_scores = f_selector.scores_
+            f_features = [f for f, selected in zip(self.feature_names, f_selector.get_support()) if selected]
+            
+            # Combine both methods (union of selected features)
+            combined_features = list(set(mi_features + f_features))
+            feature_indices = [self.feature_names.index(f) for f in combined_features]
+            
+            self.X = self.X[:, feature_indices]
+            self.feature_names = combined_features
+            self.logger.info(f"After feature selection: {self.X.shape}")
+            
+            # Scale features
+            self.X = self.scaler.fit_transform(self.X)
+            self.logger.info("Features scaled using RobustScaler")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error in preprocessing: {e}")
+            return False
+    
+    def split_data(self, test_size=0.2, val_size=0.2):
+        """Stage 2: Train-validation-test split."""
+        self.logger.info("Stage 2: Splitting data...")
+        
+        try:
+            # First split: train+val vs test
+            X_temp, X_test, y_temp, y_test, ids_temp, ids_test = train_test_split(
+                self.X, self.y, self.subject_ids, 
+                test_size=test_size, 
+                random_state=self.random_state,
+                stratify=self.y
+            )
+            
+            # Second split: train vs val
+            val_size_adjusted = val_size / (1 - test_size)
+            X_train, X_val, y_train, y_val, ids_train, ids_val = train_test_split(
+                X_temp, y_temp, ids_temp,
+                test_size=val_size_adjusted,
+                random_state=self.random_state,
+                stratify=y_temp
+            )
+            
+            self.splits = {
+                'train': (X_train, y_train, ids_train),
+                'val': (X_val, y_val, ids_val),
+                'test': (X_test, y_test, ids_test)
+            }
+            
+            self.logger.info(f"Train: {X_train.shape[0]} samples")
+            self.logger.info(f"Validation: {X_val.shape[0]} samples")
+            self.logger.info(f"Test: {X_test.shape[0]} samples")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error in data splitting: {e}")
+            return False
+    
+    def define_models(self):
+        """Define multiple models with regularization-focused parameters."""
+        self.logger.info("Defining models with regularization...")
+        
+        # Regularized Random Forest
+        rf_params = {
+            'n_estimators': [50, 100],
+            'max_depth': [3, 5, 7],
+            'min_samples_split': [10, 20],
+            'min_samples_leaf': [2, 4],
+            'max_features': ['sqrt', 'log2'],
+            'class_weight': ['balanced']
+        }
+        
+        # Regularized Logistic Regression
+        lr_params = {
+            'C': [0.01, 0.1, 1.0, 10.0],
+            'penalty': ['l1', 'l2'],
+            'solver': ['liblinear'],
+            'class_weight': ['balanced']
+        }
+        
+        # Regularized SVM
+        svm_params = {
+            'C': [0.1, 1.0, 10.0],
+            'kernel': ['rbf', 'linear'],
+            'gamma': ['scale', 'auto'],
+            'class_weight': ['balanced']
+        }
+        
+        # Regularized Gradient Boosting
+        gb_params = {
+            'n_estimators': [50, 100],
+            'max_depth': [3, 5],
+            'learning_rate': [0.01, 0.1],
+            'subsample': [0.8, 0.9],
+            'min_samples_split': [10, 20],
+            'min_samples_leaf': [2, 4]
+        }
+        
+        self.models = {
+            'RandomForest': (RandomForestClassifier(random_state=self.random_state), rf_params),
+            'LogisticRegression': (LogisticRegression(random_state=self.random_state), lr_params),
+            'SVM': (SVC(random_state=self.random_state, probability=True), svm_params),
+            'GradientBoosting': (GradientBoostingClassifier(random_state=self.random_state), gb_params)
+        }
+        
+        self.logger.info(f"Defined {len(self.models)} models")
+    
+    def train_models(self):
+        """Stage 3: Train multiple models with cross-validation."""
+        self.logger.info("Stage 3: Training multiple models...")
+        
+        try:
+            X_train, y_train, _ = self.splits['train']
+            
+            for name, (model, param_grid) in self.models.items():
+                self.logger.info(f"Training {name}...")
+                
+                # Use RandomizedSearchCV for faster search
+                search = RandomizedSearchCV(
+                    model, param_grid, n_iter=20, cv=5, 
+                    scoring='roc_auc', n_jobs=-1, 
+                    random_state=self.random_state, verbose=0
+                )
+                
+                search.fit(X_train, y_train)
+                self.best_models[name] = search.best_estimator_
+                
+                self.logger.info(f"{name} - Best CV score: {search.best_score_:.4f}")
+                self.logger.info(f"{name} - Best params: {search.best_params_}")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error in model training: {e}")
+            return False
+    
+    def evaluate_models(self):
+        """Stage 4: Evaluate all models."""
+        self.logger.info("Stage 4: Evaluating models...")
+        
+        try:
+            for name, model in self.best_models.items():
+                self.logger.info(f"Evaluating {name}...")
+                
+                results = {}
+                for split_name, (X_split, y_split, ids_split) in self.splits.items():
+                    # Predictions
+                    y_pred = model.predict(X_split)
+                    y_pred_proba = model.predict_proba(X_split)[:, 1]
+                    
+                    # Calculate metrics
+                    accuracy = accuracy_score(y_split, y_pred)
+                    precision = precision_score(y_split, y_pred, average='weighted')
+                    recall = recall_score(y_split, y_pred, average='weighted')
+                    f1 = f1_score(y_split, y_pred, average='weighted')
+                    auc = roc_auc_score(y_split, y_pred_proba)
+                    
+                    results[split_name] = {
+                        'accuracy': accuracy,
+                        'precision': precision,
+                        'recall': recall,
+                        'f1': f1,
+                        'auc': auc,
+                        'predictions': y_pred,
+                        'probabilities': y_pred_proba,
+                        'true_labels': y_split,
+                        'subject_ids': ids_split
+                    }
+                    
+                    self.logger.info(f"{name} {split_name} - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}")
+                
+                self.results[name] = results
+                
+                # Extract feature importance if available
+                if hasattr(model, 'feature_importances_'):
+                    self.feature_importance[name] = model.feature_importances_
+                elif hasattr(model, 'coef_'):
+                    self.feature_importance[name] = np.abs(model.coef_[0])
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error in model evaluation: {e}")
+            return False
+    
+    def create_ensemble(self):
+        """Stage 5: Create ensemble model."""
+        self.logger.info("Stage 5: Creating ensemble model...")
+        
+        try:
+            X_train, y_train, _ = self.splits['train']
+            
+            # Simple voting ensemble (average probabilities)
+            ensemble_results = {}
+            
+            for split_name, (X_split, y_split, ids_split) in self.splits.items():
+                # Get probabilities from all models
+                all_probs = []
+                for name, model in self.best_models.items():
+                    probs = model.predict_proba(X_split)[:, 1]
+                    all_probs.append(probs)
+                
+                # Average probabilities
+                ensemble_probs = np.mean(all_probs, axis=0)
+                ensemble_preds = (ensemble_probs > 0.5).astype(int)
+                
+                # Calculate metrics
+                accuracy = accuracy_score(y_split, ensemble_preds)
+                precision = precision_score(y_split, ensemble_preds, average='weighted')
+                recall = recall_score(y_split, ensemble_preds, average='weighted')
+                f1 = f1_score(y_split, ensemble_preds, average='weighted')
+                auc = roc_auc_score(y_split, ensemble_probs)
+                
+                ensemble_results[split_name] = {
+                    'accuracy': accuracy,
+                    'precision': precision,
+                    'recall': recall,
+                    'f1': f1,
+                    'auc': auc,
+                    'predictions': ensemble_preds,
+                    'probabilities': ensemble_probs,
+                    'true_labels': y_split,
+                    'subject_ids': ids_split
+                }
+                
+                self.logger.info(f"Ensemble {split_name} - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}")
+            
+            self.results['Ensemble'] = ensemble_results
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error creating ensemble: {e}")
+            return False
+    
+    def generate_plots(self):
+        """Generate comprehensive visualization plots."""
+        self.logger.info("Generating plots...")
+        
+        try:
+            fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+            fig.suptitle('Enhanced Radiomics Classification Results', fontsize=16)
+            
+            # 1. Model Comparison (Accuracy)
+            model_names = list(self.results.keys())
+            test_accuracies = [self.results[name]['test']['accuracy'] for name in model_names]
+            
+            axes[0, 0].bar(model_names, test_accuracies, color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'])
+            axes[0, 0].set_title('Model Comparison - Test Accuracy')
+            axes[0, 0].set_ylabel('Accuracy')
+            axes[0, 0].tick_params(axis='x', rotation=45)
+            
+            # 2. ROC Curves
+            for name in model_names:
+                fpr, tpr, _ = roc_curve(
+                    self.results[name]['test']['true_labels'],
+                    self.results[name]['test']['probabilities']
+                )
+                auc_score = self.results[name]['test']['auc']
+                axes[0, 1].plot(fpr, tpr, label=f'{name} (AUC = {auc_score:.3f})')
+            
+            axes[0, 1].plot([0, 1], [0, 1], 'k--', label='Random')
+            axes[0, 1].set_title('ROC Curves - Test Set')
+            axes[0, 1].set_xlabel('False Positive Rate')
+            axes[0, 1].set_ylabel('True Positive Rate')
+            axes[0, 1].legend()
+            axes[0, 1].grid(True)
+            
+            # 3. Feature Importance (Random Forest)
+            if 'RandomForest' in self.feature_importance:
+                rf_importance = self.feature_importance['RandomForest']
+                top_indices = np.argsort(rf_importance)[-10:]
+                top_features = [self.feature_names[i] for i in top_indices]
+                top_importance = rf_importance[top_indices]
+                
+                axes[0, 2].barh(range(len(top_features)), top_importance)
+                axes[0, 2].set_yticks(range(len(top_features)))
+                axes[0, 2].set_yticklabels([f.split('_')[-1] for f in top_features])
+                axes[0, 2].set_title('Top 10 Features - Random Forest')
+                axes[0, 2].set_xlabel('Importance')
+            
+            # 4. Confusion Matrix (Best Model)
+            best_model = max(model_names, key=lambda x: self.results[x]['test']['auc'])
+            cm = confusion_matrix(
+                self.results[best_model]['test']['true_labels'],
+                self.results[best_model]['test']['predictions']
+            )
+            
+            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[1, 0])
+            axes[1, 0].set_title(f'Confusion Matrix - {best_model}')
+            axes[1, 0].set_xlabel('Predicted')
+            axes[1, 0].set_ylabel('Actual')
+            
+            # 5. Performance Metrics Comparison
+            metrics = ['accuracy', 'precision', 'recall', 'f1', 'auc']
+            metric_data = []
+            
+            for name in model_names:
+                row = [self.results[name]['test'][metric] for metric in metrics]
+                metric_data.append(row)
+            
+            metric_df = pd.DataFrame(metric_data, index=model_names, columns=metrics)
+            sns.heatmap(metric_df, annot=True, fmt='.3f', cmap='YlOrRd', ax=axes[1, 1])
+            axes[1, 1].set_title('Performance Metrics - Test Set')
+            
+            # 6. Train vs Test Performance
+            train_acc = [self.results[name]['train']['accuracy'] for name in model_names]
+            test_acc = [self.results[name]['test']['accuracy'] for name in model_names]
+            
+            x = np.arange(len(model_names))
+            width = 0.35
+            
+            axes[1, 2].bar(x - width/2, train_acc, width, label='Train', alpha=0.8)
+            axes[1, 2].bar(x + width/2, test_acc, width, label='Test', alpha=0.8)
+            axes[1, 2].set_title('Train vs Test Accuracy')
+            axes[1, 2].set_ylabel('Accuracy')
+            axes[1, 2].set_xticks(x)
+            axes[1, 2].set_xticklabels(model_names, rotation=45)
+            axes[1, 2].legend()
+            axes[1, 2].grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            plt.savefig(self.output_dir / 'enhanced_evaluation_plots.png', dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            self.logger.info("Plots generated and saved")
+            
+        except Exception as e:
+            self.logger.error(f"Error generating plots: {e}")
+    
+    def save_artifacts(self):
+        """Stage 6: Save all artifacts."""
+        self.logger.info("Stage 6: Saving artifacts...")
+        
+        try:
+            # Save models
+            for name, model in self.best_models.items():
+                with open(self.output_dir / f'{name.lower()}_model.pkl', 'wb') as f:
+                    pickle.dump(model, f)
+            
+            # Save scaler
+            with open(self.output_dir / 'scaler.pkl', 'wb') as f:
+                pickle.dump(self.scaler, f)
+            
+            # Save feature importance
+            feature_importance_df = pd.DataFrame()
+            for name, importance in self.feature_importance.items():
+                if len(importance) == len(self.feature_names):
+                    df_temp = pd.DataFrame({
+                        'feature': self.feature_names,
+                        'importance': importance,
+                        'model': name
+                    })
+                    feature_importance_df = pd.concat([feature_importance_df, df_temp], ignore_index=True)
+            
+            feature_importance_df.to_csv(self.output_dir / 'feature_importance_comparison.csv', index=False)
+            
+            # Save results summary
+            summary = {
+                'timestamp': datetime.now().isoformat(),
+                'input_file': self.input_path,
+                'data_shape': self.X.shape,
+                'feature_names': self.feature_names,
+                'best_models': {name: str(model) for name, model in self.best_models.items()},
+                'results': {
+                    name: {
+                        split: {k: v for k, v in results.items() if k not in ['predictions', 'probabilities', 'true_labels', 'subject_ids']}
+                        for split, results in model_results.items()
+                    }
+                    for name, model_results in self.results.items()
+                }
+            }
+            
+            with open(self.output_dir / 'enhanced_results_summary.json', 'w') as f:
+                json.dump(summary, f, indent=2)
+            
+            # Generate plots
+            self.generate_plots()
+            
+            self.logger.info(f"All artifacts saved to {self.output_dir}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error saving artifacts: {e}")
+            return False
+    
+    def run_pipeline(self):
+        """Run the complete enhanced pipeline."""
+        self.logger.info("Starting Enhanced Radiomics Classification Pipeline")
+        
+        stages = [
+            ("Data Loading", self.load_data),
+            ("Advanced Preprocessing", self.advanced_preprocessing),
+            ("Data Splitting", self.split_data),
+            ("Model Definition", self.define_models),
+            ("Model Training", self.train_models),
+            ("Model Evaluation", self.evaluate_models),
+            ("Ensemble Creation", self.create_ensemble),
+            ("Saving Artifacts", self.save_artifacts)
+        ]
+        
+        for stage_name, stage_func in stages:
+            self.logger.info(f"\n{'='*50}")
+            self.logger.info(f"Starting {stage_name}")
+            self.logger.info(f"{'='*50}")
+            
+            if not stage_func():
+                self.logger.error(f"Pipeline failed at {stage_name}")
+                return False
+        
+        self.logger.info(f"\n{'='*50}")
+        self.logger.info("Enhanced pipeline completed successfully!")
+        self.logger.info(f"Results saved to: {self.output_dir}")
+        self.logger.info(f"{'='*50}")
+        
+        return True
+
+def main():
+    parser = argparse.ArgumentParser(description='Enhanced Radiomics Classification Pipeline')
+    parser.add_argument('--input', 
+                       default='~/reseng202500013-ndd-ml/data/radiomics_MRI_mri_labels.csv',
+                       help='Path to radiomics CSV file')
+    parser.add_argument('--output-dir', 
+                       default='~/reseng202500013-ndd-ml/data/enhanced_classical_results',
+                       help='Output directory for results')
+    parser.add_argument('--random-state', 
+                       type=int, default=42,
+                       help='Random seed for reproducibility')
+    parser.add_argument('--binary-only', 
+                       action='store_true', default=True,
+                       help='Use only binary classification (labels 0 and 1)')
+    parser.add_argument('--multi-class', 
+                       action='store_true', default=False,
+                       help='Use multi-class classification (all labels)')
+    
+    args = parser.parse_args()
+    
+    # Handle binary vs multi-class
+    if args.multi_class:
+        binary_only = False
+    else:
+        binary_only = True
+    
+    # Expand user paths
+    input_path = os.path.expanduser(args.input)
+    output_dir = os.path.expanduser(args.output_dir)
+    
+    # Check if input file exists
+    if not os.path.exists(input_path):
+        print(f"Input file not found: {input_path}")
+        sys.exit(1)
+    
+    print("Starting Enhanced Radiomics Classification Pipeline")
+    print(f"Input: {input_path}")
+    print(f"Output: {output_dir}")
+    print(f"Random seed: {args.random_state}")
+    print(f"Classification: {'Binary (0,1)' if binary_only else 'Multi-class'}")
+    print("=" * 60)
+    
+    # Initialize and run pipeline
+    classifier = EnhancedRadiomicsClassifier(input_path, output_dir, args.random_state, binary_only)
+    success = classifier.run_pipeline()
+    
+    if success:
+        print("\n" + "=" * 60)
+        print("Enhanced pipeline completed successfully!")
+        print(f"Results saved to: {output_dir}")
+        print("\nGenerated files:")
+        print(f"  • Multiple model files (.pkl)")
+        print(f"  • Feature importance comparison")
+        print(f"  • Enhanced evaluation plots")
+        print(f"  • Comprehensive results summary")
+        print(f"  • Ensemble model results")
+    else:
+        print("\nPipeline failed! Check the logs for details.")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main() 
