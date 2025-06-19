@@ -355,43 +355,59 @@ class OptimizedRadiomicsClassifier:
             return False
     
     def optimized_feature_selection(self):
-        """Stage 2: Optimized feature selection for SVM."""
+        """Stage 2: Optimized feature selection with RFECV and preliminary reduction."""
         self.logger.info("Stage 2: Optimized feature selection...")
         
         try:
-            # Use RFECV (Recursive Feature Elimination with Cross-Validation) for SVM
-            from sklearn.svm import LinearSVC
+            # Preliminary feature reduction to handle large feature set
+            if self.X.shape[1] > 100:
+                self.logger.info(f"Large feature set detected ({self.X.shape[1]} features), applying preliminary reduction...")
+                
+                # Use mutual information for initial feature selection
+                from sklearn.feature_selection import SelectKBest, mutual_info_classif
+                k_best = min(100, self.X.shape[1] // 2)  # Select top 50% or 100 features, whichever is smaller
+                selector = SelectKBest(score_func=mutual_info_classif, k=k_best)
+                X_reduced = selector.fit_transform(self.X, self.y)
+                selected_indices = selector.get_support()
+                self.feature_names = [self.feature_names[i] for i in range(len(self.feature_names)) if selected_indices[i]]
+                self.X = X_reduced
+                
+                self.logger.info(f"Preliminary reduction: {self.X.shape[1]} features selected")
             
-            # Create a linear SVM for feature selection
-            svm_selector = LinearSVC(random_state=self.random_state, max_iter=10000)
+            # RFECV with optimized SVM parameters
+            base_svm = SVC(
+                kernel='linear',
+                C=1.0,
+                class_weight='balanced',
+                probability=True,
+                random_state=self.random_state,
+                max_iter=2000  # Increased max_iter to prevent convergence warnings
+            )
             
-            # RFECV to find optimal number of features
             rfecv = RFECV(
-                estimator=svm_selector,
+                estimator=base_svm,
                 step=1,
-                cv=StratifiedKFold(5, shuffle=True, random_state=self.random_state),
-                scoring='roc_auc',
+                cv=5,
+                scoring='accuracy',
                 n_jobs=-1,
                 min_features_to_select=10
             )
             
-            rfecv.fit(self.X, self.y)
+            self.X = rfecv.fit_transform(self.X, self.y)
+            selected_features = [self.feature_names[i] for i in range(len(self.feature_names)) if rfecv.support_[i]]
+            self.feature_names = selected_features
             
-            # Get selected features
-            selected_features = rfecv.get_support()
-            self.X = self.X[:, selected_features]
-            self.feature_names = [f for f, selected in zip(self.feature_names, selected_features) if selected]
-            
-            self.logger.info(f"RFECV selected {len(self.feature_names)} features")
-            self.logger.info(f"Optimal number of features: {rfecv.n_features_}")
-            self.logger.info(f"Cross-validation score: {rfecv.cv_results_['mean_test_score'].max():.4f}")
-            
-            # Store feature selection results
+            # Store RFECV results
             self.feature_engineering_results['rfecv'] = {
                 'n_features': rfecv.n_features_,
                 'cv_score': rfecv.cv_results_['mean_test_score'].max(),
-                'selected_features': self.feature_names
+                'selected_features': selected_features,
+                'feature_ranking': rfecv.ranking_.tolist()
             }
+            
+            self.logger.info(f"RFECV selected {rfecv.n_features_} features")
+            self.logger.info(f"Optimal number of features: {rfecv.n_features_}")
+            self.logger.info(f"Cross-validation score: {rfecv.cv_results_['mean_test_score'].max():.4f}")
             
             return True
             
@@ -438,42 +454,54 @@ class OptimizedRadiomicsClassifier:
             return False
     
     def optimize_svm_hyperparameters(self):
-        """Stage 4: Fine-tune SVM hyperparameters."""
+        """Stage 4: Optimize SVM hyperparameters with extended parameter grid."""
         self.logger.info("Stage 4: Optimizing SVM hyperparameters...")
         
         try:
             X_train, y_train, _ = self.splits['train']
             
-            # Extended parameter grid for SVM optimization
+            # Extended parameter grid with higher max_iter
             param_grid = {
-                'C': [0.001, 0.01, 0.1, 1.0, 10.0, 100.0],
-                'kernel': ['linear', 'rbf'],
-                'gamma': ['scale', 'auto', 0.001, 0.01, 0.1, 1.0],
+                'C': [0.1, 0.5, 1.0, 2.0, 5.0, 10.0],
+                'gamma': ['scale', 'auto', 0.001, 0.01, 0.1],
+                'kernel': ['linear', 'rbf', 'poly'],
+                'degree': [2, 3],  # for poly kernel
                 'class_weight': ['balanced', None],
-                'probability': [True]
+                'max_iter': [2000]  # Higher max_iter to prevent convergence warnings
             }
             
-            # Use GridSearchCV for thorough search
-            svm = SVC(random_state=self.random_state)
+            # Create base SVM
+            base_svm = SVC(probability=True, random_state=self.random_state)
             
+            # Grid search with cross-validation
             grid_search = GridSearchCV(
-                svm, param_grid, cv=5, scoring='roc_auc',
-                n_jobs=-1, verbose=1, refit=True
+                estimator=base_svm,
+                param_grid=param_grid,
+                cv=5,
+                scoring='accuracy',
+                n_jobs=-1,
+                verbose=1
             )
             
             grid_search.fit(X_train, y_train)
             
+            # Store best model and parameters
             self.svm_model = grid_search.best_estimator_
-            
-            self.logger.info(f"Best SVM parameters: {grid_search.best_params_}")
-            self.logger.info(f"Best CV score: {grid_search.best_score_:.4f}")
+            best_params = grid_search.best_params_
             
             # Store optimization results
             self.feature_engineering_results['svm_optimization'] = {
-                'best_params': grid_search.best_params_,
+                'best_params': best_params,
                 'best_cv_score': grid_search.best_score_,
-                'cv_results': grid_search.cv_results_
+                'cv_results': {
+                    'mean_fit_time': grid_search.cv_results_['mean_fit_time'].tolist(),
+                    'mean_test_score': grid_search.cv_results_['mean_test_score'].tolist(),
+                    'rank_test_score': grid_search.cv_results_['rank_test_score'].tolist()
+                }
             }
+            
+            self.logger.info(f"Best SVM parameters: {best_params}")
+            self.logger.info(f"Best CV score: {grid_search.best_score_:.4f}")
             
             return True
             
@@ -490,8 +518,8 @@ class OptimizedRadiomicsClassifier:
             
             # 1. Define base models
             base_models = {
-                'svm_linear': SVC(kernel='linear', probability=True, random_state=self.random_state),
-                'svm_rbf': SVC(kernel='rbf', probability=True, random_state=self.random_state),
+                'svm_linear': SVC(kernel='linear', probability=True, random_state=self.random_state, max_iter=2000),
+                'svm_rbf': SVC(kernel='rbf', probability=True, random_state=self.random_state, max_iter=2000),
                 'random_forest': RandomForestClassifier(
                     n_estimators=200, 
                     max_depth=10, 
@@ -503,7 +531,7 @@ class OptimizedRadiomicsClassifier:
                     C=1.0, 
                     class_weight='balanced', 
                     random_state=self.random_state,
-                    max_iter=1000
+                    max_iter=2000
                 )
             }
             
