@@ -186,8 +186,25 @@ class OptimizedRadiomicsClassifier:
         self.logger.info("Stage 0: Loading data...")
         
         try:
+            # Check if file exists and is readable
+            if not os.path.exists(self.input_path):
+                raise FileNotFoundError(f"Input file not found: {self.input_path}")
+            
             self.data = pd.read_csv(self.input_path)
             self.logger.info(f"Loaded {len(self.data)} samples with {len(self.data.columns)} columns")
+            
+            # Validate data quality
+            if len(self.data) < 10:
+                raise ValueError(f"Insufficient data: only {len(self.data)} samples")
+            
+            if len(self.data.columns) < 5:
+                raise ValueError(f"Insufficient features: only {len(self.data.columns)} columns")
+            
+            # Check for missing values
+            missing_counts = self.data.isnull().sum()
+            if missing_counts.sum() > 0:
+                self.logger.warning(f"Found {missing_counts.sum()} missing values")
+                self.logger.warning(f"Columns with missing values: {missing_counts[missing_counts > 0].to_dict()}")
             
             # Remove diagnostic columns (PyRadiomics metadata)
             diagnostic_cols = [col for col in self.data.columns if col.startswith('diagnostics_')]
@@ -201,29 +218,49 @@ class OptimizedRadiomicsClassifier:
             if missing_cols:
                 raise ValueError(f"Missing required columns: {missing_cols}")
             
-            # Filter for binary classification if requested
-            if self.binary_only:
-                initial_count = len(self.data)
-                self.data = self.data[self.data['label'].isin([0, 1])]
-                final_count = len(self.data)
-                self.logger.info(f"Filtered to binary classification: {initial_count} → {final_count} samples")
-                
-                if final_count == 0:
-                    raise ValueError("No samples remaining after binary filtering")
+            # Extract features and labels
+            feature_cols = [col for col in self.data.columns if col not in ['subject_id', 'label']]
+            if len(feature_cols) < 10:
+                raise ValueError(f"Insufficient feature columns: only {len(feature_cols)} features")
             
-            # Extract components
-            self.subject_ids = self.data['subject_id'].values
+            self.X = self.data[feature_cols].values
             self.y = self.data['label'].values
-            self.feature_names = [col for col in self.data.columns if col not in ['subject_id', 'label']]
-            self.X = self.data[self.feature_names].values
+            self.subject_ids = self.data['subject_id'].values
+            self.feature_names = feature_cols
+            
+            # Validate labels
+            unique_labels = np.unique(self.y)
+            self.logger.info(f"Unique labels: {unique_labels}")
+            
+            if self.binary_only:
+                # Filter to binary classification
+                binary_mask = np.isin(self.y, [0, 1])
+                if np.sum(binary_mask) < len(self.y):
+                    self.X = self.X[binary_mask]
+                    self.y = self.y[binary_mask]
+                    self.subject_ids = self.subject_ids[binary_mask]
+                    self.logger.info(f"Filtered to binary classification: {len(self.data)} → {len(self.y)} samples")
+                
+                # Check class balance
+                class_counts = np.bincount(self.y)
+                if len(class_counts) != 2:
+                    raise ValueError(f"Expected 2 classes, found {len(class_counts)}")
+                
+                min_class_size = min(class_counts)
+                if min_class_size < 10:
+                    raise ValueError(f"Class imbalance too severe: smallest class has {min_class_size} samples")
+                
+                imbalance_ratio = max(class_counts) / min_class_size
+                if imbalance_ratio > 10:
+                    self.logger.warning(f"Severe class imbalance: ratio = {imbalance_ratio:.2f}")
             
             self.logger.info(f"Data shape: {self.X.shape}")
-            self.logger.info(f"Labels: {np.unique(self.y)} (counts: {np.bincount(self.y)})")
+            self.logger.info(f"Labels: {unique_labels} (counts: {[np.sum(self.y == label) for label in unique_labels]})")
             
             return True
             
         except Exception as e:
-            self.logger.error(f"Error loading data: {e}")
+            self.logger.error(f"Error in data loading: {e}")
             return False
     
     def advanced_feature_engineering(self):
@@ -241,6 +278,13 @@ class OptimizedRadiomicsClassifier:
             selected_features = self.X.columns[variance_selector.get_support()].tolist()
             
             self.logger.info(f"After variance threshold: {X_var_selected.shape}")
+            
+            # Check if we have enough features after variance thresholding
+            if len(selected_features) < 5:
+                self.logger.warning(f"Too few features after variance thresholding: {len(selected_features)}")
+                # Use original features if too few remain
+                X_var_selected = self.X.values
+                selected_features = self.feature_names
             
             # 2. Select top features based on cross-model analysis
             self.top_features = [
@@ -269,81 +313,85 @@ class OptimizedRadiomicsClassifier:
             engineered_features = []
             feature_names = []
             
-            # Get top 8 features for polynomial features (reduced from 10)
-            top_8_features = available_top_features[:8]
-            top_8_indices = [selected_features.index(f) for f in top_8_features]
-            X_top_8 = X_var_selected[:, top_8_indices]
+            # Limit polynomial features to prevent memory explosion
+            max_poly_features = min(8, len(available_top_features))
+            top_poly_features = available_top_features[:max_poly_features]
+            top_poly_indices = [selected_features.index(f) for f in top_poly_features]
+            X_top_poly = X_var_selected[:, top_poly_indices]
             
             # 3a. Polynomial features (2nd degree only, reduced complexity)
-            poly_2 = PolynomialFeatures(degree=2, include_bias=False, interaction_only=True)
-            X_poly_2 = poly_2.fit_transform(X_top_8)
-            
-            # Get feature names for polynomial features
-            poly_2_names = [f"poly2_{i}" for i in range(X_poly_2.shape[1] - X_top_8.shape[1])]
-            
-            engineered_features.append(X_poly_2[:, X_top_8.shape[1]:])
-            feature_names.extend(poly_2_names)
+            try:
+                poly_2 = PolynomialFeatures(degree=2, include_bias=False, interaction_only=True)
+                X_poly_2 = poly_2.fit_transform(X_top_poly)
+                
+                # Limit polynomial features to prevent explosion
+                max_features = min(20, X_poly_2.shape[1] - X_top_poly.shape[1])
+                if X_poly_2.shape[1] > X_top_poly.shape[1] + max_features:
+                    # Select top polynomial features by variance
+                    poly_features = X_poly_2[:, X_top_poly.shape[1]:]
+                    variances = np.var(poly_features, axis=0)
+                    top_indices = np.argsort(variances)[-max_features:]
+                    poly_features = poly_features[:, top_indices]
+                    poly_2_names = [f"poly2_{i}" for i in top_indices]
+                else:
+                    poly_features = X_poly_2[:, X_top_poly.shape[1]:]
+                    poly_2_names = [f"poly2_{i}" for i in range(poly_features.shape[1])]
+                
+                engineered_features.append(poly_features)
+                feature_names.extend(poly_2_names)
+                
+            except Exception as e:
+                self.logger.warning(f"Polynomial feature generation failed: {e}")
             
             # 3b. Simplified family-based interaction features (only key combinations)
-            family_groups = {
-                'firstorder': [f for f in available_top_features if 'firstorder' in f],
-                'texture': [f for f in available_top_features if any(x in f for x in ['glrlm', 'gldm', 'glszm', 'ngtdm'])]
-            }
-            
-            family_interactions = []
-            family_interaction_names = []
-            
-            # Only create interactions between firstorder and texture families
-            if family_groups['firstorder'] and family_groups['texture']:
-                indices1 = [selected_features.index(f) for f in family_groups['firstorder']]
-                indices2 = [selected_features.index(f) for f in family_groups['texture']]
+            try:
+                family_groups = {
+                    'firstorder': [f for f in available_top_features if 'firstorder' in f],
+                    'texture': [f for f in available_top_features if any(x in f for x in ['glrlm', 'gldm', 'glszm', 'ngtdm'])]
+                }
                 
-                X_firstorder = X_var_selected[:, indices1]
-                X_texture = X_var_selected[:, indices2]
+                family_interactions = []
+                family_interaction_names = []
                 
-                # Create only a few key interactions (first feature from each family)
-                if len(X_firstorder) > 0 and len(X_texture) > 0:
-                    interaction = X_firstorder[:, 0] * X_texture[:, 0]
-                    family_interactions.append(interaction)
-                    family_interaction_names.append("firstorder_texture_interaction")
-            
-            if family_interactions:
-                family_interactions = np.column_stack(family_interactions)
-                engineered_features.append(family_interactions)
-                feature_names.extend(family_interaction_names)
+                # Only create interactions between firstorder and texture families
+                if family_groups['firstorder'] and family_groups['texture']:
+                    indices1 = [selected_features.index(f) for f in family_groups['firstorder']]
+                    indices2 = [selected_features.index(f) for f in family_groups['texture']]
+                    
+                    X_firstorder = X_var_selected[:, indices1]
+                    X_texture = X_var_selected[:, indices2]
+                    
+                    # Create only a few key interactions (first feature from each family)
+                    if len(X_firstorder) > 0 and len(X_texture) > 0:
+                        interaction = X_firstorder[:, 0] * X_texture[:, 0]
+                        family_interactions.append(interaction)
+                        family_interaction_names.append("firstorder_texture_interaction")
+                
+                if family_interactions:
+                    family_interactions = np.column_stack(family_interactions)
+                    engineered_features.append(family_interactions)
+                    feature_names.extend(family_interaction_names)
+                    
+            except Exception as e:
+                self.logger.warning(f"Family interaction generation failed: {e}")
             
             # 3c. Simplified statistical summary features
-            # Only for texture features
-            texture_features = [f for f in available_top_features if any(x in f for x in ['glrlm', 'gldm', 'glszm', 'ngtdm'])]
-            if len(texture_features) > 1:
-                texture_indices = [selected_features.index(f) for f in texture_features]
-                X_texture = X_var_selected[:, texture_indices]
-                
-                # Only mean and std (reduced from 7 features)
-                texture_mean = np.mean(X_texture, axis=1)
-                texture_std = np.std(X_texture, axis=1)
-                
-                engineered_features.append(np.column_stack([texture_mean, texture_std]))
-                feature_names.extend(['texture_mean', 'texture_std'])
-            
-            # 3d. Simplified interaction features (only top 4 features)
-            top_4_features = available_top_features[:4]
-            top_4_indices = [selected_features.index(f) for f in top_4_features]
-            X_top_4 = X_var_selected[:, top_4_indices]
-            
-            interactions = []
-            interaction_names = []
-            
-            # Only create interactions between first 2 features
-            if len(top_4_features) >= 2:
-                interaction = X_top_4[:, 0] * X_top_4[:, 1]
-                interactions.append(interaction)
-                interaction_names.append("top2_interaction")
-            
-            if interactions:
-                interactions = np.column_stack(interactions)
-                engineered_features.append(interactions)
-                feature_names.extend(interaction_names)
+            try:
+                # Only for texture features
+                texture_features = [f for f in available_top_features if any(x in f for x in ['glrlm', 'gldm', 'glszm', 'ngtdm'])]
+                if len(texture_features) > 1:
+                    texture_indices = [selected_features.index(f) for f in texture_features]
+                    X_texture = X_var_selected[:, texture_indices]
+                    
+                    # Only mean and std (reduced from 7 features)
+                    texture_mean = np.mean(X_texture, axis=1)
+                    texture_std = np.std(X_texture, axis=1)
+                    
+                    engineered_features.append(np.column_stack([texture_mean, texture_std]))
+                    feature_names.extend(['texture_mean', 'texture_std'])
+                    
+            except Exception as e:
+                self.logger.warning(f"Statistical feature generation failed: {e}")
             
             # Combine all engineered features
             if engineered_features:
@@ -358,24 +406,39 @@ class OptimizedRadiomicsClassifier:
             self.logger.info(f"Feature types: {len(selected_features)} original, {len(feature_names)} engineered")
             
             # 4. Remove outliers to improve convergence
-            z_scores = stats.zscore(X_combined, axis=0)
-            outlier_mask = np.all(np.abs(z_scores) < 3, axis=1)  # Remove samples with z-score > 3
-            X_cleaned = X_combined[outlier_mask]
-            y_cleaned = self.y[outlier_mask]
-            
-            if np.sum(outlier_mask) < len(self.y):
-                self.logger.info(f"Removed {len(self.y) - np.sum(outlier_mask)} outliers")
-                self.X = X_cleaned
-                self.y = y_cleaned
-                # Update subject_ids to match the cleaned data
-                self.subject_ids = self.subject_ids[outlier_mask]
-            else:
+            try:
+                z_scores = stats.zscore(X_combined, axis=0)
+                outlier_mask = np.all(np.abs(z_scores) < 3, axis=1)  # Remove samples with z-score > 3
+                X_cleaned = X_combined[outlier_mask]
+                y_cleaned = self.y[outlier_mask]
+                
+                if np.sum(outlier_mask) < len(self.y):
+                    self.logger.info(f"Removed {len(self.y) - np.sum(outlier_mask)} outliers")
+                    self.X = X_cleaned
+                    self.y = y_cleaned
+                    # Update subject_ids to match the cleaned data
+                    self.subject_ids = self.subject_ids[outlier_mask]
+                else:
+                    self.X = X_combined
+                    
+            except Exception as e:
+                self.logger.warning(f"Outlier removal failed: {e}, using original data")
                 self.X = X_combined
             
             # 5. Scaling with StandardScaler for better convergence
-            self.scaler = StandardScaler()
-            self.X = self.scaler.fit_transform(self.X)
-            self.logger.info("Features scaled using StandardScaler")
+            try:
+                self.scaler = StandardScaler()
+                self.X = self.scaler.fit_transform(self.X)
+                self.logger.info("Features scaled using StandardScaler")
+            except Exception as e:
+                self.logger.warning(f"Scaling failed: {e}, using unscaled data")
+            
+            # Clean up memory
+            del X_var_selected, engineered_features, feature_names
+            if 'X_combined' in locals():
+                del X_combined
+            if 'X_cleaned' in locals():
+                del X_cleaned
             
             return True
             
@@ -585,99 +648,61 @@ class OptimizedRadiomicsClassifier:
             X_train, y_train, _ = self.splits['train']
             self.advanced_models = {}
             
+            # Check if we have enough data for optimization
+            if len(X_train) < 50:
+                self.logger.warning("Insufficient training data for Bayesian optimization, using default parameters")
+                return self._create_default_advanced_models()
+            
             # Optimize XGBoost if available
             if XGBOOST_AVAILABLE and BAYESIAN_AVAILABLE:
                 self.logger.info("Optimizing XGBoost hyperparameters...")
                 
-                base_xgb = xgb.XGBClassifier(
-                    random_state=self.random_state,
-                    eval_metric='logloss',
-                    use_label_encoder=False
-                )
-                
-                xgb_search_spaces = {
-                    'n_estimators': Integer(50, 300),
-                    'max_depth': Integer(3, 10),
-                    'learning_rate': Real(0.01, 0.3, prior='log-uniform'),
-                    'subsample': Real(0.6, 1.0),
-                    'colsample_bytree': Real(0.6, 1.0),
-                    'reg_alpha': Real(0.0, 10.0, prior='log-uniform'),
-                    'reg_lambda': Real(0.0, 10.0, prior='log-uniform'),
-                    'min_child_weight': Integer(1, 10)
-                }
-                
-                xgb_bayes = BayesSearchCV(
-                    estimator=base_xgb,
-                    search_spaces=xgb_search_spaces,
-                    n_iter=30,
-                    cv=5,
-                    scoring='accuracy',
-                    n_jobs=-1,
-                    verbose=1,
-                    random_state=self.random_state
-                )
-                
-                xgb_bayes.fit(X_train, y_train)
-                self.advanced_models['xgboost'] = xgb_bayes.best_estimator_
-                
-                self.feature_engineering_results['xgboost_optimization'] = {
-                    'method': 'Bayesian Optimization',
-                    'best_params': xgb_bayes.best_params_,
-                    'best_cv_score': xgb_bayes.best_score_,
-                    'n_iterations': 30
-                }
-                
-                self.logger.info(f"XGBoost optimization completed - Best CV score: {xgb_bayes.best_score_:.4f}")
-            
-            # Optimize LightGBM if available
-            if LIGHTGBM_AVAILABLE and BAYESIAN_AVAILABLE:
-                self.logger.info("Optimizing LightGBM hyperparameters...")
-                
-                base_lgb = lgb.LGBMClassifier(
-                    random_state=self.random_state,
-                    verbose=-1
-                )
-                
-                lgb_search_spaces = {
-                    'n_estimators': Integer(50, 300),
-                    'max_depth': Integer(3, 10),
-                    'learning_rate': Real(0.01, 0.3, prior='log-uniform'),
-                    'subsample': Real(0.6, 1.0),
-                    'colsample_bytree': Real(0.6, 1.0),
-                    'reg_alpha': Real(0.0, 10.0, prior='log-uniform'),
-                    'reg_lambda': Real(0.0, 10.0, prior='log-uniform'),
-                    'min_child_samples': Integer(10, 100),
-                    'num_leaves': Integer(20, 100)
-                }
-                
-                lgb_bayes = BayesSearchCV(
-                    estimator=base_lgb,
-                    search_spaces=lgb_search_spaces,
-                    n_iter=30,
-                    cv=5,
-                    scoring='accuracy',
-                    n_jobs=-1,
-                    verbose=1,
-                    random_state=self.random_state
-                )
-                
-                lgb_bayes.fit(X_train, y_train)
-                self.advanced_models['lightgbm'] = lgb_bayes.best_estimator_
-                
-                self.feature_engineering_results['lightgbm_optimization'] = {
-                    'method': 'Bayesian Optimization',
-                    'best_params': lgb_bayes.best_params_,
-                    'best_cv_score': lgb_bayes.best_score_,
-                    'n_iterations': 30
-                }
-                
-                self.logger.info(f"LightGBM optimization completed - Best CV score: {lgb_bayes.best_score_:.4f}")
-            
-            # Fallback for when Bayesian optimization is not available
-            if not BAYESIAN_AVAILABLE:
-                self.logger.info("Bayesian optimization not available, using default parameters...")
-                
-                if XGBOOST_AVAILABLE:
+                try:
+                    base_xgb = xgb.XGBClassifier(
+                        random_state=self.random_state,
+                        eval_metric='logloss',
+                        use_label_encoder=False
+                    )
+                    
+                    xgb_search_spaces = {
+                        'n_estimators': Integer(50, 300),
+                        'max_depth': Integer(3, 10),
+                        'learning_rate': Real(0.01, 0.3, prior='log-uniform'),
+                        'subsample': Real(0.6, 1.0),
+                        'colsample_bytree': Real(0.6, 1.0),
+                        'reg_alpha': Real(0.001, 10.0, prior='log-uniform'),
+                        'reg_lambda': Real(0.001, 10.0, prior='log-uniform'),
+                        'min_child_weight': Integer(1, 10)
+                    }
+                    
+                    # Reduce iterations for faster optimization
+                    n_iter = min(20, len(X_train) // 10)  # Adaptive iterations
+                    
+                    xgb_bayes = BayesSearchCV(
+                        estimator=base_xgb,
+                        search_spaces=xgb_search_spaces,
+                        n_iter=n_iter,
+                        cv=min(5, len(X_train) // 10),  # Adaptive CV folds
+                        scoring='accuracy',
+                        n_jobs=-1,
+                        verbose=1,
+                        random_state=self.random_state
+                    )
+                    
+                    xgb_bayes.fit(X_train, y_train)
+                    self.advanced_models['xgboost'] = xgb_bayes.best_estimator_
+                    
+                    self.feature_engineering_results['xgboost_optimization'] = {
+                        'method': 'Bayesian Optimization',
+                        'best_params': xgb_bayes.best_params_,
+                        'best_cv_score': xgb_bayes.best_score_,
+                        'n_iterations': n_iter
+                    }
+                    
+                    self.logger.info(f"XGBoost optimization completed - Best CV score: {xgb_bayes.best_score_:.4f}")
+                    
+                except Exception as e:
+                    self.logger.warning(f"XGBoost optimization failed: {e}, using default parameters")
                     self.advanced_models['xgboost'] = xgb.XGBClassifier(
                         n_estimators=100,
                         max_depth=6,
@@ -686,8 +711,57 @@ class OptimizedRadiomicsClassifier:
                         eval_metric='logloss',
                         use_label_encoder=False
                     )
+            
+            # Optimize LightGBM if available
+            if LIGHTGBM_AVAILABLE and BAYESIAN_AVAILABLE:
+                self.logger.info("Optimizing LightGBM hyperparameters...")
                 
-                if LIGHTGBM_AVAILABLE:
+                try:
+                    base_lgb = lgb.LGBMClassifier(
+                        random_state=self.random_state,
+                        verbose=-1
+                    )
+                    
+                    lgb_search_spaces = {
+                        'n_estimators': Integer(50, 300),
+                        'max_depth': Integer(3, 10),
+                        'learning_rate': Real(0.01, 0.3, prior='log-uniform'),
+                        'subsample': Real(0.6, 1.0),
+                        'colsample_bytree': Real(0.6, 1.0),
+                        'reg_alpha': Real(0.001, 10.0, prior='log-uniform'),
+                        'reg_lambda': Real(0.001, 10.0, prior='log-uniform'),
+                        'min_child_samples': Integer(10, 100),
+                        'num_leaves': Integer(20, 100)
+                    }
+                    
+                    # Reduce iterations for faster optimization
+                    n_iter = min(20, len(X_train) // 10)  # Adaptive iterations
+                    
+                    lgb_bayes = BayesSearchCV(
+                        estimator=base_lgb,
+                        search_spaces=lgb_search_spaces,
+                        n_iter=n_iter,
+                        cv=min(5, len(X_train) // 10),  # Adaptive CV folds
+                        scoring='accuracy',
+                        n_jobs=-1,
+                        verbose=1,
+                        random_state=self.random_state
+                    )
+                    
+                    lgb_bayes.fit(X_train, y_train)
+                    self.advanced_models['lightgbm'] = lgb_bayes.best_estimator_
+                    
+                    self.feature_engineering_results['lightgbm_optimization'] = {
+                        'method': 'Bayesian Optimization',
+                        'best_params': lgb_bayes.best_params_,
+                        'best_cv_score': lgb_bayes.best_score_,
+                        'n_iterations': n_iter
+                    }
+                    
+                    self.logger.info(f"LightGBM optimization completed - Best CV score: {lgb_bayes.best_score_:.4f}")
+                    
+                except Exception as e:
+                    self.logger.warning(f"LightGBM optimization failed: {e}, using default parameters")
                     self.advanced_models['lightgbm'] = lgb.LGBMClassifier(
                         n_estimators=100,
                         max_depth=6,
@@ -696,12 +770,43 @@ class OptimizedRadiomicsClassifier:
                         verbose=-1
                     )
             
+            # Fallback for when Bayesian optimization is not available
+            if not BAYESIAN_AVAILABLE:
+                self.logger.info("Bayesian optimization not available, using default parameters...")
+                return self._create_default_advanced_models()
+            
             self.logger.info(f"Advanced models optimization completed. Models: {list(self.advanced_models.keys())}")
             return True
             
         except Exception as e:
             self.logger.error(f"Error in advanced models optimization: {e}")
-            return False
+            return self._create_default_advanced_models()
+    
+    def _create_default_advanced_models(self):
+        """Create default advanced models when optimization fails."""
+        self.advanced_models = {}
+        
+        if XGBOOST_AVAILABLE:
+            self.advanced_models['xgboost'] = xgb.XGBClassifier(
+                n_estimators=100,
+                max_depth=6,
+                learning_rate=0.1,
+                random_state=self.random_state,
+                eval_metric='logloss',
+                use_label_encoder=False
+            )
+        
+        if LIGHTGBM_AVAILABLE:
+            self.advanced_models['lightgbm'] = lgb.LGBMClassifier(
+                n_estimators=100,
+                max_depth=6,
+                learning_rate=0.1,
+                random_state=self.random_state,
+                verbose=-1
+            )
+        
+        self.logger.info(f"Created default advanced models: {list(self.advanced_models.keys())}")
+        return True
     
     def create_optimized_ensemble(self):
         """Stage 5: Creating advanced stacking ensemble with diverse base models."""
