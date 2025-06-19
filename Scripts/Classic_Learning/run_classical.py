@@ -44,16 +44,16 @@ def main():
     
     # Check if input file exists
     if not os.path.exists(input_path):
-        print(f"❌ Input file not found: {input_path}")
+        print(f"Input file not found: {input_path}")
         print("Please run the radiomics extraction first:")
         print("cd Scripts/Feature_Extraction/pyRadioMics/")
         print("python3 simple_radiomics.py --labels ~/reseng202500013-ndd-ml/data/mri_labels.csv --output-dir ~/reseng202500013-ndd-ml/data/ --config ~/reseng202500013-ndd-ml/P4P/config.yaml")
         sys.exit(1)
     
-    print("🚀 Starting Radiomics Classical Learning Pipeline")
-    print(f"📁 Input: {input_path}")
-    print(f"📁 Output: {output_dir}")
-    print(f"🎲 Random seed: {args.random_state}")
+    print("Starting Radiomics Classical Learning Pipeline")
+    print(f"Input: {input_path}")
+    print(f"Output: {output_dir}")
+    print(f"Random seed: {args.random_state}")
     print("=" * 60)
     
     # Initialize and run pipeline
@@ -62,21 +62,21 @@ def main():
     
     if success:
         print("\n" + "=" * 60)
-        print("🎉 Pipeline completed successfully!")
-        print(f"📁 Results saved to: {output_dir}")
-        print("\n📊 Generated files:")
+        print("Pipeline completed successfully!")
+        print(f"Results saved to: {output_dir}")
+        print("\nGenerated files:")
         print(f"  • random_forest_model.pkl - Trained model")
         print(f"  • scaler.pkl - Feature scaler")
         print(f"  • feature_importance.csv - Feature importance rankings")
         print(f"  • evaluation_plots.png - Performance plots")
         print(f"  • results_summary.json - Detailed results")
         print(f"  • pipeline.log - Execution log")
-        print("\n🔍 Next steps:")
+        print("\nNext steps:")
         print("  • Check evaluation_plots.png for performance visualization")
         print("  • Review feature_importance.csv for top features")
         print("  • Use random_forest_model.pkl for predictions on new data")
     else:
-        print("\n❌ Pipeline failed! Check the logs for details.")
+        print("\nPipeline failed! Check the logs for details.")
         sys.exit(1)
 
 if __name__ == "__main__":

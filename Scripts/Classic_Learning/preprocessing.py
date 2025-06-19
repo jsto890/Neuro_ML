@@ -68,11 +68,11 @@ class DataPreprocessor:
             if np.isinf(feature_data.values).any():
                 logger.warning("Found infinite values in features")
             
-            logger.info(f"✅ Data validation passed: {data.shape[0]} samples, {len(feature_cols)} features")
+            logger.info(f"Data validation passed: {data.shape[0]} samples, {len(feature_cols)} features")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Data validation failed: {e}")
+            logger.error(f"Data validation failed: {e}")
             return False
     
     def handle_missing_values(self, data, strategy='drop'):
@@ -91,10 +91,10 @@ class DataPreprocessor:
         
         missing_count = feature_data.isnull().sum().sum()
         if missing_count == 0:
-            logger.info("✅ No missing values found")
+            logger.info("No missing values found")
             return data
         
-        logger.info(f"⚠️ Found {missing_count} missing values")
+        logger.info(f"Found {missing_count} missing values")
         
         if strategy == 'drop':
             # Drop rows with any missing values
@@ -103,8 +103,8 @@ class DataPreprocessor:
             final_count = len(data_clean)
             dropped_count = initial_count - final_count
             
-            logger.info(f"✅ Dropped {dropped_count} rows with missing values")
-            logger.info(f"📊 Remaining samples: {final_count}")
+            logger.info(f"Dropped {dropped_count} rows with missing values")
+            logger.info(f"Remaining samples: {final_count}")
             
             return data_clean
         
@@ -114,7 +114,7 @@ class DataPreprocessor:
                 if data[col].isnull().any():
                     median_val = data[col].median()
                     data[col].fillna(median_val, inplace=True)
-                    logger.info(f"✅ Imputed {col} with median: {median_val:.4f}")
+                    logger.info(f"Imputed {col} with median: {median_val:.4f}")
             
             return data
         
@@ -142,12 +142,12 @@ class DataPreprocessor:
         low_var_features = variances[variances < threshold].index.tolist()
         
         if low_var_features:
-            logger.info(f"⚠️ Removing {len(low_var_features)} low-variance features (threshold: {threshold})")
+            logger.info(f"Removing {len(low_var_features)} low-variance features (threshold: {threshold})")
             data_clean = data.drop(columns=low_var_features)
             final_features = len([col for col in data_clean.columns if col not in ['subject_id', 'label']])
-            logger.info(f"✅ Remaining features: {final_features}")
+            logger.info(f"Remaining features: {final_features}")
         else:
-            logger.info("✅ No low-variance features found")
+            logger.info("No low-variance features found")
             data_clean = data
         
         return data_clean
@@ -202,7 +202,7 @@ class DataPreprocessor:
             else:
                 result_data[col] = data[col]
         
-        logger.info(f"✅ Feature selection: {initial_features} → {len(selected_cols)} features")
+        logger.info(f"Feature selection: {initial_features} → {len(selected_cols)} features")
         return result_data
     
     def scale_features(self, data, method='standard'):
@@ -236,7 +236,7 @@ class DataPreprocessor:
         for i, col in enumerate(feature_cols):
             scaled_data[col] = scaled_features[:, i]
         
-        logger.info(f"✅ Features scaled using {method} scaling")
+        logger.info(f"Features scaled using {method} scaling")
         return scaled_data, scaler
     
     def preprocess_pipeline(self, data, config=None):
@@ -252,7 +252,7 @@ class DataPreprocessor:
         """
         config = config or self.config
         
-        logger.info("🔧 Starting preprocessing pipeline...")
+        logger.info("Starting preprocessing pipeline...")
         
         # Validate data
         if not self.validate_data(data):
@@ -286,7 +286,7 @@ class DataPreprocessor:
             'n_features': len([col for col in data.columns if col not in ['subject_id', 'label']])
         }
         
-        logger.info(f"✅ Preprocessing completed: {data.shape[0]} samples, {preprocessing_info['n_features']} features")
+        logger.info(f"Preprocessing completed: {data.shape[0]} samples, {preprocessing_info['n_features']} features")
         
         return data, preprocessing_info
 
@@ -302,7 +302,7 @@ def load_and_preprocess_data(input_path, config_path=None):
         tuple: (processed_data, preprocessing_info)
     """
     # Load data
-    logger.info(f"📁 Loading data from {input_path}")
+    logger.info(f"Loading data from {input_path}")
     data = pd.read_csv(input_path)
     
     # Load config if provided

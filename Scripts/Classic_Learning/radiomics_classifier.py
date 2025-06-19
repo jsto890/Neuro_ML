@@ -99,11 +99,11 @@ class RadiomicsClassifier:
         
     def load_data(self):
         """Stage 0: Load and validate input data."""
-        self.logger.info("📁 Stage 0: Loading data...")
+        self.logger.info("Stage 0: Loading data...")
         
         try:
             self.data = pd.read_csv(self.input_path)
-            self.logger.info(f"✅ Loaded {len(self.data)} samples with {len(self.data.columns)} columns")
+            self.logger.info(f"Loaded {len(self.data)} samples with {len(self.data.columns)} columns")
             
             # Validate required columns
             required_cols = ['subject_id', 'label']
@@ -117,41 +117,52 @@ class RadiomicsClassifier:
             self.feature_names = [col for col in self.data.columns if col not in ['subject_id', 'label']]
             self.X = self.data[self.feature_names].values
             
-            self.logger.info(f"📊 Data shape: {self.X.shape}")
-            self.logger.info(f"🎯 Labels: {np.unique(self.y)} (counts: {np.bincount(self.y)})")
+            self.logger.info(f"Data shape: {self.X.shape}")
+            self.logger.info(f"Labels: {np.unique(self.y)} (counts: {np.bincount(self.y)})")
             
             return True
             
         except Exception as e:
-            self.logger.error(f"❌ Error loading data: {e}")
+            self.logger.error(f"Error loading data: {e}")
             return False
     
     def preprocess_data(self):
         """Stage 1: Data preprocessing and feature engineering."""
-        self.logger.info("🔧 Stage 1: Preprocessing data...")
+        self.logger.info("Stage 1: Preprocessing data...")
         
         try:
-            # Check for missing values
-            missing_count = np.isnan(self.X).sum()
+            # Check for missing values - handle different data types
+            if hasattr(self.X, 'dtype') and np.issubdtype(self.X.dtype, np.number):
+                missing_count = np.isnan(self.X).sum()
+            else:
+                # Convert to numeric and then check
+                X_numeric = pd.DataFrame(self.X, columns=self.feature_names).apply(pd.to_numeric, errors='coerce')
+                missing_count = X_numeric.isnull().sum().sum()
+            
             if missing_count > 0:
-                self.logger.warning(f"⚠️ Found {missing_count} missing values")
+                self.logger.warning(f"Found {missing_count} missing values")
                 # For now, we'll drop rows with any missing values
-                valid_mask = ~np.isnan(self.X).any(axis=1)
+                if hasattr(self.X, 'dtype') and np.issubdtype(self.X.dtype, np.number):
+                    valid_mask = ~np.isnan(self.X).any(axis=1)
+                else:
+                    X_numeric = pd.DataFrame(self.X, columns=self.feature_names).apply(pd.to_numeric, errors='coerce')
+                    valid_mask = ~X_numeric.isnull().any(axis=1)
+                
                 self.X = self.X[valid_mask]
                 self.y = self.y[valid_mask]
                 self.subject_ids = self.subject_ids[valid_mask]
-                self.logger.info(f"✅ After removing missing values: {self.X.shape}")
+                self.logger.info(f"After removing missing values: {self.X.shape}")
             
             # Remove constant features
             variance_selector = VarianceThreshold(threshold=0.01)
             self.X = variance_selector.fit_transform(self.X)
             kept_features = variance_selector.get_support()
             self.feature_names = [f for f, keep in zip(self.feature_names, kept_features) if keep]
-            self.logger.info(f"✅ After removing constant features: {self.X.shape}")
+            self.logger.info(f"After removing constant features: {self.X.shape}")
             
             # Standardize features
             self.X = self.scaler.fit_transform(self.X)
-            self.logger.info("✅ Features standardized")
+            self.logger.info("Features standardized")
             
             # Feature selection (optional - keep top 100 features)
             if self.X.shape[1] > 100:
@@ -159,17 +170,17 @@ class RadiomicsClassifier:
                 self.X = k_best.fit_transform(self.X, self.y)
                 kept_features = k_best.get_support()
                 self.feature_names = [f for f, keep in zip(self.feature_names, kept_features) if keep]
-                self.logger.info(f"✅ Selected top 100 features: {self.X.shape}")
+                self.logger.info(f"Selected top 100 features: {self.X.shape}")
             
             return True
             
         except Exception as e:
-            self.logger.error(f"❌ Error in preprocessing: {e}")
+            self.logger.error(f"Error in preprocessing: {e}")
             return False
     
     def split_data(self, test_size=0.2, val_size=0.2):
         """Stage 2: Train-validation-test split."""
-        self.logger.info("🧪 Stage 2: Splitting data...")
+        self.logger.info("Stage 2: Splitting data...")
         
         try:
             # First split: train+val vs test
@@ -195,19 +206,19 @@ class RadiomicsClassifier:
                 'test': (X_test, y_test, ids_test)
             }
             
-            self.logger.info(f"📊 Train: {X_train.shape[0]} samples")
-            self.logger.info(f"📊 Validation: {X_val.shape[0]} samples")
-            self.logger.info(f"📊 Test: {X_test.shape[0]} samples")
+            self.logger.info(f"Train: {X_train.shape[0]} samples")
+            self.logger.info(f"Validation: {X_val.shape[0]} samples")
+            self.logger.info(f"Test: {X_test.shape[0]} samples")
             
             return True
             
         except Exception as e:
-            self.logger.error(f"❌ Error in data splitting: {e}")
+            self.logger.error(f"Error in data splitting: {e}")
             return False
     
     def train_model(self):
         """Stage 3: Train Random Forest model with hyperparameter tuning."""
-        self.logger.info("🌲 Stage 3: Training Random Forest model...")
+        self.logger.info("Stage 3: Training Random Forest model...")
         
         try:
             X_train, y_train, _ = self.splits['train']
@@ -229,7 +240,7 @@ class RadiomicsClassifier:
             )
             
             # Grid search with cross-validation
-            self.logger.info("🔍 Performing grid search...")
+            self.logger.info("Performing grid search...")
             grid_search = GridSearchCV(
                 base_rf, param_grid, cv=5, scoring='roc_auc',
                 n_jobs=-1, verbose=1
@@ -240,24 +251,24 @@ class RadiomicsClassifier:
             self.best_params = grid_search.best_params_
             self.cv_results = grid_search.cv_results_
             
-            self.logger.info(f"✅ Best parameters: {self.best_params}")
-            self.logger.info(f"✅ Best CV score: {grid_search.best_score_:.4f}")
+            self.logger.info(f"Best parameters: {self.best_params}")
+            self.logger.info(f"Best CV score: {grid_search.best_score_:.4f}")
             
             return True
             
         except Exception as e:
-            self.logger.error(f"❌ Error in model training: {e}")
+            self.logger.error(f"Error in model training: {e}")
             return False
     
     def evaluate_model(self):
         """Stage 4: Evaluate model performance."""
-        self.logger.info("📉 Stage 4: Evaluating model...")
+        self.logger.info("Stage 4: Evaluating model...")
         
         try:
             results = {}
             
             for split_name, (X_split, y_split, ids_split) in self.splits.items():
-                self.logger.info(f"📊 Evaluating on {split_name} set...")
+                self.logger.info(f"Evaluating on {split_name} set...")
                 
                 # Predictions
                 y_pred = self.model.predict(X_split)
@@ -283,18 +294,18 @@ class RadiomicsClassifier:
                     'subject_ids': ids_split
                 }
                 
-                self.logger.info(f"✅ {split_name.capitalize()} - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}")
+                self.logger.info(f"{split_name.capitalize()} - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}")
             
             self.results = results
             return True
             
         except Exception as e:
-            self.logger.error(f"❌ Error in model evaluation: {e}")
+            self.logger.error(f"Error in model evaluation: {e}")
             return False
     
     def interpret_model(self):
         """Stage 5: Model interpretation and feature importance."""
-        self.logger.info("🔍 Stage 5: Model interpretation...")
+        self.logger.info("Stage 5: Model interpretation...")
         
         try:
             # Extract feature importances
@@ -309,18 +320,18 @@ class RadiomicsClassifier:
             
             # Top features
             top_features = feature_importance_df.head(20)
-            self.logger.info(f"🏆 Top 5 features: {top_features['feature'].head().tolist()}")
+            self.logger.info(f"Top 5 features: {top_features['feature'].head().tolist()}")
             
             self.feature_importance_df = feature_importance_df
             return True
             
         except Exception as e:
-            self.logger.error(f"❌ Error in model interpretation: {e}")
+            self.logger.error(f"Error in model interpretation: {e}")
             return False
     
     def save_artifacts(self):
         """Stage 6: Save all artifacts and generate plots."""
-        self.logger.info("🗃️ Stage 6: Saving artifacts...")
+        self.logger.info("Stage 6: Saving artifacts...")
         
         try:
             # Save model
@@ -350,11 +361,11 @@ class RadiomicsClassifier:
             # Generate plots
             self.generate_plots()
             
-            self.logger.info(f"✅ All artifacts saved to {self.output_dir}")
+            self.logger.info(f"All artifacts saved to {self.output_dir}")
             return True
             
         except Exception as e:
-            self.logger.error(f"❌ Error saving artifacts: {e}")
+            self.logger.error(f"Error saving artifacts: {e}")
             return False
     
     def generate_plots(self):
@@ -428,14 +439,14 @@ class RadiomicsClassifier:
             plt.savefig(self.output_dir / 'evaluation_plots.png', dpi=300, bbox_inches='tight')
             plt.close()
             
-            self.logger.info("✅ Plots generated and saved")
+            self.logger.info("Plots generated and saved")
             
         except Exception as e:
-            self.logger.error(f"❌ Error generating plots: {e}")
+            self.logger.error(f"Error generating plots: {e}")
     
     def run_pipeline(self):
         """Run the complete pipeline."""
-        self.logger.info("🚀 Starting Radiomics Classification Pipeline")
+        self.logger.info("Starting Radiomics Classification Pipeline")
         
         stages = [
             ("Data Loading", self.load_data),
@@ -453,32 +464,36 @@ class RadiomicsClassifier:
             self.logger.info(f"{'='*50}")
             
             if not stage_func():
-                self.logger.error(f"❌ Pipeline failed at {stage_name}")
+                self.logger.error(f"Pipeline failed at {stage_name}")
                 return False
         
         self.logger.info(f"\n{'='*50}")
-        self.logger.info("🎉 Pipeline completed successfully!")
-        self.logger.info(f"📁 Results saved to: {self.output_dir}")
+        self.logger.info("Pipeline completed successfully!")
+        self.logger.info(f"Results saved to: {self.output_dir}")
         self.logger.info(f"{'='*50}")
         
         return True
 
 def main():
-    parser = argparse.ArgumentParser(description='Radiomics Classification Pipeline')
+    parser = argparse.ArgumentParser(description='Extract radiomics features from neuroimaging data')
     parser.add_argument('--input', required=True, help='Path to radiomics CSV file')
     parser.add_argument('--output-dir', required=True, help='Output directory for results')
-    parser.add_argument('--random-state', type=int, default=42, help='Random seed')
+    parser.add_argument('--config', default='config.yaml', help='Path to config file')
     
     args = parser.parse_args()
     
+    # Create output directory if it doesn't exist
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    
     # Initialize and run pipeline
-    classifier = RadiomicsClassifier(args.input, args.output_dir, args.random_state)
+    classifier = RadiomicsClassifier(args.input, args.output_dir)
     success = classifier.run_pipeline()
     
     if success:
-        print(f"\n🎉 Pipeline completed! Check results in: {args.output_dir}")
+        print(f"Feature extraction completed successfully!")
+        print(f"Results saved to: {args.output_dir}")
     else:
-        print(f"\n❌ Pipeline failed! Check logs in: {args.output_dir}/pipeline.log")
+        print(f"Feature extraction failed!")
         sys.exit(1)
 
 if __name__ == "__main__":
