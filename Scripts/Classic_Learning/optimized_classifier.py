@@ -184,6 +184,10 @@ class OptimizedRadiomicsClassifier:
         self.logger.info("Stage 1: Advanced feature engineering...")
         
         try:
+            # Convert X to DataFrame if it's not already
+            if not isinstance(self.X, pd.DataFrame):
+                self.X = pd.DataFrame(self.X, columns=self.feature_names)
+            
             # 1. Variance thresholding
             variance_selector = VarianceThreshold(threshold=0.01)
             X_var_selected = variance_selector.fit_transform(self.X)
