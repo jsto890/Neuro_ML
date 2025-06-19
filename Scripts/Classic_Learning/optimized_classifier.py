@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Any
 
 from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score
-from sklearn.preprocessing import RobustScaler, StandardScaler
+from sklearn.preprocessing import RobustScaler, StandardScaler, PolynomialFeatures
 from sklearn.feature_selection import RFECV, SelectKBest, f_classif, mutual_info_classif
 from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.svm import SVC
