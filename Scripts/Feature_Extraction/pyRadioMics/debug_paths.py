@@ -12,6 +12,8 @@ def debug_mri_paths():
         config = yaml.safe_load(f)
     
     data_root = config['preprocessed_data']['smri_p']
+    # Expand tilde if present
+    data_root = os.path.expanduser(data_root)
     print(f"Data root: {data_root}")
     
     # Test subjects from labels

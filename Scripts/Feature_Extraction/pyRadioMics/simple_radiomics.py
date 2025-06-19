@@ -64,6 +64,8 @@ def extract_mri_radiomics(config_path, labels_path, output_dir):
         config = yaml.safe_load(f)
     
     data_root = config['preprocessed_data']['smri_p']
+    # Expand tilde if present
+    data_root = os.path.expanduser(data_root)
     
     # Load labels
     subjects, labels = load_labels_simple(labels_path)
