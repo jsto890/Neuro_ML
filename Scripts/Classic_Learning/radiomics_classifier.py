@@ -105,6 +105,12 @@ class RadiomicsClassifier:
             self.data = pd.read_csv(self.input_path)
             self.logger.info(f"Loaded {len(self.data)} samples with {len(self.data.columns)} columns")
             
+            # Remove diagnostic columns (PyRadiomics metadata)
+            diagnostic_cols = [col for col in self.data.columns if col.startswith('diagnostics_')]
+            if diagnostic_cols:
+                self.data = self.data.drop(columns=diagnostic_cols)
+                self.logger.info(f"Removed {len(diagnostic_cols)} diagnostic columns")
+            
             # Validate required columns
             required_cols = ['subject_id', 'label']
             missing_cols = [col for col in required_cols if col not in self.data.columns]
@@ -141,17 +147,20 @@ class RadiomicsClassifier:
             
             if missing_count > 0:
                 self.logger.warning(f"Found {missing_count} missing values")
-                # For now, we'll drop rows with any missing values
+                
+                # Use imputation instead of dropping rows
+                from sklearn.impute import SimpleImputer
+                imputer = SimpleImputer(strategy='median')
+                
                 if hasattr(self.X, 'dtype') and np.issubdtype(self.X.dtype, np.number):
-                    valid_mask = ~np.isnan(self.X).any(axis=1)
+                    self.X = imputer.fit_transform(self.X)
                 else:
                     X_numeric = pd.DataFrame(self.X, columns=self.feature_names).apply(pd.to_numeric, errors='coerce')
-                    valid_mask = ~X_numeric.isnull().any(axis=1)
+                    X_imputed = imputer.fit_transform(X_numeric)
+                    self.X = X_imputed
                 
-                self.X = self.X[valid_mask]
-                self.y = self.y[valid_mask]
-                self.subject_ids = self.subject_ids[valid_mask]
-                self.logger.info(f"After removing missing values: {self.X.shape}")
+                self.logger.info(f"Imputed missing values using median strategy")
+                self.logger.info(f"Data shape after imputation: {self.X.shape}")
             
             # Remove constant features
             variance_selector = VarianceThreshold(threshold=0.01)
