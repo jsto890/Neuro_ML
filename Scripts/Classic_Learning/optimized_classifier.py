@@ -551,7 +551,7 @@ class OptimizedRadiomicsClassifier:
                     'gamma': Categorical(['scale', 'auto']),
                     'kernel': Categorical(['linear', 'rbf']),
                     'class_weight': Categorical(['balanced']),
-                    'max_iter': Integer(5000, 15000),
+                    'max_iter': Integer(15000, 30000),
                     'tol': Real(1e-4, 1e-1, prior='log-uniform')
                 }
                 
