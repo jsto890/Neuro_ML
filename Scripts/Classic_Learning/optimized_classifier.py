@@ -41,7 +41,20 @@ from sklearn.metrics import (
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 import warnings
-warnings.filterwarnings('ignore')
+import os
+
+# Custom JSON encoder for NumPy types
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        return super(NumpyEncoder, self).default(obj)
 
 class OptimizedRadiomicsClassifier:
     """Optimized radiomics classifier focusing on SVM with advanced feature engineering."""
@@ -604,7 +617,7 @@ class OptimizedRadiomicsClassifier:
             
             # Save feature engineering results
             with open(self.output_dir / 'feature_engineering_results.json', 'w') as f:
-                json.dump(self.feature_engineering_results, f, indent=2, default=str)
+                json.dump(self.feature_engineering_results, f, indent=2, cls=NumpyEncoder)
             
             # Save results summary
             summary = {
@@ -626,7 +639,7 @@ class OptimizedRadiomicsClassifier:
             }
             
             with open(self.output_dir / 'optimized_results_summary.json', 'w') as f:
-                json.dump(summary, f, indent=2)
+                json.dump(summary, f, indent=2, cls=NumpyEncoder)
             
             # Generate plots
             self.generate_optimized_plots()
