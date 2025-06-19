@@ -2,20 +2,20 @@
 
 # Absolute paths on the research drive (access is Password and 2FA protected):
 raw_data:
-  smri: /home/jsto890/reseng202500013-ndd-ml/data/raw/MRI
-  pet: /home/jsto890/reseng202500013-ndd-ml/data/raw/PET
-  spect: /home/jsto890/reseng202500013-ndd-ml/data/raw/PET
+  smri: ~/reseng202500013-ndd-ml/data/raw/MRI
+  pet: ~/reseng202500013-ndd-ml/data/raw/PET
+  spect: ~/reseng202500013-ndd-ml/data/raw/PET
 
 preprocessed_data:
-  smri_p: /home/jsto890/reseng202500013-ndd-ml/data/preprocessed/MRI/smriprep
-  pet_p: /home/jsto890/reseng202500013-ndd-ml/data/preprocessed/PET
-  spect_p: /home/jsto890/reseng202500013-ndd-ml/data/preprocessed/SPECT
+  smri_p: ~/reseng202500013-ndd-ml/data/preprocessed/MRI/smriprep
+  pet_p: ~/reseng202500013-ndd-ml/data/preprocessed/PET
+  spect_p: ~/reseng202500013-ndd-ml/data/preprocessed/SPECT
 
 # Template paths (sourced online and modified):
 templates:
-  MRI_brain_mask: /home/jsto890/reseng202500013-ndd-ml/P4P/Templates/MRI/MNI152_T1_1mm_brain.nii.gz
-  PET_template: /home/jsto890/reseng202500013-ndd-ml/P4P/Templates/PET/FDG-PET-template_padded.nii.gz
-  PET_brain_mask: /home/jsto890/reseng202500013-ndd-ml/P4P/Templates/PET/brain_in_petspace.nii.gz
-  PET_cereb_mask: /home/jsto890/reseng202500013-ndd-ml/P4P/Templates/PET/cereb_in_petspace.nii.gz
-  SPECT_occipital: /home/jsto890/reseng202500013-ndd-ml/P4P/Templates/SPECT/occipital_mask.nii.gz
-  SPECT_template: /home/jsto890/reseng202500013-ndd-ml/P4P/Templates/SPECT/symFPCITtemplate_MNI_norm_nii
+  MRI_brain_mask: ~/reseng202500013-ndd-ml/P4P/Templates/MRI/MNI152_T1_1mm_brain.nii.gz
+  PET_template: ~/reseng202500013-ndd-ml/P4P/Templates/PET/FDG-PET-template_padded.nii.gz
+  PET_brain_mask: ~/reseng202500013-ndd-ml/P4P/Templates/PET/brain_in_petspace.nii.gz
+  PET_cereb_mask: ~/reseng202500013-ndd-ml/P4P/Templates/PET/cereb_in_petspace.nii.gz
+  SPECT_occipital: ~/reseng202500013-ndd-ml/P4P/Templates/SPECT/occipital_mask.nii.gz
+  SPECT_template: ~/reseng202500013-ndd-ml/P4P/Templates/SPECT/symFPCITtemplate_MNI_norm_nii
