@@ -54,35 +54,42 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class RadiomicsClassifier:
-    def __init__(self, input_path, output_dir, random_state=42):
+    def __init__(self, input_path, output_dir, random_state=42, binary_only=True):
         """
-        Initialize the radiomics classifier pipeline.
+        Initialize the RadiomicsClassifier.
         
         Args:
             input_path (str): Path to radiomics CSV file
-            output_dir (str): Directory to save results
+            output_dir (str): Output directory for results
             random_state (int): Random seed for reproducibility
+            binary_only (bool): If True, only use labels 0 and 1 (binary classification)
         """
         self.input_path = input_path
         self.output_dir = Path(output_dir)
         self.random_state = random_state
+        self.binary_only = binary_only
         
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize components
+        self.scaler = StandardScaler()
+        self.model = None
+        self.best_params = None
+        self.cv_results = None
+        self.results = None
+        self.feature_importance_df = None
+        
+        # Setup logging
+        self.setup_logging()
+        
+        # Initialize data containers
         self.data = None
         self.X = None
         self.y = None
         self.subject_ids = None
         self.feature_names = None
-        self.scaler = StandardScaler()
-        self.feature_selector = None
-        self.model = None
-        self.results = {}
-        
-        # Set up logging
-        self.setup_logging()
+        self.splits = None
         
     def setup_logging(self):
         """Set up logging to both console and file."""
@@ -116,6 +123,16 @@ class RadiomicsClassifier:
             missing_cols = [col for col in required_cols if col not in self.data.columns]
             if missing_cols:
                 raise ValueError(f"Missing required columns: {missing_cols}")
+            
+            # Filter for binary classification if requested
+            if self.binary_only:
+                initial_count = len(self.data)
+                self.data = self.data[self.data['label'].isin([0, 1])]
+                final_count = len(self.data)
+                self.logger.info(f"Filtered to binary classification: {initial_count} → {final_count} samples")
+                
+                if final_count == 0:
+                    raise ValueError("No samples remaining after binary filtering")
             
             # Extract components
             self.subject_ids = self.data['subject_id'].values

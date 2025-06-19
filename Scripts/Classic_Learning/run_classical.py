@@ -34,8 +34,20 @@ def main():
     parser.add_argument('--random-state', 
                        type=int, default=42,
                        help='Random seed for reproducibility')
+    parser.add_argument('--binary-only', 
+                       action='store_true', default=True,
+                       help='Use only binary classification (labels 0 and 1)')
+    parser.add_argument('--multi-class', 
+                       action='store_true', default=False,
+                       help='Use multi-class classification (all labels)')
     
     args = parser.parse_args()
+    
+    # Handle binary vs multi-class
+    if args.multi_class:
+        binary_only = False
+    else:
+        binary_only = True
     
     # Expand user paths
     input_path = os.path.expanduser(args.input)
@@ -54,10 +66,11 @@ def main():
     print(f"Input: {input_path}")
     print(f"Output: {output_dir}")
     print(f"Random seed: {args.random_state}")
+    print(f"Classification: {'Binary (0,1)' if binary_only else 'Multi-class'}")
     print("=" * 60)
     
     # Initialize and run pipeline
-    classifier = RadiomicsClassifier(input_path, output_dir, args.random_state)
+    classifier = RadiomicsClassifier(input_path, output_dir, args.random_state, binary_only)
     success = classifier.run_pipeline()
     
     if success:
