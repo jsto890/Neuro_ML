@@ -22,7 +22,7 @@ P4P/
 │   │   └── PET/                # PET preprocessing and standardization
 │   ├── Feature_Extraction/     # Feature extraction using pyRadiomics
 │   │   └── pyRadioMics/        # Radiomics extraction scripts
-│   │       ├── simple_radiomics.py      # ✅ Working MRI radiomics extractor
+│   │       ├── simple_radiomics.py      # Working MRI radiomics extractor
 │   │       ├── radiomics_extractor.py   # Multi-modality extractor
 │   │       ├── test_paths.py            # Path validation tool
 │   │       └── debug_paths.py           # Path debugging tool
