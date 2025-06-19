@@ -1,0 +1,130 @@
+# Optimized Configuration for Radiomics Classification Pipeline
+# Focus: SVM as primary model with advanced feature engineering
+
+# Data paths
+data:
+  input_file: "~/reseng202500013-ndd-ml/data/radiomics_MRI_mri_labels.csv"
+  output_dir: "~/reseng202500013-ndd-ml/data/optimized_classical_results"
+
+# Advanced feature engineering
+feature_engineering:
+  # Top features identified from cross-model analysis
+  top_features:
+    - "original_glrlm_RunLengthNonUniformity"
+    - "original_gldm_DependenceVariance"
+    - "original_firstorder_Kurtosis"
+    - "original_ngtdm_Busyness"
+    - "original_glrlm_LongRunEmphasis"
+    - "original_firstorder_RobustMeanAbsoluteDeviation"
+    - "original_firstorder_Variance"
+    - "original_firstorder_Mean"
+    - "original_firstorder_Minimum"
+    - "original_gldm_DependenceNonUniformity"
+    - "original_glrlm_LongRunLowGrayLevelEmphasis"
+    - "original_gldm_LargeDependenceEmphasis"
+    - "original_glrlm_RunVariance"
+    - "original_glszm_ZoneEntropy"
+    - "original_firstorder_MeanAbsoluteDeviation"
+  
+  # Feature engineering methods
+  polynomial_features:
+    enabled: true
+    degree: 2
+    interaction_only: true
+  
+  statistical_features:
+    enabled: true
+    texture_mean: true
+    firstorder_variance: true
+    mean_variance_ratio: true
+  
+  normalization:
+    enabled: true
+    z_score: true
+
+# Feature selection
+feature_selection:
+  method: "rfecv"  # Recursive Feature Elimination with Cross-Validation
+  cv_folds: 5
+  scoring: "roc_auc"
+  min_features: 10
+  step: 1
+
+# SVM optimization
+svm_optimization:
+  # Extended parameter grid
+  param_grid:
+    C: [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
+    kernel: ["linear", "rbf"]
+    gamma: ["scale", "auto", 0.001, 0.01, 0.1, 1.0]
+    class_weight: ["balanced", null]
+    probability: [true]
+  
+  # Cross-validation
+  cv_folds: 5
+  scoring: "roc_auc"
+  search_method: "grid"  # grid, randomized
+  n_iter: 50  # for RandomizedSearchCV
+
+# Ensemble configuration
+ensemble:
+  enabled: true
+  method: "voting"  # voting, stacking
+  voting_method: "soft"  # soft, hard
+  models:
+    - name: "svm_linear"
+      type: "svc"
+      params:
+        kernel: "linear"
+        C: 1.0
+        probability: true
+      weight: 0.3
+    
+    - name: "svm_rbf"
+      type: "svc"
+      params:
+        kernel: "rbf"
+        C: 1.0
+        gamma: "scale"
+        probability: true
+      weight: 0.3
+    
+    - name: "svm_optimized"
+      type: "optimized"
+      weight: 0.4
+
+# Data splitting
+splitting:
+  test_size: 0.2
+  val_size: 0.2
+  random_state: 42
+  stratify: true
+
+# Evaluation
+evaluation:
+  metrics: ["accuracy", "precision", "recall", "f1", "auc"]
+  plots:
+    model_comparison: true
+    roc_curves: true
+    feature_importance: true
+    confusion_matrix: true
+    train_vs_test: true
+    feature_engineering_summary: true
+
+# Output
+output:
+  save_models: true
+  save_scaler: true
+  save_feature_importance: true
+  save_feature_engineering: true
+  plot_dpi: 300
+  plot_format: "png"
+  save_ensemble: true
+
+# Clinical focus
+clinical:
+  interpretability: true
+  feature_importance_threshold: 0.01
+  confidence_threshold: 0.8
+  save_predictions: true
+  save_probabilities: true 
