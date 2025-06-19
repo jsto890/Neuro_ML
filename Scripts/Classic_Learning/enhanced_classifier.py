@@ -291,6 +291,7 @@ class EnhancedRadiomicsClassifier:
         }
         
         self.logger.info(f"Defined {len(self.models)} models")
+        return True
     
     def train_models(self):
         """Stage 3: Train multiple models with cross-validation."""
