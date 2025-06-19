@@ -46,19 +46,6 @@ def main():
     
     # Initialize and run pipeline
     classifier = OptimizedRadiomicsClassifier(input_path, output_dir, random_state, binary_only)
-    
-    # Define pipeline stages with advanced models optimization
-    pipeline_stages = [
-        ("Data Loading", classifier.load_data),
-        ("Feature Engineering", classifier.engineer_features),
-        ("Data Splitting", classifier.split_data),
-        ("SVM Hyperparameter Optimization", classifier.optimize_svm_hyperparameters),
-        ("Advanced Models Optimization", classifier.optimize_advanced_models),
-        ("Ensemble Creation", classifier.create_optimized_ensemble),
-        ("Model Evaluation", classifier.evaluate_optimized_models),
-        ("Results Saving", classifier.save_optimized_results)
-    ]
-    
     success = classifier.run_optimized_pipeline()
     
     if success:
