@@ -344,9 +344,9 @@ class OptimizedRadiomicsClassifier:
             self.logger.info(f"Feature types: {len(selected_features)} original, {len(feature_names)} engineered")
             
             # 4. Scaling
-            self.scaler = RobustScaler()
+            self.scaler = StandardScaler()
             self.X = self.scaler.fit_transform(X_combined)
-            self.logger.info("Features scaled using RobustScaler")
+            self.logger.info("Features scaled using StandardScaler")
             
             return True
             
@@ -381,7 +381,8 @@ class OptimizedRadiomicsClassifier:
                 class_weight='balanced',
                 probability=True,
                 random_state=self.random_state,
-                max_iter=2000  # Increased max_iter to prevent convergence warnings
+                max_iter=5000,  # Increased max_iter to prevent convergence warnings
+                tol=1e-3  # Relaxed tolerance for convergence
             )
             
             rfecv = RFECV(
@@ -467,7 +468,8 @@ class OptimizedRadiomicsClassifier:
                 'kernel': ['linear', 'rbf', 'poly'],
                 'degree': [2, 3],  # for poly kernel
                 'class_weight': ['balanced', None],
-                'max_iter': [2000]  # Higher max_iter to prevent convergence warnings
+                'max_iter': [5000],  # Higher max_iter to prevent convergence warnings
+                'tol': [1e-3]  # Relaxed tolerance for convergence
             }
             
             # Create base SVM
@@ -518,8 +520,8 @@ class OptimizedRadiomicsClassifier:
             
             # 1. Define base models
             base_models = {
-                'svm_linear': SVC(kernel='linear', probability=True, random_state=self.random_state, max_iter=2000),
-                'svm_rbf': SVC(kernel='rbf', probability=True, random_state=self.random_state, max_iter=2000),
+                'svm_linear': SVC(kernel='linear', probability=True, random_state=self.random_state, max_iter=5000, tol=1e-3),
+                'svm_rbf': SVC(kernel='rbf', probability=True, random_state=self.random_state, max_iter=5000, tol=1e-3),
                 'random_forest': RandomForestClassifier(
                     n_estimators=200, 
                     max_depth=10, 
@@ -531,7 +533,7 @@ class OptimizedRadiomicsClassifier:
                     C=1.0, 
                     class_weight='balanced', 
                     random_state=self.random_state,
-                    max_iter=2000
+                    max_iter=5000
                 )
             }
             
