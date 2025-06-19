@@ -367,6 +367,8 @@ class OptimizedRadiomicsClassifier:
                 self.logger.info(f"Removed {len(self.y) - np.sum(outlier_mask)} outliers")
                 self.X = X_cleaned
                 self.y = y_cleaned
+                # Update subject_ids to match the cleaned data
+                self.subject_ids = self.subject_ids[outlier_mask]
             else:
                 self.X = X_combined
             
