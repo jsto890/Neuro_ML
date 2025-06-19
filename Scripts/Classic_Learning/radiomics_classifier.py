@@ -25,11 +25,14 @@ import json
 import pickle
 from pathlib import Path
 from datetime import datetime
+import yaml
+import pandas as pd
+import SimpleITK as sitk
+from radiomics import featureextractor
+import logging
 
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 from sklearn.model_selection import train_test_split, StratifiedKFold, GridSearchCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
@@ -44,8 +47,11 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # Set style for plots
-plt.style.use('seaborn-v0_8')
-sns.set_palette("husl")
+plt.style.use('default')
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class RadiomicsClassifier:
     def __init__(self, input_path, output_dir, random_state=42):
@@ -375,10 +381,18 @@ class RadiomicsClassifier:
             # 2. Confusion Matrix (Test set)
             ax2 = axes[0, 1]
             cm = confusion_matrix(self.results['test']['true_labels'], self.results['test']['predictions'])
-            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax2)
+            im = ax2.imshow(cm, cmap='Blues', interpolation='nearest')
             ax2.set_title('Confusion Matrix (Test Set)')
             ax2.set_xlabel('Predicted')
             ax2.set_ylabel('Actual')
+            
+            # Add text annotations
+            for i in range(cm.shape[0]):
+                for j in range(cm.shape[1]):
+                    ax2.text(j, i, str(cm[i, j]), ha='center', va='center')
+            
+            # Add colorbar
+            plt.colorbar(im, ax=ax2)
             
             # 3. Feature Importance
             ax3 = axes[1, 0]
