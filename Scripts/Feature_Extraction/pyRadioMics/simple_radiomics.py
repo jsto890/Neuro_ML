@@ -47,7 +47,6 @@ def find_mri_path(data_root, subject_id):
     """Find the MRI image path for a given subject"""
     image_path = os.path.join(
         data_root,
-        "smriprep",
         subject_id,
         "anat",
         f"{subject_id}_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w_brain_zscore.nii.gz"
