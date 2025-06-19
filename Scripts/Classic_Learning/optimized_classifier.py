@@ -660,8 +660,7 @@ class OptimizedRadiomicsClassifier:
                 try:
                     base_xgb = xgb.XGBClassifier(
                         random_state=self.random_state,
-                        eval_metric='logloss',
-                        use_label_encoder=False
+                        eval_metric='logloss'
                     )
                     
                     xgb_search_spaces = {
@@ -708,8 +707,7 @@ class OptimizedRadiomicsClassifier:
                         max_depth=6,
                         learning_rate=0.1,
                         random_state=self.random_state,
-                        eval_metric='logloss',
-                        use_label_encoder=False
+                        eval_metric='logloss'
                     )
             
             # Optimize LightGBM if available
@@ -792,8 +790,7 @@ class OptimizedRadiomicsClassifier:
                 max_depth=6,
                 learning_rate=0.1,
                 random_state=self.random_state,
-                eval_metric='logloss',
-                use_label_encoder=False
+                eval_metric='logloss'
             )
         
         if LIGHTGBM_AVAILABLE:
@@ -844,11 +841,8 @@ class OptimizedRadiomicsClassifier:
                         n_estimators=100,
                         max_depth=6,
                         learning_rate=0.1,
-                        subsample=0.8,
-                        colsample_bytree=0.8,
                         random_state=self.random_state,
-                        eval_metric='logloss',
-                        use_label_encoder=False
+                        eval_metric='logloss'
                     )
                     self.logger.info("Added XGBoost with default parameters")
             
@@ -862,8 +856,6 @@ class OptimizedRadiomicsClassifier:
                         n_estimators=100,
                         max_depth=6,
                         learning_rate=0.1,
-                        subsample=0.8,
-                        colsample_bytree=0.8,
                         random_state=self.random_state,
                         verbose=-1
                     )
