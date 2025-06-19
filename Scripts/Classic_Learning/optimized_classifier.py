@@ -180,7 +180,7 @@ class OptimizedRadiomicsClassifier:
             return False
     
     def advanced_feature_engineering(self):
-        """Stage 1: Advanced feature engineering with polynomial features, family interactions, and statistical summaries."""
+        """Stage 1: Simplified advanced feature engineering to prevent convergence issues."""
         self.logger.info("Stage 1: Advanced feature engineering...")
         
         try:
@@ -218,118 +218,85 @@ class OptimizedRadiomicsClassifier:
             available_top_features = [f for f in self.top_features if f in selected_features]
             self.logger.info(f"Found {len(available_top_features)} of {len(self.top_features)} top features")
             
-            # 3. Enhanced Feature Engineering
+            # 3. Simplified Feature Engineering (reduced complexity)
             engineered_features = []
             feature_names = []
             
-            # Get top 10 features for polynomial features
-            top_10_features = available_top_features[:10]
-            top_10_indices = [selected_features.index(f) for f in top_10_features]
-            X_top_10 = X_var_selected[:, top_10_indices]
+            # Get top 8 features for polynomial features (reduced from 10)
+            top_8_features = available_top_features[:8]
+            top_8_indices = [selected_features.index(f) for f in top_8_features]
+            X_top_8 = X_var_selected[:, top_8_indices]
             
-            # 3a. Polynomial features (2nd and 3rd degree)
+            # 3a. Polynomial features (2nd degree only, reduced complexity)
             poly_2 = PolynomialFeatures(degree=2, include_bias=False, interaction_only=True)
-            poly_3 = PolynomialFeatures(degree=3, include_bias=False, interaction_only=True)
-            
-            X_poly_2 = poly_2.fit_transform(X_top_10)
-            X_poly_3 = poly_3.fit_transform(X_top_10)
+            X_poly_2 = poly_2.fit_transform(X_top_8)
             
             # Get feature names for polynomial features
-            poly_2_names = [f"poly2_{i}" for i in range(X_poly_2.shape[1] - X_top_10.shape[1])]
-            poly_3_names = [f"poly3_{i}" for i in range(X_poly_3.shape[1] - X_top_10.shape[1])]
+            poly_2_names = [f"poly2_{i}" for i in range(X_poly_2.shape[1] - X_top_8.shape[1])]
             
-            engineered_features.extend([X_poly_2[:, X_top_10.shape[1]:], X_poly_3[:, X_top_10.shape[1]:]])
-            feature_names.extend(poly_2_names + poly_3_names)
+            engineered_features.append(X_poly_2[:, X_top_8.shape[1]:])
+            feature_names.extend(poly_2_names)
             
-            # 3b. Family-based interaction features
+            # 3b. Simplified family-based interaction features (only key combinations)
             family_groups = {
                 'firstorder': [f for f in available_top_features if 'firstorder' in f],
-                'glrlm': [f for f in available_top_features if 'glrlm' in f],
-                'gldm': [f for f in available_top_features if 'gldm' in f],
-                'glszm': [f for f in available_top_features if 'glszm' in f],
-                'ngtdm': [f for f in available_top_features if 'ngtdm' in f]
+                'texture': [f for f in available_top_features if any(x in f for x in ['glrlm', 'gldm', 'glszm', 'ngtdm'])]
             }
             
             family_interactions = []
             family_interaction_names = []
             
-            for family1 in family_groups:
-                for family2 in family_groups:
-                    if family1 < family2:  # Avoid duplicates
-                        features1 = family_groups[family1]
-                        features2 = family_groups[family2]
-                        
-                        if features1 and features2:
-                            indices1 = [selected_features.index(f) for f in features1]
-                            indices2 = [selected_features.index(f) for f in features2]
-                            
-                            X_family1 = X_var_selected[:, indices1]
-                            X_family2 = X_var_selected[:, indices2]
-                            
-                            # Create interaction features (element-wise multiplication)
-                            for i, feat1 in enumerate(features1):
-                                for j, feat2 in enumerate(features2):
-                                    interaction = X_family1[:, i] * X_family2[:, j]
-                                    family_interactions.append(interaction)
-                                    family_interaction_names.append(f"family_interaction_{family1}_{family2}_{i}_{j}")
+            # Only create interactions between firstorder and texture families
+            if family_groups['firstorder'] and family_groups['texture']:
+                indices1 = [selected_features.index(f) for f in family_groups['firstorder']]
+                indices2 = [selected_features.index(f) for f in family_groups['texture']]
+                
+                X_firstorder = X_var_selected[:, indices1]
+                X_texture = X_var_selected[:, indices2]
+                
+                # Create only a few key interactions (first feature from each family)
+                if len(X_firstorder) > 0 and len(X_texture) > 0:
+                    interaction = X_firstorder[:, 0] * X_texture[:, 0]
+                    family_interactions.append(interaction)
+                    family_interaction_names.append("firstorder_texture_interaction")
             
             if family_interactions:
                 family_interactions = np.column_stack(family_interactions)
                 engineered_features.append(family_interactions)
                 feature_names.extend(family_interaction_names)
             
-            # 3c. Statistical summary features
-            # Percentiles, skewness, kurtosis across feature groups
-            for family_name, family_features in family_groups.items():
-                if len(family_features) > 1:
-                    indices = [selected_features.index(f) for f in family_features]
-                    X_family = X_var_selected[:, indices]
-                    
-                    # Percentiles
-                    p25 = np.percentile(X_family, 25, axis=1)
-                    p75 = np.percentile(X_family, 75, axis=1)
-                    p90 = np.percentile(X_family, 90, axis=1)
-                    
-                    # Skewness and kurtosis
-                    skewness = skew(X_family, axis=1)
-                    kurt = kurtosis(X_family, axis=1)
-                    
-                    # Range and IQR
-                    feature_range = np.ptp(X_family, axis=1)
-                    iqr = p75 - p25
-                    
-                    engineered_features.append(np.column_stack([p25, p75, p90, skewness, kurt, feature_range, iqr]))
-                    feature_names.extend([
-                        f"{family_name}_p25", f"{family_name}_p75", f"{family_name}_p90",
-                        f"{family_name}_skewness", f"{family_name}_kurtosis",
-                        f"{family_name}_range", f"{family_name}_iqr"
-                    ])
+            # 3c. Simplified statistical summary features
+            # Only for texture features
+            texture_features = [f for f in available_top_features if any(x in f for x in ['glrlm', 'gldm', 'glszm', 'ngtdm'])]
+            if len(texture_features) > 1:
+                texture_indices = [selected_features.index(f) for f in texture_features]
+                X_texture = X_var_selected[:, texture_indices]
+                
+                # Only mean and std (reduced from 7 features)
+                texture_mean = np.mean(X_texture, axis=1)
+                texture_std = np.std(X_texture, axis=1)
+                
+                engineered_features.append(np.column_stack([texture_mean, texture_std]))
+                feature_names.extend(['texture_mean', 'texture_std'])
             
-            # 3d. Original interaction features (simplified)
-            X_top_10_df = pd.DataFrame(X_top_10, columns=top_10_features)
+            # 3d. Simplified interaction features (only top 4 features)
+            top_4_features = available_top_features[:4]
+            top_4_indices = [selected_features.index(f) for f in top_4_features]
+            X_top_4 = X_var_selected[:, top_4_indices]
+            
             interactions = []
             interaction_names = []
             
-            for i in range(len(top_10_features)):
-                for j in range(i+1, len(top_10_features)):
-                    interaction = X_top_10_df.iloc[:, i] * X_top_10_df.iloc[:, j]
-                    interactions.append(interaction.values)
-                    interaction_names.append(f"interaction_{i}_{j}")
+            # Only create interactions between first 2 features
+            if len(top_4_features) >= 2:
+                interaction = X_top_4[:, 0] * X_top_4[:, 1]
+                interactions.append(interaction)
+                interaction_names.append("top2_interaction")
             
             if interactions:
                 interactions = np.column_stack(interactions)
                 engineered_features.append(interactions)
                 feature_names.extend(interaction_names)
-            
-            # 3e. Summary features
-            texture_features = [f for f in available_top_features if any(x in f for x in ['glrlm', 'gldm', 'glszm', 'ngtdm'])]
-            if texture_features:
-                texture_indices = [selected_features.index(f) for f in texture_features]
-                X_texture = X_var_selected[:, texture_indices]
-                texture_mean = np.mean(X_texture, axis=1)
-                texture_std = np.std(X_texture, axis=1)
-                engineered_features.append(np.column_stack([texture_mean, texture_std]))
-                feature_names.extend(['texture_mean', 'texture_std'])
             
             # Combine all engineered features
             if engineered_features:
@@ -355,17 +322,17 @@ class OptimizedRadiomicsClassifier:
             return False
     
     def optimized_feature_selection(self):
-        """Stage 2: Optimized feature selection with RFECV and preliminary reduction."""
+        """Stage 2: Simplified feature selection to prevent convergence issues."""
         self.logger.info("Stage 2: Optimized feature selection...")
         
         try:
             # Preliminary feature reduction to handle large feature set
-            if self.X.shape[1] > 100:
+            if self.X.shape[1] > 50:  # Reduced threshold from 100 to 50
                 self.logger.info(f"Large feature set detected ({self.X.shape[1]} features), applying preliminary reduction...")
                 
                 # Use mutual information for initial feature selection
                 from sklearn.feature_selection import SelectKBest, mutual_info_classif
-                k_best = min(100, self.X.shape[1] // 2)  # Select top 50% or 100 features, whichever is smaller
+                k_best = min(50, self.X.shape[1] // 2)  # Reduced from 100 to 50
                 selector = SelectKBest(score_func=mutual_info_classif, k=k_best)
                 X_reduced = selector.fit_transform(self.X, self.y)
                 selected_indices = selector.get_support()
@@ -374,41 +341,29 @@ class OptimizedRadiomicsClassifier:
                 
                 self.logger.info(f"Preliminary reduction: {self.X.shape[1]} features selected")
             
-            # RFECV with optimized SVM parameters
-            base_svm = SVC(
-                kernel='linear',
-                C=1.0,
-                class_weight='balanced',
-                probability=True,
-                random_state=self.random_state,
-                max_iter=5000,  # Increased max_iter to prevent convergence warnings
-                tol=1e-3  # Relaxed tolerance for convergence
-            )
+            # Use simpler feature selection instead of RFECV
+            if self.X.shape[1] > 30:
+                self.logger.info("Applying additional feature selection...")
+                
+                # Use SelectKBest with f_classif for final selection
+                from sklearn.feature_selection import SelectKBest, f_classif
+                k_final = min(30, self.X.shape[1])
+                selector_final = SelectKBest(score_func=f_classif, k=k_final)
+                X_final = selector_final.fit_transform(self.X, self.y)
+                selected_indices_final = selector_final.get_support()
+                self.feature_names = [self.feature_names[i] for i in range(len(self.feature_names)) if selected_indices_final[i]]
+                self.X = X_final
+                
+                self.logger.info(f"Final feature selection: {self.X.shape[1]} features selected")
             
-            rfecv = RFECV(
-                estimator=base_svm,
-                step=1,
-                cv=5,
-                scoring='accuracy',
-                n_jobs=-1,
-                min_features_to_select=10
-            )
-            
-            self.X = rfecv.fit_transform(self.X, self.y)
-            selected_features = [self.feature_names[i] for i in range(len(self.feature_names)) if rfecv.support_[i]]
-            self.feature_names = selected_features
-            
-            # Store RFECV results
-            self.feature_engineering_results['rfecv'] = {
-                'n_features': rfecv.n_features_,
-                'cv_score': rfecv.cv_results_['mean_test_score'].max(),
-                'selected_features': selected_features,
-                'feature_ranking': rfecv.ranking_.tolist()
+            # Store feature selection results
+            self.feature_engineering_results['feature_selection'] = {
+                'n_features': self.X.shape[1],
+                'selected_features': self.feature_names,
+                'method': 'SelectKBest + f_classif'
             }
             
-            self.logger.info(f"RFECV selected {rfecv.n_features_} features")
-            self.logger.info(f"Optimal number of features: {rfecv.n_features_}")
-            self.logger.info(f"Cross-validation score: {rfecv.cv_results_['mean_test_score'].max():.4f}")
+            self.logger.info(f"Feature selection completed: {self.X.shape[1]} features")
             
             return True
             
@@ -455,19 +410,18 @@ class OptimizedRadiomicsClassifier:
             return False
     
     def optimize_svm_hyperparameters(self):
-        """Stage 4: Optimize SVM hyperparameters with extended parameter grid."""
+        """Stage 4: Simplified SVM hyperparameter optimization."""
         self.logger.info("Stage 4: Optimizing SVM hyperparameters...")
         
         try:
             X_train, y_train, _ = self.splits['train']
             
-            # Extended parameter grid with higher max_iter
+            # Simplified parameter grid to reduce complexity
             param_grid = {
-                'C': [0.1, 0.5, 1.0, 2.0, 5.0, 10.0],
-                'gamma': ['scale', 'auto', 0.001, 0.01, 0.1],
-                'kernel': ['linear', 'rbf', 'poly'],
-                'degree': [2, 3],  # for poly kernel
-                'class_weight': ['balanced', None],
+                'C': [0.1, 1.0, 10.0],  # Reduced from 6 to 3 values
+                'gamma': ['scale', 'auto'],  # Reduced from 5 to 2 values
+                'kernel': ['linear', 'rbf'],  # Removed poly kernel
+                'class_weight': ['balanced'],  # Only balanced
                 'max_iter': [5000],  # Higher max_iter to prevent convergence warnings
                 'tol': [1e-3]  # Relaxed tolerance for convergence
             }
@@ -479,7 +433,7 @@ class OptimizedRadiomicsClassifier:
             grid_search = GridSearchCV(
                 estimator=base_svm,
                 param_grid=param_grid,
-                cv=5,
+                cv=3,  # Reduced from 5 to 3 folds
                 scoring='accuracy',
                 n_jobs=-1,
                 verbose=1
@@ -783,12 +737,12 @@ class OptimizedRadiomicsClassifier:
                 axes[1, 1].grid(True, alpha=0.3)
             
             # 6. Feature Engineering Summary
-            if 'rfecv' in self.feature_engineering_results:
-                rfecv_results = self.feature_engineering_results['rfecv']
+            if 'feature_selection' in self.feature_engineering_results:
+                feature_selection_results = self.feature_engineering_results['feature_selection']
                 axes[1, 2].text(0.1, 0.8, f"Original Features: {len(self.top_features)}", fontsize=12)
                 axes[1, 2].text(0.1, 0.7, f"Engineered Features: {len(self.feature_names) - len(self.top_features)}", fontsize=12)
-                axes[1, 2].text(0.1, 0.6, f"Selected Features: {rfecv_results['n_features']}", fontsize=12)
-                axes[1, 2].text(0.1, 0.5, f"CV Score: {rfecv_results['cv_score']:.4f}", fontsize=12)
+                axes[1, 2].text(0.1, 0.6, f"Selected Features: {feature_selection_results['n_features']}", fontsize=12)
+                axes[1, 2].text(0.1, 0.5, f"Method: {feature_selection_results['method']}", fontsize=12)
                 axes[1, 2].text(0.1, 0.4, f"Stacking Models: {len(self.ensemble_info['base_models'])}", fontsize=12)
                 axes[1, 2].set_title('Advanced Feature Engineering Summary')
                 axes[1, 2].axis('off')
@@ -946,7 +900,7 @@ def main():
         print(f"  • optimized_pipeline.log - Execution log")
         print("\nKey Optimizations:")
         print(f"  • Advanced feature engineering based on cross-model analysis")
-        print(f"  • RFECV feature selection optimized for SVM")
+        print(f"  • Simplified feature selection")
         print(f"  • Fine-tuned SVM hyperparameters")
         print(f"  • Ensemble with SVM as primary model")
         print(f"  • Clinical interpretability focus")
