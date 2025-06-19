@@ -7,7 +7,7 @@ This research project focuses on developing machine learning models for early de
 - **Multimodal Data Processing**: Integrated pipeline for PET, MRI, and DaTSPECT image processing
 - **Standardized Preprocessing**: Automated data standardization and quality control
 - **Radiomics Feature Extraction**: Advanced feature extraction using pyRadiomics
-- **Classical Machine Learning**: Random Forest pipeline with comprehensive evaluation
+- **Classical Machine Learning**: Multiple pipelines (Classic, Enhanced, Optimised) with comprehensive evaluation
 - **Deep Learning Pipeline**: CNN-based models for neuroimaging classification
 - **Quality Control**: Comprehensive QC reports and validation metrics
 - **Reproducible Research**: Complete pipeline with configuration management
@@ -26,11 +26,22 @@ P4P/
 │   │       ├── radiomics_extractor.py   # Multi-modality extractor
 │   │       ├── test_paths.py            # Path validation tool
 │   │       └── debug_paths.py           # Path debugging tool
-│   ├── Classic_Learning/       # Classical machine learning pipeline
-│   │   ├── radiomics_classifier.py      # Main Random Forest pipeline
-│   │   ├── preprocessing.py             # Data preprocessing utilities
-│   │   ├── run_classical.py             # Simple runner script
-│   │   └── config_classical.yaml        # Classical learning configuration
+│   ├── Classic_Learning/       # Classical machine learning pipelines
+│   │   ├── Classic/            # Basic Random Forest pipeline
+│   │   │   ├── radiomics_classifier.py  # Main Random Forest pipeline
+│   │   │   ├── preprocessing.py         # Data preprocessing utilities
+│   │   │   ├── run_classical.py         # Simple runner script
+│   │   │   └── config_classical.yaml    # Classical learning configuration
+│   │   ├── Enhanced/           # Enhanced pipeline with multiple algorithms
+│   │   │   ├── enhanced_classifier.py   # Multi-algorithm classifier
+│   │   │   ├── run_enhanced.py          # Enhanced runner script
+│   │   │   └── config_enhanced.yaml     # Enhanced configuration
+│   │   └── Optimised/          # Optimized pipeline with advanced features
+│   │       ├── optimized_classifier.py  # Advanced classifier with Bayesian optimization
+│   │       ├── run_optimized.py         # Optimized runner script
+│   │       ├── config_optimized.yaml    # Optimized configuration
+│   │       ├── requirements_advanced.txt # Advanced dependencies
+│   │       └── install_advanced_deps.py # Dependency installer
 │   ├── Deep_Learning/          # Deep learning models and training
 │   │   ├── MRI/                # MRI-specific deep learning
 │   │   │   ├── dataset.py              # PyTorch dataset for MRI
@@ -103,10 +114,20 @@ cd Scripts/Feature_Extraction/pyRadioMics/
 python3 simple_radiomics.py --labels ~/reseng202500013-ndd-ml/data/mri_labels.csv --output-dir ~/reseng202500013-ndd-ml/data/ --config ~/reseng202500013-ndd-ml/P4P/config.yaml
 ```
 
-#### 2. Run Classical Learning Pipeline
+#### 2. Run Classical Learning Pipeline (Choose one)
 ```bash
-cd Scripts/Classic_Learning/
+# Basic Random Forest pipeline
+cd Scripts/Classic_Learning/Classic/
 python3 run_classical.py
+
+# Enhanced pipeline with multiple algorithms
+cd Scripts/Classic_Learning/Enhanced/
+python3 run_enhanced.py
+
+# Optimized pipeline with advanced features
+cd Scripts/Classic_Learning/Optimised/
+python3 install_advanced_deps.py  # Install advanced dependencies first
+python3 run_optimized.py
 ```
 
 #### 3. Train Deep Learning Model (MRI)
