@@ -227,8 +227,8 @@ This pipeline is designed for:
 - **Biomarker Discovery**: Finding novel imaging biomarkers
 
 ## 👥 Collaborators
-- **Joseph Storey** - Lead Developer, Pipeline Architecture
-- **Jackson Schofield** - Research Lead, Clinical Validation
+- **Joseph Storey**
+- **Jackson Schofield**
 
 ## 📞 Support
 For questions and support, please open an issue in the GitHub repository.
