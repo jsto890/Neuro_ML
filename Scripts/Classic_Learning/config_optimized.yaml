@@ -5,10 +5,39 @@
 data:
   input_file: "~/reseng202500013-ndd-ml/data/radiomics_MRI_mri_labels.csv"
   output_dir: "~/reseng202500013-ndd-ml/data/optimized_classical_results"
+  binary_only: true
+  random_state: 42
 
 # Advanced feature engineering
 feature_engineering:
-  # Top features identified from cross-model analysis
+  # Variance thresholding
+  variance_threshold: 0.01
+  
+  # Polynomial features
+  polynomial_degrees: [2, 3]
+  polynomial_interaction_only: true
+  
+  # Family-based interactions
+  enable_family_interactions: true
+  radiomics_families:
+    - "firstorder"
+    - "glrlm"
+    - "gldm"
+    - "glszm"
+    - "ngtdm"
+  
+  # Statistical summary features
+  enable_statistical_features: true
+  statistical_measures:
+    - "percentile_25"
+    - "percentile_75"
+    - "percentile_90"
+    - "skewness"
+    - "kurtosis"
+    - "range"
+    - "iqr"
+  
+  # Top features for engineering
   top_features:
     - "original_glrlm_RunLengthNonUniformity"
     - "original_gldm_DependenceVariance"
@@ -26,18 +55,6 @@ feature_engineering:
     - "original_glszm_ZoneEntropy"
     - "original_firstorder_MeanAbsoluteDeviation"
   
-  # Feature engineering methods
-  polynomial_features:
-    enabled: true
-    degree: 2
-    interaction_only: true
-  
-  statistical_features:
-    enabled: true
-    texture_mean: true
-    firstorder_variance: true
-    mean_variance_ratio: true
-  
   normalization:
     enabled: true
     z_score: true
@@ -54,11 +71,11 @@ feature_selection:
 svm_optimization:
   # Extended parameter grid
   param_grid:
-    C: [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
-    kernel: ["linear", "rbf"]
-    gamma: ["scale", "auto", 0.001, 0.01, 0.1, 1.0]
+    C: [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
+    gamma: ["scale", "auto", 0.001, 0.01, 0.1]
+    kernel: ["linear", "rbf", "poly"]
+    degree: [2, 3]  # for poly kernel
     class_weight: ["balanced", null]
-    probability: [true]
   
   # Cross-validation
   cv_folds: 5
@@ -127,4 +144,61 @@ clinical:
   feature_importance_threshold: 0.01
   confidence_threshold: 0.8
   save_predictions: true
-  save_probabilities: true 
+  save_probabilities: true
+
+# Stacking Ensemble Configuration
+stacking_ensemble:
+  # Base models
+  base_models:
+    svm_linear:
+      type: "SVC"
+      params:
+        kernel: "linear"
+        probability: true
+        random_state: 42
+    
+    svm_rbf:
+      type: "SVC"
+      params:
+        kernel: "rbf"
+        probability: true
+        random_state: 42
+    
+    random_forest:
+      type: "RandomForestClassifier"
+      params:
+        n_estimators: 200
+        max_depth: 10
+        min_samples_split: 5
+        min_samples_leaf: 1
+        random_state: 42
+    
+    logistic_regression:
+      type: "LogisticRegression"
+      params:
+        C: 1.0
+        class_weight: "balanced"
+        random_state: 42
+        max_iter: 1000
+  
+  # Meta-learner
+  meta_learner:
+    type: "LogisticRegression"
+    params:
+      C: 1.0
+      class_weight: "balanced"
+      random_state: 42
+      max_iter: 1000
+  
+  # Cross-validation for meta-learner
+  cv: 5
+
+# Additional selection methods
+enable_mutual_info: true
+mutual_info_k: 50
+enable_f_statistic: true
+f_statistic_k: 50
+
+# Additional logging configuration
+log_level: "INFO"
+save_log: true 

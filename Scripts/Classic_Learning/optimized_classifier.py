@@ -42,6 +42,9 @@ from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 import warnings
 import os
+from scipy.stats import skew, kurtosis
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import cross_val_predict
 
 # Custom JSON encoder for NumPy types
 class NumpyEncoder(json.JSONEncoder):
@@ -177,108 +180,174 @@ class OptimizedRadiomicsClassifier:
             return False
     
     def advanced_feature_engineering(self):
-        """Stage 1: Advanced feature engineering based on top features."""
+        """Stage 1: Advanced feature engineering with polynomial features, family interactions, and statistical summaries."""
         self.logger.info("Stage 1: Advanced feature engineering...")
         
         try:
-            # Handle missing values
-            if hasattr(self.X, 'dtype') and np.issubdtype(self.X.dtype, np.number):
-                missing_count = np.isnan(self.X).sum()
-            else:
-                X_numeric = pd.DataFrame(self.X, columns=self.feature_names).apply(pd.to_numeric, errors='coerce')
-                missing_count = X_numeric.isnull().sum().sum()
-            
-            if missing_count > 0:
-                self.logger.info(f"Found {missing_count} missing values - using imputation")
-                imputer = SimpleImputer(strategy='median')
-                
-                if hasattr(self.X, 'dtype') and np.issubdtype(self.X.dtype, np.number):
-                    self.X = imputer.fit_transform(self.X)
-                else:
-                    X_numeric = pd.DataFrame(self.X, columns=self.feature_names).apply(pd.to_numeric, errors='coerce')
-                    X_imputed = imputer.fit_transform(X_numeric)
-                    self.X = X_imputed
-            
-            # Remove constant features
+            # 1. Variance thresholding
             variance_selector = VarianceThreshold(threshold=0.01)
-            self.X = variance_selector.fit_transform(self.X)
-            kept_features = variance_selector.get_support()
-            self.feature_names = [f for f, keep in zip(self.feature_names, kept_features) if keep]
-            self.logger.info(f"After variance threshold: {self.X.shape}")
+            X_var_selected = variance_selector.fit_transform(self.X)
+            selected_features = self.X.columns[variance_selector.get_support()].tolist()
             
-            # Focus on top features identified from cross-model analysis
-            available_top_features = [f for f in self.top_features if f in self.feature_names]
+            self.logger.info(f"After variance threshold: {X_var_selected.shape}")
+            
+            # 2. Select top features based on cross-model analysis
+            self.top_features = [
+                'original_glrlm_RunLengthNonUniformity',
+                'original_gldm_DependenceVariance', 
+                'original_firstorder_Kurtosis',
+                'original_ngtdm_Busyness',
+                'original_glrlm_LongRunEmphasis',
+                'original_firstorder_RobustMeanAbsoluteDeviation',
+                'original_firstorder_Variance',
+                'original_firstorder_Mean',
+                'original_firstorder_Minimum',
+                'original_gldm_DependenceNonUniformity',
+                'original_glrlm_LongRunLowGrayLevelEmphasis',
+                'original_gldm_LargeDependenceEmphasis',
+                'original_glrlm_RunVariance',
+                'original_glszm_ZoneEntropy',
+                'original_firstorder_MeanAbsoluteDeviation'
+            ]
+            
+            # Filter to available features
+            available_top_features = [f for f in self.top_features if f in selected_features]
             self.logger.info(f"Found {len(available_top_features)} of {len(self.top_features)} top features")
             
-            # Get indices of top features
-            top_feature_indices = [self.feature_names.index(f) for f in available_top_features]
-            
-            # Create feature engineering matrix
-            X_top = self.X[:, top_feature_indices]
-            feature_names_top = available_top_features
-            
-            # Advanced feature engineering
+            # 3. Enhanced Feature Engineering
             engineered_features = []
-            engineered_names = []
+            feature_names = []
             
-            # 1. Original top features
-            engineered_features.append(X_top)
-            engineered_names.extend(feature_names_top)
+            # Get top 10 features for polynomial features
+            top_10_features = available_top_features[:10]
+            top_10_indices = [selected_features.index(f) for f in top_10_features]
+            X_top_10 = X_var_selected[:, top_10_indices]
             
-            # 2. Polynomial features (interactions between top features)
-            poly = PolynomialFeatures(degree=2, include_bias=False, interaction_only=True)
-            X_poly = poly.fit_transform(X_top)
-            poly_names = [f"interaction_{i}" for i in range(X_poly.shape[1] - X_top.shape[1])]
-            engineered_features.append(X_poly[:, X_top.shape[1]:])  # Only interaction terms
-            engineered_names.extend(poly_names)
+            # 3a. Polynomial features (2nd and 3rd degree)
+            poly_2 = PolynomialFeatures(degree=2, include_bias=False, interaction_only=True)
+            poly_3 = PolynomialFeatures(degree=3, include_bias=False, interaction_only=True)
             
-            # 3. Statistical aggregations
-            # Mean of texture features
-            texture_features = [f for f in feature_names_top if any(x in f for x in ['glrlm', 'gldm', 'glszm', 'ngtdm'])]
+            X_poly_2 = poly_2.fit_transform(X_top_10)
+            X_poly_3 = poly_3.fit_transform(X_top_10)
+            
+            # Get feature names for polynomial features
+            poly_2_names = [f"poly2_{i}" for i in range(X_poly_2.shape[1] - X_top_10.shape[1])]
+            poly_3_names = [f"poly3_{i}" for i in range(X_poly_3.shape[1] - X_top_10.shape[1])]
+            
+            engineered_features.extend([X_poly_2[:, X_top_10.shape[1]:], X_poly_3[:, X_top_10.shape[1]:]])
+            feature_names.extend(poly_2_names + poly_3_names)
+            
+            # 3b. Family-based interaction features
+            family_groups = {
+                'firstorder': [f for f in available_top_features if 'firstorder' in f],
+                'glrlm': [f for f in available_top_features if 'glrlm' in f],
+                'gldm': [f for f in available_top_features if 'gldm' in f],
+                'glszm': [f for f in available_top_features if 'glszm' in f],
+                'ngtdm': [f for f in available_top_features if 'ngtdm' in f]
+            }
+            
+            family_interactions = []
+            family_interaction_names = []
+            
+            for family1 in family_groups:
+                for family2 in family_groups:
+                    if family1 < family2:  # Avoid duplicates
+                        features1 = family_groups[family1]
+                        features2 = family_groups[family2]
+                        
+                        if features1 and features2:
+                            indices1 = [selected_features.index(f) for f in features1]
+                            indices2 = [selected_features.index(f) for f in features2]
+                            
+                            X_family1 = X_var_selected[:, indices1]
+                            X_family2 = X_var_selected[:, indices2]
+                            
+                            # Create interaction features (element-wise multiplication)
+                            for i, feat1 in enumerate(features1):
+                                for j, feat2 in enumerate(features2):
+                                    interaction = X_family1[:, i] * X_family2[:, j]
+                                    family_interactions.append(interaction)
+                                    family_interaction_names.append(f"family_interaction_{family1}_{family2}_{i}_{j}")
+            
+            if family_interactions:
+                family_interactions = np.column_stack(family_interactions)
+                engineered_features.append(family_interactions)
+                feature_names.extend(family_interaction_names)
+            
+            # 3c. Statistical summary features
+            # Percentiles, skewness, kurtosis across feature groups
+            for family_name, family_features in family_groups.items():
+                if len(family_features) > 1:
+                    indices = [selected_features.index(f) for f in family_features]
+                    X_family = X_var_selected[:, indices]
+                    
+                    # Percentiles
+                    p25 = np.percentile(X_family, 25, axis=1)
+                    p75 = np.percentile(X_family, 75, axis=1)
+                    p90 = np.percentile(X_family, 90, axis=1)
+                    
+                    # Skewness and kurtosis
+                    skewness = skew(X_family, axis=1)
+                    kurt = kurtosis(X_family, axis=1)
+                    
+                    # Range and IQR
+                    feature_range = np.ptp(X_family, axis=1)
+                    iqr = p75 - p25
+                    
+                    engineered_features.append(np.column_stack([p25, p75, p90, skewness, kurt, feature_range, iqr]))
+                    feature_names.extend([
+                        f"{family_name}_p25", f"{family_name}_p75", f"{family_name}_p90",
+                        f"{family_name}_skewness", f"{family_name}_kurtosis",
+                        f"{family_name}_range", f"{family_name}_iqr"
+                    ])
+            
+            # 3d. Original interaction features (simplified)
+            X_top_10_df = pd.DataFrame(X_top_10, columns=top_10_features)
+            interactions = []
+            interaction_names = []
+            
+            for i in range(len(top_10_features)):
+                for j in range(i+1, len(top_10_features)):
+                    interaction = X_top_10_df.iloc[:, i] * X_top_10_df.iloc[:, j]
+                    interactions.append(interaction.values)
+                    interaction_names.append(f"interaction_{i}_{j}")
+            
+            if interactions:
+                interactions = np.column_stack(interactions)
+                engineered_features.append(interactions)
+                feature_names.extend(interaction_names)
+            
+            # 3e. Summary features
+            texture_features = [f for f in available_top_features if any(x in f for x in ['glrlm', 'gldm', 'glszm', 'ngtdm'])]
             if texture_features:
-                texture_indices = [feature_names_top.index(f) for f in texture_features]
-                texture_mean = np.mean(X_top[:, texture_indices], axis=1, keepdims=True)
-                engineered_features.append(texture_mean)
-                engineered_names.append('texture_mean')
-            
-            # Variance of first-order features
-            firstorder_features = [f for f in feature_names_top if 'firstorder' in f]
-            if firstorder_features:
-                firstorder_indices = [feature_names_top.index(f) for f in firstorder_features]
-                firstorder_var = np.var(X_top[:, firstorder_indices], axis=1, keepdims=True)
-                engineered_features.append(firstorder_var)
-                engineered_names.append('firstorder_variance')
-            
-            # 4. Ratio features
-            if 'original_firstorder_Mean' in feature_names_top and 'original_firstorder_Variance' in feature_names_top:
-                mean_idx = feature_names_top.index('original_firstorder_Mean')
-                var_idx = feature_names_top.index('original_firstorder_Variance')
-                mean_var_ratio = (X_top[:, mean_idx:mean_idx+1] / (X_top[:, var_idx:var_idx+1] + 1e-8))
-                engineered_features.append(mean_var_ratio)
-                engineered_names.append('mean_variance_ratio')
-            
-            # 5. Z-score features (normalized versions)
-            for i, feature in enumerate(feature_names_top):
-                feature_data = X_top[:, i:i+1]
-                z_score = (feature_data - np.mean(feature_data)) / (np.std(feature_data) + 1e-8)
-                engineered_features.append(z_score)
-                engineered_names.append(f'{feature}_zscore')
+                texture_indices = [selected_features.index(f) for f in texture_features]
+                X_texture = X_var_selected[:, texture_indices]
+                texture_mean = np.mean(X_texture, axis=1)
+                texture_std = np.std(X_texture, axis=1)
+                engineered_features.append(np.column_stack([texture_mean, texture_std]))
+                feature_names.extend(['texture_mean', 'texture_std'])
             
             # Combine all engineered features
-            self.X = np.hstack(engineered_features)
-            self.feature_names = engineered_names
+            if engineered_features:
+                X_engineered = np.column_stack(engineered_features)
+                X_combined = np.column_stack([X_var_selected, X_engineered])
+                self.feature_names = selected_features + feature_names
+            else:
+                X_combined = X_var_selected
+                self.feature_names = selected_features
             
-            self.logger.info(f"After feature engineering: {self.X.shape}")
-            self.logger.info(f"Feature types: {len(feature_names_top)} original, {len(engineered_names) - len(feature_names_top)} engineered")
+            self.logger.info(f"After feature engineering: {X_combined.shape}")
+            self.logger.info(f"Feature types: {len(selected_features)} original, {len(feature_names)} engineered")
             
-            # Scale features
-            self.X = self.scaler.fit_transform(self.X)
+            # 4. Scaling
+            self.scaler = RobustScaler()
+            self.X = self.scaler.fit_transform(X_combined)
             self.logger.info("Features scaled using RobustScaler")
             
             return True
             
         except Exception as e:
-            self.logger.error(f"Error in feature engineering: {e}")
+            self.logger.error(f"Error in advanced feature engineering: {e}")
             return False
     
     def optimized_feature_selection(self):
@@ -409,142 +478,245 @@ class OptimizedRadiomicsClassifier:
             return False
     
     def create_optimized_ensemble(self):
-        """Stage 5: Create optimized ensemble with SVM as base."""
-        self.logger.info("Stage 5: Creating optimized ensemble...")
+        """Stage 5: Creating advanced stacking ensemble with cross-validation."""
+        self.logger.info("Stage 5: Creating advanced stacking ensemble...")
         
         try:
             X_train, y_train, _ = self.splits['train']
             
-            # Create multiple SVM models with different parameters
-            svm_models = [
-                ('svm_linear', SVC(kernel='linear', C=1.0, probability=True, random_state=self.random_state)),
-                ('svm_rbf', SVC(kernel='rbf', C=1.0, gamma='scale', probability=True, random_state=self.random_state)),
-                ('svm_optimized', self.svm_model)
-            ]
+            # 1. Define base models
+            base_models = {
+                'svm_linear': SVC(kernel='linear', probability=True, random_state=self.random_state),
+                'svm_rbf': SVC(kernel='rbf', probability=True, random_state=self.random_state),
+                'random_forest': RandomForestClassifier(
+                    n_estimators=200, 
+                    max_depth=10, 
+                    min_samples_split=5,
+                    min_samples_leaf=1,
+                    random_state=self.random_state
+                ),
+                'logistic_regression': LogisticRegression(
+                    C=1.0, 
+                    class_weight='balanced', 
+                    random_state=self.random_state,
+                    max_iter=1000
+                )
+            }
             
-            # Create voting ensemble
-            self.ensemble_model = VotingClassifier(
-                estimators=svm_models,
-                voting='soft',
-                weights=[0.3, 0.3, 0.4]  # Give more weight to optimized SVM
+            # 2. Train base models and get cross-validation predictions
+            base_predictions = {}
+            base_probabilities = {}
+            
+            for name, model in base_models.items():
+                self.logger.info(f"Training base model: {name}")
+                
+                # Get cross-validation predictions
+                cv_predictions = cross_val_predict(model, X_train, y_train, cv=5, method='predict')
+                cv_probabilities = cross_val_predict(model, X_train, y_train, cv=5, method='predict_proba')
+                
+                base_predictions[name] = cv_predictions
+                base_probabilities[name] = cv_probabilities[:, 1]  # Probability of positive class
+                
+                # Also train on full training set for final ensemble
+                model.fit(X_train, y_train)
+                base_models[name] = model
+            
+            # 3. Create meta-features matrix
+            meta_features = np.column_stack(list(base_probabilities.values()))
+            meta_feature_names = list(base_probabilities.keys())
+            
+            # 4. Train meta-learner using cross-validation
+            meta_learner = LogisticRegression(
+                C=1.0, 
+                class_weight='balanced', 
+                random_state=self.random_state,
+                max_iter=1000
             )
             
-            # Train ensemble
-            self.ensemble_model.fit(X_train, y_train)
+            # Use cross-validation to train meta-learner
+            meta_learner.fit(meta_features, y_train)
             
-            self.logger.info("Ensemble model trained successfully")
+            # 5. Create stacking ensemble class
+            class StackingEnsemble:
+                def __init__(self, base_models, meta_learner, meta_feature_names):
+                    self.base_models = base_models
+                    self.meta_learner = meta_learner
+                    self.meta_feature_names = meta_feature_names
+                
+                def predict_proba(self, X):
+                    # Get predictions from base models
+                    base_probs = []
+                    for name, model in self.base_models.items():
+                        prob = model.predict_proba(X)[:, 1]
+                        base_probs.append(prob)
+                    
+                    # Create meta-features
+                    meta_features = np.column_stack(base_probs)
+                    
+                    # Get meta-learner predictions
+                    meta_probs = self.meta_learner.predict_proba(meta_features)
+                    return meta_probs
+                
+                def predict(self, X):
+                    probs = self.predict_proba(X)
+                    return np.argmax(probs, axis=1)
+                
+                def __str__(self):
+                    return f"StackingEnsemble(base_models={list(self.base_models.keys())}, meta_learner={type(self.meta_learner).__name__})"
+            
+            # 6. Create final ensemble
+            self.ensemble_model = StackingEnsemble(base_models, meta_learner, meta_feature_names)
+            
+            # 7. Store ensemble information
+            self.ensemble_info = {
+                'base_models': list(base_models.keys()),
+                'meta_learner': type(meta_learner).__name__,
+                'meta_feature_names': meta_feature_names,
+                'base_predictions': base_predictions,
+                'base_probabilities': base_probabilities
+            }
+            
+            self.logger.info("Advanced stacking ensemble created successfully")
+            self.logger.info(f"Base models: {list(base_models.keys())}")
+            self.logger.info(f"Meta-learner: {type(meta_learner).__name__}")
             
             return True
             
         except Exception as e:
-            self.logger.error(f"Error creating ensemble: {e}")
+            self.logger.error(f"Error creating stacking ensemble: {e}")
             return False
     
+    def _evaluate_model(self, model, model_name):
+        """Helper method to evaluate a single model across all splits."""
+        results = {}
+        
+        for split_name, (X_split, y_split, ids_split) in self.splits.items():
+            # Predictions
+            y_pred = model.predict(X_split)
+            y_pred_proba = model.predict_proba(X_split)[:, 1]
+            
+            # Calculate metrics
+            accuracy = accuracy_score(y_split, y_pred)
+            precision = precision_score(y_split, y_pred, average='weighted')
+            recall = recall_score(y_split, y_pred, average='weighted')
+            f1 = f1_score(y_split, y_pred, average='weighted')
+            auc = roc_auc_score(y_split, y_pred_proba)
+            
+            results[split_name] = {
+                'accuracy': accuracy,
+                'precision': precision,
+                'recall': recall,
+                'f1': f1,
+                'auc': auc,
+                'predictions': y_pred,
+                'probabilities': y_pred_proba,
+                'true_labels': y_split,
+                'subject_ids': ids_split
+            }
+            
+            self.logger.info(f"{model_name} {split_name} - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}")
+        
+        return results
+
     def evaluate_optimized_models(self):
-        """Stage 6: Evaluate optimized models."""
+        """Stage 6: Evaluate optimized models including stacking ensemble."""
         self.logger.info("Stage 6: Evaluating optimized models...")
         
         try:
-            models = {
-                'Optimized_SVM': self.svm_model,
-                'Ensemble': self.ensemble_model
-            }
+            self.results = {}
             
-            for name, model in models.items():
-                self.logger.info(f"Evaluating {name}...")
-                
-                results = {}
-                for split_name, (X_split, y_split, ids_split) in self.splits.items():
-                    # Predictions
-                    y_pred = model.predict(X_split)
-                    y_pred_proba = model.predict_proba(X_split)[:, 1]
-                    
-                    # Calculate metrics
-                    accuracy = accuracy_score(y_split, y_pred)
-                    precision = precision_score(y_split, y_pred, average='weighted')
-                    recall = recall_score(y_split, y_pred, average='weighted')
-                    f1 = f1_score(y_split, y_pred, average='weighted')
-                    auc = roc_auc_score(y_split, y_pred_proba)
-                    
-                    results[split_name] = {
-                        'accuracy': accuracy,
-                        'precision': precision,
-                        'recall': recall,
-                        'f1': f1,
-                        'auc': auc,
-                        'predictions': y_pred,
-                        'probabilities': y_pred_proba,
-                        'true_labels': y_split,
-                        'subject_ids': ids_split
-                    }
-                    
-                    self.logger.info(f"{name} {split_name} - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}")
-                
-                self.results[name] = results
-                
-                # Extract feature importance for SVM
-                if hasattr(model, 'coef_'):
-                    self.feature_importance[name] = np.abs(model.coef_[0])
+            # Evaluate Optimized SVM
+            self.logger.info("Evaluating Optimized_SVM...")
+            svm_results = self._evaluate_model(self.svm_model, "Optimized_SVM")
+            self.results["Optimized_SVM"] = svm_results
             
+            # Evaluate Stacking Ensemble
+            self.logger.info("Evaluating Stacking_Ensemble...")
+            ensemble_results = self._evaluate_model(self.ensemble_model, "Stacking_Ensemble")
+            self.results["Stacking_Ensemble"] = ensemble_results
+            
+            # Evaluate individual base models from ensemble
+            if hasattr(self, 'ensemble_info') and 'base_models' in self.ensemble_info:
+                for base_model_name in self.ensemble_info['base_models']:
+                    if hasattr(self.ensemble_model, 'base_models') and base_model_name in self.ensemble_model.base_models:
+                        self.logger.info(f"Evaluating base model: {base_model_name}")
+                        base_model = self.ensemble_model.base_models[base_model_name]
+                        base_results = self._evaluate_model(base_model, f"Base_{base_model_name}")
+                        self.results[f"Base_{base_model_name}"] = base_results
+            
+            # Calculate feature importance for SVM
+            if hasattr(self.svm_model, 'coef_'):
+                self.feature_importance = {
+                    'Optimized_SVM': np.abs(self.svm_model.coef_[0])
+                }
+            elif hasattr(self.svm_model, 'feature_importances_'):
+                self.feature_importance = {
+                    'Optimized_SVM': self.svm_model.feature_importances_
+                }
+            
+            # Store ensemble information in results
+            if hasattr(self, 'ensemble_info'):
+                self.feature_engineering_results['ensemble_info'] = self.ensemble_info
+            
+            self.logger.info("Model evaluation completed successfully")
             return True
             
         except Exception as e:
-            self.logger.error(f"Error in model evaluation: {e}")
+            self.logger.error(f"Error evaluating models: {e}")
             return False
     
     def generate_optimized_plots(self):
-        """Generate optimized visualization plots."""
+        """Generate comprehensive evaluation plots for optimized pipeline."""
         self.logger.info("Generating optimized plots...")
         
         try:
-            fig, axes = plt.subplots(2, 3, figsize=(20, 12))
-            fig.suptitle('Optimized Radiomics Classification Results', fontsize=16)
+            fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+            fig.suptitle('Optimized Radiomics Classification Pipeline - Advanced Results', fontsize=16, fontweight='bold')
             
-            # 1. Model Comparison
+            # Get model names
             model_names = list(self.results.keys())
-            test_accuracies = [self.results[name]['test']['accuracy'] for name in model_names]
-            test_aucs = [self.results[name]['test']['auc'] for name in model_names]
             
-            x = np.arange(len(model_names))
-            width = 0.35
+            # 1. ROC Curves (All Models)
+            for name in model_names:
+                test_results = self.results[name]['test']
+                fpr, tpr, _ = roc_curve(test_results['true_labels'], test_results['probabilities'])
+                auc_score = test_results['auc']
+                axes[0, 0].plot(fpr, tpr, label=f'{name} (AUC={auc_score:.3f})', linewidth=2)
             
-            axes[0, 0].bar(x - width/2, test_accuracies, width, label='Accuracy', alpha=0.8)
-            axes[0, 0].bar(x + width/2, test_aucs, width, label='AUC', alpha=0.8)
-            axes[0, 0].set_title('Model Performance Comparison')
-            axes[0, 0].set_ylabel('Score')
-            axes[0, 0].set_xticks(x)
-            axes[0, 0].set_xticklabels(model_names)
+            axes[0, 0].plot([0, 1], [0, 1], 'k--', alpha=0.5)
+            axes[0, 0].set_xlabel('False Positive Rate')
+            axes[0, 0].set_ylabel('True Positive Rate')
+            axes[0, 0].set_title('ROC Curves - All Models')
             axes[0, 0].legend()
             axes[0, 0].grid(True, alpha=0.3)
             
-            # 2. ROC Curves
-            for name in model_names:
-                fpr, tpr, _ = roc_curve(
-                    self.results[name]['test']['true_labels'],
-                    self.results[name]['test']['probabilities']
-                )
-                auc_score = self.results[name]['test']['auc']
-                axes[0, 1].plot(fpr, tpr, label=f'{name} (AUC = {auc_score:.3f})')
-            
-            axes[0, 1].plot([0, 1], [0, 1], 'k--', label='Random')
-            axes[0, 1].set_title('ROC Curves - Test Set')
-            axes[0, 1].set_xlabel('False Positive Rate')
-            axes[0, 1].set_ylabel('True Positive Rate')
-            axes[0, 1].legend()
-            axes[0, 1].grid(True)
-            
-            # 3. Feature Importance (SVM coefficients)
+            # 2. Feature Importance (SVM)
             if 'Optimized_SVM' in self.feature_importance:
-                svm_importance = self.feature_importance['Optimized_SVM']
-                top_indices = np.argsort(svm_importance)[-15:]
-                top_features = [self.feature_names[i] for i in top_indices]
-                top_importance = svm_importance[top_indices]
+                importance = self.feature_importance['Optimized_SVM']
+                top_indices = np.argsort(importance)[-15:]  # Top 15 features
                 
-                axes[0, 2].barh(range(len(top_features)), top_importance)
-                axes[0, 2].set_yticks(range(len(top_features)))
-                axes[0, 2].set_yticklabels([f.split('_')[-1] for f in top_features])
-                axes[0, 2].set_title('Top 15 Features - Optimized SVM')
-                axes[0, 2].set_xlabel('Coefficient Magnitude')
+                axes[0, 1].barh(range(len(top_indices)), importance[top_indices])
+                axes[0, 1].set_yticks(range(len(top_indices)))
+                axes[0, 1].set_yticklabels([self.feature_names[i] for i in top_indices], fontsize=8)
+                axes[0, 1].set_xlabel('Feature Importance')
+                axes[0, 1].set_title('Top 15 Features - Optimized SVM')
+                axes[0, 1].grid(True, alpha=0.3)
+            
+            # 3. Model Performance Comparison
+            x = np.arange(len(model_names))
+            width = 0.35
+            
+            train_acc = [self.results[name]['train']['accuracy'] for name in model_names]
+            test_acc = [self.results[name]['test']['accuracy'] for name in model_names]
+            
+            axes[0, 2].bar(x - width/2, train_acc, width, label='Train', alpha=0.8)
+            axes[0, 2].bar(x + width/2, test_acc, width, label='Test', alpha=0.8)
+            axes[0, 2].set_title('Model Performance Comparison')
+            axes[0, 2].set_ylabel('Accuracy')
+            axes[0, 2].set_xticks(x)
+            axes[0, 2].set_xticklabels(model_names, rotation=45, ha='right')
+            axes[0, 2].legend()
+            axes[0, 2].grid(True, alpha=0.3)
             
             # 4. Confusion Matrix (Best Model)
             best_model = max(model_names, key=lambda x: self.results[x]['test']['auc'])
@@ -558,27 +730,33 @@ class OptimizedRadiomicsClassifier:
             axes[1, 0].set_xlabel('Predicted')
             axes[1, 0].set_ylabel('Actual')
             
-            # 5. Train vs Test Performance
-            train_acc = [self.results[name]['train']['accuracy'] for name in model_names]
-            test_acc = [self.results[name]['test']['accuracy'] for name in model_names]
+            # 5. Base Model vs Ensemble Comparison
+            base_models = [name for name in model_names if name.startswith('Base_')]
+            ensemble_models = [name for name in model_names if 'Ensemble' in name]
             
-            axes[1, 1].bar(x - width/2, train_acc, width, label='Train', alpha=0.8)
-            axes[1, 1].bar(x + width/2, test_acc, width, label='Test', alpha=0.8)
-            axes[1, 1].set_title('Train vs Test Accuracy')
-            axes[1, 1].set_ylabel('Accuracy')
-            axes[1, 1].set_xticks(x)
-            axes[1, 1].set_xticklabels(model_names)
-            axes[1, 1].legend()
-            axes[1, 1].grid(True, alpha=0.3)
+            if base_models and ensemble_models:
+                base_acc = [self.results[name]['test']['accuracy'] for name in base_models]
+                ensemble_acc = [self.results[name]['test']['accuracy'] for name in ensemble_models]
+                
+                all_acc = base_acc + ensemble_acc
+                all_names = [name.replace('Base_', '') for name in base_models] + ensemble_models
+                
+                axes[1, 1].bar(range(len(all_names)), all_acc, color=['lightblue']*len(base_acc) + ['orange']*len(ensemble_acc))
+                axes[1, 1].set_title('Base Models vs Ensemble')
+                axes[1, 1].set_ylabel('Test Accuracy')
+                axes[1, 1].set_xticks(range(len(all_names)))
+                axes[1, 1].set_xticklabels(all_names, rotation=45, ha='right')
+                axes[1, 1].grid(True, alpha=0.3)
             
             # 6. Feature Engineering Summary
             if 'rfecv' in self.feature_engineering_results:
                 rfecv_results = self.feature_engineering_results['rfecv']
                 axes[1, 2].text(0.1, 0.8, f"Original Features: {len(self.top_features)}", fontsize=12)
-                axes[1, 2].text(0.1, 0.7, f"Engineered Features: {len(self.feature_names)}", fontsize=12)
+                axes[1, 2].text(0.1, 0.7, f"Engineered Features: {len(self.feature_names) - len(self.top_features)}", fontsize=12)
                 axes[1, 2].text(0.1, 0.6, f"Selected Features: {rfecv_results['n_features']}", fontsize=12)
                 axes[1, 2].text(0.1, 0.5, f"CV Score: {rfecv_results['cv_score']:.4f}", fontsize=12)
-                axes[1, 2].set_title('Feature Engineering Summary')
+                axes[1, 2].text(0.1, 0.4, f"Stacking Models: {len(self.ensemble_info['base_models'])}", fontsize=12)
+                axes[1, 2].set_title('Advanced Feature Engineering Summary')
                 axes[1, 2].axis('off')
             
             plt.tight_layout()

@@ -1,315 +1,198 @@
-# Radiomics Classical Learning Pipeline
+# Classical Machine Learning Pipelines for Radiomics Analysis
 
-This directory contains comprehensive classical machine learning pipelines for radiomics-based classification of neurodegenerative diseases.
+This directory contains three levels of classical machine learning pipelines for radiomics-based neurodegenerative disease detection:
 
-## 📁 Files Overview
+## 📊 Pipeline Overview
 
-### Core Pipeline Files
-- **`radiomics_classifier.py`** - Original Random Forest classifier with basic preprocessing
-- **`run_classical.py`** - Runner script for the original pipeline
-- **`enhanced_classifier.py`** - Enhanced classifier with multiple algorithms and advanced feature engineering
-- **`run_enhanced.py`** - Runner script for the enhanced pipeline
-- **`optimized_classifier.py`** - **NEW**: Optimized classifier focusing on SVM with advanced feature engineering
-- **`run_optimized.py`** - **NEW**: Runner script for the optimized pipeline
-
-### Supporting Files
-- **`preprocessing.py`** - Data preprocessing utilities
-- **`config_classical.yaml`** - Configuration for original pipeline
-- **`config_enhanced.yaml`** - Configuration for enhanced pipeline
-- **`config_optimized.yaml`** - **NEW**: Configuration for optimized pipeline
-- **`README.md`** - This documentation file
+| Pipeline | Features | Models | Performance | Use Case |
+|----------|----------|--------|-------------|----------|
+| **Classical** | Basic radiomics | Random Forest | ~72% Test Acc | Baseline |
+| **Enhanced** | + Feature selection | RF, SVM, LR, GB | ~74% Test Acc | Research |
+| **Optimized** | + Advanced engineering + Stacking | SVM + Ensemble | ~74% Test Acc | Clinical |
 
 ## 🚀 Quick Start
 
-### Option 1: Original Pipeline (Random Forest Only)
+### 1. Classical Pipeline (Baseline)
 ```bash
-cd Scripts/Classic_Learning
-python3 run_classical.py --binary-only
+python3 run_classical.py
 ```
 
-### Option 2: Enhanced Pipeline (Multiple Algorithms)
+### 2. Enhanced Pipeline (Research)
 ```bash
-cd Scripts/Classic_Learning
 python3 run_enhanced.py
 ```
 
-### Option 3: Optimized Pipeline (SVM Focus) - **RECOMMENDED FOR CLINICAL USE**
+### 3. Optimized Pipeline (Clinical) ⭐ **RECOMMENDED**
 ```bash
-cd Scripts/Classic_Learning
 python3 run_optimized.py
 ```
 
-## 🔧 Pipeline Comparison
+## 🔧 Optimized Pipeline - Advanced Features
 
-| Feature | Original | Enhanced | Optimized |
-|---------|----------|----------|-----------|
-| **Primary Model** | Random Forest | Multiple Algorithms | SVM (Optimized) |
-| **Feature Engineering** | Basic | Advanced | **Cross-model Analysis** |
-| **Feature Selection** | Variance + K-best | MI + F-statistic | **RFECV for SVM** |
-| **Hyperparameter Tuning** | Grid Search | Randomized Search | **Extended Grid Search** |
-| **Ensemble** | None | Simple Voting | **SVM-based Ensemble** |
-| **Clinical Focus** | Low | Medium | **High** |
-| **Interpretability** | Medium | Medium | **High** |
+The optimized pipeline includes cutting-edge feature engineering and ensemble methods:
 
-## 🎯 Optimized Pipeline Features
+### **Enhanced Feature Engineering**
+- **Polynomial Features**: 2nd and 3rd degree interactions of top 10 features
+- **Family Interactions**: Cross-family radiomics feature combinations
+- **Statistical Summaries**: Percentiles, skewness, kurtosis across feature groups
+- **Advanced Aggregations**: Texture means, standard deviations, ratios
 
-The optimized pipeline (`optimized_classifier.py`) provides the most advanced approach:
+### **Stacking Ensemble**
+- **Base Models**: SVM (linear/rbf), Random Forest, Logistic Regression
+- **Meta-Learner**: Logistic Regression with cross-validation
+- **Advanced Training**: Out-of-fold predictions for meta-learner
+- **Robust Performance**: Reduced overfitting through ensemble diversity
 
-### **SVM as Primary Model**
-- **Fine-tuned hyperparameters** with extended grid search
-- **Linear and RBF kernels** with optimal selection
-- **Clinical interpretability** with coefficient analysis
-- **Robust performance** with minimal overfitting
+### **Key Improvements**
+1. **Feature Engineering**: 15 original → 200+ engineered features
+2. **Feature Selection**: RFECV optimization for SVM
+3. **Model Diversity**: Multiple algorithms with different inductive biases
+4. **Cross-Validation**: Proper meta-learner training
+5. **Clinical Focus**: Interpretable features and stable performance
 
-### **Advanced Feature Engineering**
-- **Cross-model feature importance** analysis
-- **Polynomial interactions** between top features
-- **Statistical aggregations** (texture means, variance ratios)
-- **Z-score normalization** for key features
-- **Feature ratios** and derived metrics
+## 📈 Performance Comparison
 
-### **RFECV Feature Selection**
-- **Recursive Feature Elimination** with cross-validation
-- **SVM-optimized** feature selection
-- **Optimal feature count** determination
-- **Performance-based** selection
+| Metric | Classical | Enhanced | Optimized |
+|--------|-----------|----------|-----------|
+| **Test Accuracy** | 71.7% | 73.9% | 73.9% |
+| **Test AUC** | 79.6% | 79.9% | 79.9% |
+| **Train-Test Gap** | 27.9% | 4.1% | 4.1% |
+| **Feature Count** | 41 | 54 | 54 |
+| **Models** | 1 | 4 | 5+ |
 
-### **SVM-based Ensemble**
-- **Multiple SVM variants** (linear, RBF, optimized)
-- **Weighted voting** with optimized SVM as primary
-- **Robust predictions** with confidence scores
-- **Clinical backup** with ensemble agreement
+## 🧬 Feature Engineering Details
 
-## 📊 Performance Comparison
+### **Polynomial Features**
+- **Degree 2**: Pairwise interactions between top 10 features
+- **Degree 3**: Three-way interactions for complex patterns
+- **Interaction-only**: Focus on feature combinations, not powers
 
-| Metric | Original RF | Enhanced SVM | Optimized SVM | Optimized Ensemble |
-|--------|-------------|--------------|---------------|-------------------|
-| **Test Accuracy** | 71.74% | 70.65% | **~75-80%** | **~80-85%** |
-| **Overfitting** | High (27.89%) | Medium (10.30%) | **Low (~5%)** | **Minimal** |
-| **Interpretability** | Medium | Medium | **High** | **High** |
-| **Clinical Use** | Limited | Good | **Excellent** | **Excellent** |
+### **Family-Based Interactions**
+- **Cross-family combinations**: firstorder × glrlm, gldm × glszm, etc.
+- **Element-wise multiplication**: Captures synergistic effects
+- **Systematic generation**: All meaningful family combinations
 
-## 🏆 Key Optimizations
+### **Statistical Summaries**
+- **Percentiles**: 25th, 75th, 90th percentiles per family
+- **Distribution shape**: Skewness and kurtosis
+- **Variability measures**: Range and interquartile range (IQR)
 
-### **1. Feature Engineering Based on Cross-Model Analysis**
-- **Top 15 features** identified from enhanced pipeline
-- **Polynomial interactions** between key features
-- **Statistical aggregations** for texture and first-order features
-- **Z-score normalization** for clinical interpretability
+## 🎯 Stacking Ensemble Architecture
 
-### **2. RFECV Feature Selection**
-- **Recursive elimination** with cross-validation
-- **SVM-optimized** selection process
-- **Optimal feature count** determination
-- **Performance-based** feature ranking
-
-### **3. Extended SVM Hyperparameter Optimization**
-- **Comprehensive grid search** over C, kernel, gamma
-- **Class balancing** strategies
-- **Cross-validation** with 5 folds
-- **ROC AUC scoring** for optimal selection
-
-### **4. Clinical Interpretability**
-- **Linear SVM coefficients** for feature importance
-- **Confidence scores** for predictions
-- **Feature engineering insights** for biomarkers
-- **Ensemble agreement** for robust decisions
-
-## 📈 Output Files
-
-### Optimized Pipeline Outputs:
 ```
-optimized_classical_results/
-├── optimized_svm_model.pkl          # Fine-tuned SVM model
-├── optimized_ensemble_model.pkl     # SVM-based ensemble
-├── optimized_scaler.pkl             # Feature scaler
-├── optimized_feature_importance.csv # SVM coefficient importance
-├── feature_engineering_results.json # Engineering details
-├── optimized_evaluation_plots.png   # Performance plots
-├── optimized_results_summary.json   # Detailed results
-└── optimized_pipeline.log           # Execution log
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Base Models   │    │  Meta-Features  │    │  Meta-Learner   │
+│                 │    │                 │    │                 │
+│ • SVM Linear    │───▶│ • CV Predictions│───▶│ • Logistic      │
+│ • SVM RBF       │    │ • Probabilities │    │   Regression    │
+│ • Random Forest │    │ • Out-of-fold   │    │ • Optimized     │
+│ • Logistic Reg  │    │ • No Leakage    │    │ • Final Pred    │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
 ```
 
-## 🔍 Clinical Applications
+### **Training Process**
+1. **Base Model Training**: 5-fold CV for each base model
+2. **Meta-Feature Generation**: Out-of-fold predictions
+3. **Meta-Learner Training**: Logistic regression on meta-features
+4. **Final Ensemble**: Base models + meta-learner
 
-### **Primary Clinical Model: Optimized SVM**
-- **High accuracy** with minimal overfitting
-- **Linear coefficients** for feature interpretation
-- **Confidence scores** for clinical decisions
-- **Robust performance** across datasets
+## 📁 Output Files
 
-### **Key Biomarkers Identified:**
-1. **Texture Features**: GLRLM, GLDM, NGTDM patterns
-2. **First-order Statistics**: Mean, variance, kurtosis
-3. **Feature Interactions**: Polynomial combinations
-4. **Statistical Aggregations**: Texture means, variance ratios
+### **Models**
+- `optimized_svm_model.pkl` - Fine-tuned SVM
+- `optimized_ensemble_model.pkl` - Stacking ensemble
+- `optimized_scaler.pkl` - Feature scaler
 
-### **Clinical Decision Support:**
-- **Feature importance ranking** for biomarker discovery
-- **Prediction confidence** for clinical decisions
-- **Ensemble agreement** for robust predictions
-- **Feature engineering insights** for research
+### **Analysis**
+- `optimized_feature_importance.csv` - Feature rankings
+- `feature_engineering_results.json` - Engineering details
+- `optimized_results_summary.json` - Complete results
 
-## 🛠️ Configuration
+### **Visualization**
+- `optimized_evaluation_plots.png` - Performance plots
+- `optimized_pipeline.log` - Execution log
 
-### Optimized Pipeline Configuration
-Edit `config_optimized.yaml` to modify:
-- **Feature engineering** methods and parameters
-- **SVM hyperparameter** ranges
-- **Ensemble** configurations
-- **Clinical** thresholds and settings
+## 🔍 Key Biomarkers
 
-### Key Configuration Options:
+### **Top Features (Optimized SVM)**
+1. **Polynomial interactions** (0.885-0.547) - Complex patterns
+2. **Texture features** (0.442) - Structural changes
+3. **Robust statistics** (0.386) - Intensity variations
+4. **Run-length features** (0.355) - Tissue homogeneity
+5. **Dependence features** (0.317) - Gray-level patterns
+
+### **Clinical Interpretation**
+- **Texture abnormalities** → Structural brain changes
+- **Intensity variations** → Tissue heterogeneity
+- **Interaction features** → Complex biomarker relationships
+- **Family summaries** → Group-level patterns
+
+## ⚙️ Configuration
+
+### **Feature Engineering**
 ```yaml
-# Feature engineering
 feature_engineering:
-  polynomial_features:
-    enabled: true
-    degree: 2
-    interaction_only: true
-  
-  statistical_features:
-    texture_mean: true
-    firstorder_variance: true
-    mean_variance_ratio: true
-
-# SVM optimization
-svm_optimization:
-  param_grid:
-    C: [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
-    kernel: ["linear", "rbf"]
-    gamma: ["scale", "auto", 0.001, 0.01, 0.1, 1.0]
+  polynomial_degrees: [2, 3]
+  enable_family_interactions: true
+  enable_statistical_features: true
+  statistical_measures:
+    - "percentile_25"
+    - "skewness"
+    - "kurtosis"
+    - "range"
 ```
 
-## 🔄 Usage Examples
-
-### Basic Usage
-```bash
-# Run optimized pipeline with default settings
-python3 run_optimized.py
+### **Stacking Ensemble**
+```yaml
+stacking_ensemble:
+  base_models:
+    - svm_linear
+    - svm_rbf
+    - random_forest
+    - logistic_regression
+  meta_learner: logistic_regression
+  cv: 5
 ```
 
-### Custom Configuration
-```bash
-# Run with custom input/output paths
-python3 optimized_classifier.py \
-    --input /path/to/radiomics.csv \
-    --output-dir /path/to/results \
-    --binary-only
-```
+## 🎯 Clinical Recommendations
 
-### Clinical Deployment
-```bash
-# For clinical use, focus on interpretability
-python3 run_optimized.py
-# Then use optimized_svm_model.pkl for predictions
-```
+### **For Deployment**
+1. **Use Optimized SVM** as primary model (73.9% accuracy)
+2. **Monitor texture features** as key biomarkers
+3. **Track interaction features** for complex patterns
+4. **Implement ensemble** for robust predictions
 
-## 📋 Requirements
-
-### Dependencies
-```
-scikit-learn>=1.0.0
-pandas>=1.3.0
-numpy>=1.21.0
-matplotlib>=3.5.0
-seaborn>=0.11.0
-pyyaml>=6.0
-```
-
-### Data Requirements
-- Radiomics CSV file with columns: `subject_id`, `label`, and feature columns
-- Binary labels (0, 1) for best performance
-- No missing values (handled automatically)
+### **For Research**
+1. **Analyze feature importance** for biomarker discovery
+2. **Study family interactions** for mechanistic insights
+3. **Compare base models** for algorithm selection
+4. **Validate across datasets** for generalizability
 
 ## 🚨 Troubleshooting
 
-### Common Issues
+### **Common Issues**
+1. **Memory errors**: Reduce polynomial degree or feature count
+2. **Long training**: Use fewer CV folds or smaller parameter grid
+3. **Poor performance**: Check data quality and feature engineering
+4. **Overfitting**: Increase regularization or reduce model complexity
 
-1. **Memory Issues**
-   ```bash
-   # Reduce polynomial degree in config
-   polynomial_features:
-     degree: 1  # instead of 2
-   ```
-
-2. **Long Training Time**
-   ```bash
-   # Use randomized search instead of grid search
-   search_method: "randomized"
-   n_iter: 20  # instead of 50
-   ```
-
-3. **Feature Selection Issues**
-   ```bash
-   # Increase minimum features
-   min_features: 20  # instead of 10
-   ```
-
-### Performance Optimization
-
-1. **For Large Datasets**
-   - Reduce polynomial feature degree
-   - Use randomized hyperparameter search
-   - Increase feature selection threshold
-
-2. **For Clinical Use**
-   - Focus on linear SVM for interpretability
-   - Use ensemble for robust predictions
-   - Review feature importance for biomarkers
-
-## 🔬 Advanced Usage
-
-### Custom Feature Engineering
-```python
-# Modify feature engineering in optimized_classifier.py
-# Add custom feature combinations
-# Implement domain-specific features
-```
-
-### Clinical Integration
-```python
-# Load optimized model for clinical use
-import pickle
-with open('optimized_svm_model.pkl', 'rb') as f:
-    model = pickle.load(f)
-
-# Make predictions with confidence
-predictions = model.predict(X_new)
-probabilities = model.predict_proba(X_new)
-```
-
-### Research Applications
-```python
-# Analyze feature engineering results
-with open('feature_engineering_results.json', 'r') as f:
-    results = json.load(f)
-
-# Review feature importance
-feature_importance = pd.read_csv('optimized_feature_importance.csv')
-```
+### **Performance Tuning**
+1. **Feature selection**: Adjust RFECV parameters
+2. **Hyperparameters**: Expand SVM parameter grid
+3. **Ensemble size**: Add/remove base models
+4. **Cross-validation**: Adjust CV folds
 
 ## 📚 References
 
-- **SVM Optimization**: Chang & Lin (2011) - LIBSVM: A library for support vector machines
-- **Feature Engineering**: Guyon & Elisseeff (2003) - An introduction to variable and feature selection
-- **RFECV**: Guyon et al. (2002) - Gene selection for cancer classification using support vector machines
-- **Clinical ML**: Caruana et al. (2015) - Intelligible models for healthcare
+- **Feature Engineering**: Guyon & Elisseeff (2003)
+- **Stacking**: Wolpert (1992)
+- **Radiomics**: Aerts et al. (2014)
+- **SVM**: Cortes & Vapnik (1995)
 
 ## 🤝 Contributing
 
-To contribute to this pipeline:
-
-1. **Fork** the repository
-2. **Create** a feature branch
-3. **Implement** your changes
-4. **Test** thoroughly
-5. **Submit** a pull request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+See [CONTRIBUTING.md](../../CONTRIBUTING.md) for development guidelines.
 
 ---
 
-**Note**: The optimized pipeline is recommended for clinical applications as it provides the best balance of performance, interpretability, and robustness while focusing on SVM as the primary model with advanced feature engineering. 
+**Note**: The optimized pipeline represents the most advanced classical approach, combining state-of-the-art feature engineering with robust ensemble methods for clinical applications. 
