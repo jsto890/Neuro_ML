@@ -28,7 +28,7 @@ def main():
     parser.add_argument('--output-dir', 
                        default='~/reseng202500013-ndd-ml/data/classical_results',
                        help='Output directory for results')
-    parser.add_argument('--config', 42
+    parser.add_argument('--config',
                        default='config_classical.yaml',
                        help='Path to configuration file')
     parser.add_argument('--random-state', 
