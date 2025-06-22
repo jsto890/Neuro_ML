@@ -435,8 +435,8 @@ def k_fold_training(args, k_folds=5):
             num_workers=args.num_workers
         )
         
-        # Initialize model for this fold with increased base channels
-        model = Simple3DCNN(num_classes=len(args.labels), base_channels=32)
+        # Initialize model for this fold
+        model = Simple3DCNN(num_classes=len(args.labels))
         
         # Train the model using training set and test on validation set
         model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history = train_sMRI_model(
