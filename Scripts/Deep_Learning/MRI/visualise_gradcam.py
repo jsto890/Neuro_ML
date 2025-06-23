@@ -116,7 +116,7 @@ def main():
         # cam_3d: numpy array [D, H, W], normalized [0,1]
 
         # 5) Extract original sMRI volume for overlay
-        smri_np = smri.squeeze().cpu().numpy()  # [D, H, W]
+        smri_np = smri.detach().squeeze().cpu().numpy()  # [D, H, W]
 
         # 6) Choose a slice to visualize (e.g., mid‐axial)
         D, H, W = smri_np.shape
