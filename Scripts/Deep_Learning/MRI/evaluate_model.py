@@ -33,7 +33,20 @@ sns.set_palette("husl")
 def load_model(model_path, num_classes=2, device='cpu'):
     """Load a trained model from .pth file."""
     model = Simple3DCNN(num_classes=num_classes)
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    
+    # Load the state dict
+    state_dict = torch.load(model_path, map_location=device)
+    
+    # Extract the actual input size from the saved classifier weight
+    classifier_weight = state_dict['classifier.0.weight']
+    actual_input_size = classifier_weight.shape[1]
+    
+    # Update the classifier with the correct input size
+    model.classifier[0] = nn.Linear(actual_input_size, 256)
+    model._initialized = True
+    
+    # Now load the state dict
+    model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
     return model
