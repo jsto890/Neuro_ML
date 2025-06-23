@@ -59,6 +59,7 @@ for subject_path in subjects:
     if input_nii is None:
         print(f"❌ {subject_id}: No .nii.gz file found in {subject_path}")
         continue
+    print(f"Processing {subject_id} → {input_nii}")
     try:
         img = nib.load(input_nii)
         data = img.get_fdata()
@@ -105,6 +106,8 @@ for subject_path in subjects:
         print(f"✅ {subject_id}: Postprocessed and saved.")
     except Exception as e:
         print(f"❌ {subject_id}: {e}")
+        import traceback
+        traceback.print_exc()
 
 # Write summary CSV
 with open(summary_csv, 'w', newline='') as csvfile:
