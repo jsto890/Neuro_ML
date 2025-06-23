@@ -10,7 +10,7 @@ from sklearn.metrics import roc_auc_score, accuracy_score
 import csv
 from datetime import datetime
 import uuid
-from sklearn.model_selection import KFold
+from sklearn.model_selection import StratifiedKFold
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -421,16 +421,33 @@ def k_fold_training(args, k_folds=5):
         num_workers=args.num_workers
     )
     
-    # Initialize k-fold
-    kfold = KFold(n_splits=k_folds, shuffle=True, random_state=42)
+    # Get labels for stratification
+    train_labels = [train_dataset.labels[i] for i in range(len(train_dataset))]
+    
+    # Initialize stratified k-fold to ensure balanced class distribution
+    skfold = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=42)
     
     # Store results for each fold
     fold_results = []
     folds_data = []  # For plotting
     
-    for fold, (train_ids, test_ids) in enumerate(kfold.split(train_dataset)):
+    for fold, (train_ids, test_ids) in enumerate(skfold.split(range(len(train_dataset)), train_labels)):
         print(f'\nFOLD {fold + 1}/{k_folds}')
         print(f'Training on {len(train_ids)} subjects, testing on {len(test_ids)} subjects')
+        
+        # Print class distribution for this fold
+        train_labels_fold = [train_labels[i] for i in train_ids]
+        test_labels_fold = [train_labels[i] for i in test_ids]
+        
+        print(f'Training set class distribution:')
+        train_counts = pd.Series(train_labels_fold).value_counts().sort_index()
+        for label, count in train_counts.items():
+            print(f'  Label {label}: {count} subjects ({count/len(train_labels_fold)*100:.1f}%)')
+        
+        print(f'Test set class distribution:')
+        test_counts = pd.Series(test_labels_fold).value_counts().sort_index()
+        for label, count in test_counts.items():
+            print(f'  Label {label}: {count} subjects ({count/len(test_labels_fold)*100:.1f}%)')
         
         # Create data samplers for this fold
         train_sampler = SubsetRandomSampler(train_ids)
