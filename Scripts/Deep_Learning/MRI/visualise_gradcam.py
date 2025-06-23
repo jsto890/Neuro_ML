@@ -9,7 +9,7 @@ import nibabel as nib
 
 from dataset import SMRIDataset
 from models_smri import SMRI_GradCAM_3DCNN
-from gradcam import compute_gradcam_3d
+from gradcam import compute_gradcam_3d, compute_gradcam_simple3d
 
 def overlay_heatmap_on_slice(mri_slice, cam_slice, cmap="hot", alpha=0.4):
     """
@@ -46,9 +46,54 @@ def main():
                                              num_workers=2)
 
     # 2) Instantiate and load model
-    model = SMRI_GradCAM_3DCNN(in_channels=1, base_channels=16, num_classes=3)
-    checkpoint = torch.load(args.checkpoint, map_location=args.device)
-    model.load_state_dict(checkpoint)
+    # Try to load as Simple3DCNN first (which is what was trained)
+    try:
+        from models_smri import Simple3DCNN
+        model = Simple3DCNN(num_classes=2)  # Binary classification
+        
+        # Load the state dict
+        state_dict = torch.load(args.checkpoint, map_location=args.device)
+        
+        # Extract the actual input size from the saved classifier weight
+        classifier_weight = state_dict['classifier.0.weight']
+        actual_input_size = classifier_weight.shape[1]
+        
+        # Update the classifier with the correct input size
+        model.classifier[0] = torch.nn.Linear(actual_input_size, 256)
+        model._initialized = True
+        
+        # Now load the state dict
+        model.load_state_dict(state_dict)
+        print("Loaded Simple3DCNN model successfully")
+        
+        # For GradCAM, we need to modify the model to expose the feature maps
+        # Create a wrapper that exposes the last conv layer
+        class GradCAMWrapper(torch.nn.Module):
+            def __init__(self, model):
+                super().__init__()
+                self.model = model
+                self.features = model.features
+                self.classifier = model.classifier
+                
+            def forward(self, x):
+                # Get features from the last conv layer
+                features = self.features(x)
+                # Flatten and classify
+                x = features.view(features.size(0), -1)
+                logits = self.classifier(x)
+                return logits, features
+        
+        model = GradCAMWrapper(model)
+        
+    except Exception as e:
+        print(f"Failed to load as Simple3DCNN: {e}")
+        print("Trying SMRI_GradCAM_3DCNN...")
+        
+        # Fallback to original GradCAM model
+        model = SMRI_GradCAM_3DCNN(in_channels=1, base_channels=16, num_classes=2)
+        checkpoint = torch.load(args.checkpoint, map_location=args.device)
+        model.load_state_dict(checkpoint)
+    
     model.to(args.device)
     model.eval()
 
@@ -62,7 +107,12 @@ def main():
         true_label = label.item()
 
         # 4) Compute Grad-CAM for the positive class (index=1)
-        cam_3d = compute_gradcam_3d(model, smri, target_class=1, device=args.device)
+        # Check if we're using the wrapped model
+        if hasattr(model, 'model'):  # Wrapped model
+            # Use a modified GradCAM function for Simple3DCNN
+            cam_3d = compute_gradcam_simple3d(model, smri, target_class=1, device=args.device)
+        else:  # Original GradCAM model
+            cam_3d = compute_gradcam_3d(model, smri, target_class=1, device=args.device)
         # cam_3d: numpy array [D, H, W], normalized [0,1]
 
         # 5) Extract original sMRI volume for overlay
