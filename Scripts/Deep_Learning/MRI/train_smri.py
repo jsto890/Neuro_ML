@@ -362,8 +362,13 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             best_val_acc = val_acc
             best_state = model.state_dict().copy()
             os.makedirs(checkpoint_dir, exist_ok=True)
-            torch.save(best_state, os.path.join(checkpoint_dir, "best_smri_model.pth"))
-            print(f"  [Checkpoint] Saved new best model (AUC={val_auc:.4f})")
+            
+            # Save model with simple filename since it's in a dated folder
+            model_filename = "best_smri_model.pth"
+            model_path = os.path.join(checkpoint_dir, model_filename)
+            
+            torch.save(best_state, model_path)
+            print(f"  [Checkpoint] Saved new best model (AUC={val_auc:.4f}) -> {model_filename}")
             no_improvement_count = 0
         else:
             no_improvement_count += 1
@@ -383,6 +388,17 @@ def k_fold_training(args, k_folds=5):
     """
     Perform k-fold cross validation on training set, with fixed validation set.
     """
+    # Create dated folder for this run
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_folder = f"run_{timestamp}"
+    run_dir = os.path.join(args.checkpoint_dir, run_folder)
+    os.makedirs(run_dir, exist_ok=True)
+    
+    print(f"\n" + "="*60)
+    print(f"STARTING NEW TRAINING RUN: {run_folder}")
+    print(f"Output directory: {run_dir}")
+    print("="*60)
+    
     # Filter the datasets based on labels
     train_df = filter_labels(args.train_csv, args.labels)
     val_df = filter_labels(args.val_csv, args.labels)
@@ -440,7 +456,7 @@ def k_fold_training(args, k_folds=5):
         
         # Train the model using training set and test on validation set
         model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history = train_sMRI_model(
-            model, train_loader, val_loader, args.epochs, args.device, args.checkpoint_dir, args
+            model, train_loader, val_loader, args.epochs, args.device, run_dir, args
         )
         
         # Store results
@@ -482,16 +498,51 @@ def k_fold_training(args, k_folds=5):
     print(f"Validation AUC: {avg_val_auc:.4f}")
     print(f"Validation Accuracy: {avg_val_acc:.4f}")
     
-    # Create evaluation plots
+    # Create evaluation plots in the run directory
     print("\nGenerating evaluation plots...")
-    output_dir = os.path.join(args.checkpoint_dir, "evaluation_plots")
-    create_training_plots(folds_data, output_dir)
-    print(f"Evaluation plots saved to: {output_dir}")
+    evaluation_dir = os.path.join(run_dir, "evaluation_plots")
+    create_training_plots(folds_data, evaluation_dir)
+    print(f"Evaluation plots saved to: {evaluation_dir}")
 
     # Save folds_data for later plotting
-    with open(os.path.join(args.checkpoint_dir, "folds_data.json"), "w") as f:
+    folds_data_filename = f"folds_data.json"
+    folds_data_path = os.path.join(run_dir, folds_data_filename)
+    with open(folds_data_path, "w") as f:
         json.dump(folds_data, f)
-    print(f"folds_data saved to: {os.path.join(args.checkpoint_dir, 'folds_data.json')}")
+    print(f"folds_data saved to: {folds_data_path}")
+    
+    # Create run summary
+    run_summary = {
+        'timestamp': timestamp,
+        'run_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        'run_folder': run_folder,
+        'model_filename': f"best_smri_model.pth",
+        'folds_data_filename': folds_data_filename,
+        'average_val_auc': avg_val_auc,
+        'average_val_acc': avg_val_acc,
+        'total_folds': len(fold_results),
+        'training_params': {
+            'epochs': args.epochs,
+            'batch_size': args.batch_size,
+            'learning_rate': args.learning_rate,
+            'weight_decay': args.weight_decay,
+            'k_folds': args.k_folds,
+            'labels': args.labels
+        },
+        'fold_results': fold_results
+    }
+    
+    # Save run summary
+    summary_filename = f"run_summary.json"
+    summary_path = os.path.join(run_dir, summary_filename)
+    with open(summary_path, "w") as f:
+        json.dump(run_summary, f, indent=2)
+    print(f"Run summary saved to: {summary_path}")
+    
+    print(f"\n" + "="*60)
+    print(f"TRAINING RUN COMPLETED: {run_folder}")
+    print(f"All outputs saved to: {run_dir}")
+    print("="*60)
     
     return fold_results
 
