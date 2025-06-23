@@ -62,14 +62,23 @@ def log_metrics(run_id, model_name, args, best_val_auc, best_val_acc, final_trai
         'notes': notes
     }
     
-    # Check if file exists to determine if we need to write headers
-    file_exists = os.path.isfile('logging.csv')
+    # Define the logging file path
+    log_file_path = os.path.expanduser("~/reseng20215-ndd-ml/data/logging.csv")
     
-    with open('logging.csv', 'a', newline='') as f:
+    # Ensure the directory exists
+    log_dir = os.path.dirname(log_file_path)
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # Check if file exists to determine if we need to write headers
+    file_exists = os.path.isfile(log_file_path)
+    
+    with open(log_file_path, 'a', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=row.keys())
         if not file_exists:
             writer.writeheader()
         writer.writerow(row)
+    
+    print(f"Metrics logged to: {log_file_path}")
 
 def create_training_plots(folds_data, output_dir="./deep_learning_plots"):
     """Create comprehensive training plots."""
