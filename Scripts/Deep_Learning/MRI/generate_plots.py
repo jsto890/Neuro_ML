@@ -232,16 +232,22 @@ def main():
                         help="Directory to save plots")
     parser.add_argument("--sample", action="store_true",
                         help="Generate sample plots for testing")
+    parser.add_argument("--folds_data", type=str, default=None,
+                        help="Path to folds_data.json from training")
     
     args = parser.parse_args()
     
-    if args.sample:
+    if args.folds_data:
+        print(f"Loading folds_data from: {args.folds_data}")
+        with open(args.folds_data, 'r') as f:
+            folds_data = json.load(f)
+    elif args.sample:
         print("Generating sample plots...")
         folds_data = create_sample_data()
     else:
         print("Error: No training data provided.")
         print("Use --sample to generate sample plots for testing.")
-        print("Or modify this script to load your actual training data.")
+        print("Or use --folds_data to load your actual training data.")
         return
     
     try:

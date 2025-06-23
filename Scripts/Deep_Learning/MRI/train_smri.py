@@ -487,6 +487,11 @@ def k_fold_training(args, k_folds=5):
     output_dir = os.path.join(args.checkpoint_dir, "evaluation_plots")
     create_training_plots(folds_data, output_dir)
     print(f"Evaluation plots saved to: {output_dir}")
+
+    # Save folds_data for later plotting
+    with open(os.path.join(args.checkpoint_dir, "folds_data.json"), "w") as f:
+        json.dump(folds_data, f)
+    print(f"folds_data saved to: {os.path.join(args.checkpoint_dir, 'folds_data.json')}")
     
     return fold_results
 
