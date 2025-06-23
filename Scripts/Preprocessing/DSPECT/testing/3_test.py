@@ -2,10 +2,25 @@ import nibabel as nib
 import numpy as np
 import os
 import sys
+import argparse
 
-def find_first_subject_file(base_dir):
-    """Finds the first registered subject file in the base directory."""
-    base_dir = os.path.expanduser(base_dir)
+# --- Argument Parser ---
+parser = argparse.ArgumentParser(description="Test script for registration quality.")
+parser.add_argument("--isHasel", action="store_true", help="Set this flag if running on the Hasel server.")
+args = parser.parse_args()
+
+# --- Path Configuration ---
+if args.isHasel:
+    # Path for Linux server (Hasel)
+    data_root = os.path.expanduser('~/reseng202500013-ndd-ml')
+else:
+    # Path for local Mac with mounted drive
+    data_root = '/Volumes/reseng202500013-ndd-ml'
+
+print(f"INFO: Using data root: {data_root}")
+
+def find_first_valid_subject_file(base_dir):
+    """Finds the first valid (non-empty) registered subject file."""
     if not os.path.isdir(base_dir):
         print(f"❌ Base directory not found: {base_dir}")
         return None, None
@@ -17,35 +32,40 @@ def find_first_subject_file(base_dir):
                 expected_file = f"{subject_dir}_registered.nii.gz"
                 file_path = os.path.join(subject_path, expected_file)
                 if os.path.exists(file_path):
-                    return subject_dir, file_path
+                    # Check if the file is valid (not empty)
+                    img = nib.load(file_path)
+                    if np.count_nonzero(img.get_fdata()) > 1000:
+                        print(f"INFO: Found valid subject to test: {subject_dir}")
+                        return subject_dir, file_path
+                    else:
+                        print(f"WARN: Skipping empty registered file for subject: {subject_dir}")
+                        
+    print(f"❌ Could not find any valid (non-empty) registered files in: {base_dir}")
     return None, None
 
 # === CONFIG ===
 # Search for the first available subject in the registered CN directory
-registered_base_dir = "~/reseng202500013-ndd-ml/data/preprocessed/SPECT/registered/CN"
-subject_id, registered_path = find_first_subject_file(registered_base_dir)
+registered_base_dir = os.path.join(data_root, "data/preprocessed/SPECT/registered/CN")
+subject_id, registered_path = find_first_valid_subject_file(registered_base_dir)
 
 if not registered_path:
-    print(f"❌ No registered subject found in {os.path.expanduser(registered_base_dir)}")
     sys.exit(1)
 
 # Make template path relative to the project root for portability
 try:
+    # Assumes script is in .../P4P/Scripts/Preprocessing/DSPECT/testing
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    project_root = os.path.abspath(os.path.join(script_dir, '..', '..', '..', '..', '..'))
+    project_root = os.path.abspath(os.path.join(script_dir, *['..']*5))
     template_path = os.path.join(project_root, "Templates/SPECT/symFPCITtemplate_MNI_norm.nii")
     if not os.path.exists(template_path):
-        # Fallback for different execution environments (e.g. running from root)
-        template_path = "Templates/SPECT/symFPCITtemplate_MNI_norm.nii"
+         template_path = "Templates/SPECT/symFPCITtemplate_MNI_norm.nii" # Fallback if CWD is project root
 except NameError:
-    # __file__ is not defined in some interactive environments
+    # __file__ is not defined in some interactive environments, assume CWD is project root
     template_path = "Templates/SPECT/symFPCITtemplate_MNI_norm.nii"
-
 
 print(f"\n🧪 Registration Quality Test for {subject_id}\n")
 print(f"Found registered file: {registered_path}")
 print(f"Using template file: {template_path}\n")
-
 
 # === HELPERS ===
 def get_image_info(path):
