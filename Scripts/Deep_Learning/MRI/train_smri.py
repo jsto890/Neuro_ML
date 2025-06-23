@@ -12,9 +12,17 @@ from datetime import datetime
 import uuid
 from sklearn.model_selection import KFold
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import json
+from pathlib import Path
 
 from dataset import SMRIDataset
 from models_smri import Simple3DCNN
+
+# Set style for plots
+plt.style.use('default')
+sns.set_palette("husl")
 
 def filter_labels(csv_path, labels):
     """Filter the CSV file to only include specified labels."""
@@ -63,10 +71,172 @@ def log_metrics(run_id, model_name, args, best_val_auc, best_val_acc, final_trai
             writer.writeheader()
         writer.writerow(row)
 
+def create_training_plots(folds_data, output_dir="./deep_learning_plots"):
+    """Create comprehensive training plots."""
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    # Create comprehensive plot
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    fig.suptitle('Deep Learning Training Results - AD vs CN Classification', fontsize=16, fontweight='bold')
+    
+    # 1. Training Loss
+    ax1 = axes[0, 0]
+    for fold_data in folds_data:
+        epochs = [d['epoch'] for d in fold_data['data']]
+        losses = [d['train_loss'] for d in fold_data['data']]
+        ax1.plot(epochs, losses, alpha=0.7, label=f"Fold {fold_data['fold']}")
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Training Loss')
+    ax1.set_title('Training Loss by Fold')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # 2. Training Accuracy
+    ax2 = axes[0, 1]
+    for fold_data in folds_data:
+        epochs = [d['epoch'] for d in fold_data['data']]
+        accs = [d['train_acc'] for d in fold_data['data']]
+        ax2.plot(epochs, accs, alpha=0.7, label=f"Fold {fold_data['fold']}")
+    ax2.set_xlabel('Epoch')
+    ax2.set_ylabel('Training Accuracy')
+    ax2.set_title('Training Accuracy by Fold')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    # 3. Validation AUC
+    ax3 = axes[0, 2]
+    for fold_data in folds_data:
+        epochs = [d['epoch'] for d in fold_data['data']]
+        aucs = [d['val_auc'] for d in fold_data['data']]
+        ax3.plot(epochs, aucs, alpha=0.7, label=f"Fold {fold_data['fold']}")
+    ax3.set_xlabel('Epoch')
+    ax3.set_ylabel('Validation AUC')
+    ax3.set_title('Validation AUC by Fold')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    
+    # 4. Best AUC per fold
+    ax4 = axes[1, 0]
+    best_aucs = []
+    fold_numbers = []
+    for fold_data in folds_data:
+        best_auc = max([d['val_auc'] for d in fold_data['data']])
+        best_aucs.append(best_auc)
+        fold_numbers.append(fold_data['fold'])
+    
+    bars = ax4.bar(fold_numbers, best_aucs, alpha=0.7, color='skyblue', edgecolor='black')
+    ax4.set_xlabel('Fold')
+    ax4.set_ylabel('Best Validation AUC')
+    ax4.set_title('Best AUC per Fold')
+    ax4.set_ylim(0.5, 1.0)
+    
+    # Add value labels on bars
+    for bar, auc in zip(bars, best_aucs):
+        height = bar.get_height()
+        ax4.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                f'{auc:.3f}', ha='center', va='bottom')
+    
+    ax4.grid(True, alpha=0.3)
+    
+    # 5. Final metrics comparison
+    ax5 = axes[1, 1]
+    final_metrics = []
+    metric_names = []
+    
+    for fold_data in folds_data:
+        final_epoch = fold_data['data'][-1]
+        final_metrics.extend([
+            final_epoch['val_auc'],
+            final_epoch['val_acc'],
+            final_epoch['train_acc']
+        ])
+        metric_names.extend(['Val AUC', 'Val Acc', 'Train Acc'])
+    
+    # Reshape for plotting
+    metrics_array = np.array(final_metrics).reshape(len(folds_data), 3)
+    
+    x = np.arange(len(folds_data))
+    width = 0.25
+    
+    ax5.bar(x - width, metrics_array[:, 0], width, label='Val AUC', alpha=0.8)
+    ax5.bar(x, metrics_array[:, 1], width, label='Val Acc', alpha=0.8)
+    ax5.bar(x + width, metrics_array[:, 2], width, label='Train Acc', alpha=0.8)
+    
+    ax5.set_xlabel('Fold')
+    ax5.set_ylabel('Score')
+    ax5.set_title('Final Metrics by Fold')
+    ax5.set_xticks(x)
+    ax5.set_xticklabels(fold_numbers)
+    ax5.legend()
+    ax5.grid(True, alpha=0.3)
+    
+    # 6. Training vs Validation Performance
+    ax6 = axes[1, 2]
+    final_train_accs = [fold_data['data'][-1]['train_acc'] for fold_data in folds_data]
+    final_val_accs = [fold_data['data'][-1]['val_acc'] for fold_data in folds_data]
+    
+    ax6.scatter(final_train_accs, final_val_accs, s=100, alpha=0.7, c='green')
+    ax6.plot([0.5, 1.0], [0.5, 1.0], 'k--', alpha=0.5)
+    
+    for i, fold_num in enumerate(fold_numbers):
+        ax6.annotate(f'F{fold_num}', (final_train_accs[i], final_val_accs[i]), 
+                    xytext=(5, 5), textcoords='offset points')
+    
+    ax6.set_xlabel('Final Training Accuracy')
+    ax6.set_ylabel('Final Validation Accuracy')
+    ax6.set_title('Training vs Validation Performance')
+    ax6.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(output_path / 'deep_learning_training_analysis.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # Create summary statistics
+    summary = {
+        'total_folds': len(folds_data),
+        'average_best_auc': np.mean(best_aucs),
+        'std_best_auc': np.std(best_aucs),
+        'min_best_auc': np.min(best_aucs),
+        'max_best_auc': np.max(best_aucs),
+        'fold_results': []
+    }
+    
+    for fold_data in folds_data:
+        fold_result = {
+            'fold': fold_data['fold'],
+            'epochs_trained': len(fold_data['data']),
+            'best_val_auc': max([d['val_auc'] for d in fold_data['data']]),
+            'final_val_auc': fold_data['data'][-1]['val_auc'],
+            'final_val_acc': fold_data['data'][-1]['val_acc'],
+            'final_train_acc': fold_data['data'][-1]['train_acc']
+        }
+        summary['fold_results'].append(fold_result)
+    
+    # Save summary
+    with open(output_path / 'training_summary.json', 'w') as f:
+        json.dump(summary, f, indent=2)
+    
+    # Print summary
+    print("\n" + "="*60)
+    print("DEEP LEARNING TRAINING SUMMARY")
+    print("="*60)
+    print(f"Total folds: {summary['total_folds']}")
+    print(f"Average best AUC: {summary['average_best_auc']:.4f} ± {summary['std_best_auc']:.4f}")
+    print(f"AUC range: {summary['min_best_auc']:.4f} - {summary['max_best_auc']:.4f}")
+    print("\nFOLD DETAILS:")
+    for fold_result in summary['fold_results']:
+        print(f"Fold {fold_result['fold']}: {fold_result['epochs_trained']} epochs, "
+              f"Best AUC: {fold_result['best_val_auc']:.4f}, "
+              f"Final Val Acc: {fold_result['final_val_acc']:.4f}")
+    print("="*60)
+    
+    return summary
+
 def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint_dir, args):
     """
     Trains model; saves best checkpoint by validation AUC into checkpoint_dir.
-    Returns the model loaded with best weights.
+    Returns the model loaded with best weights and training history.
     """
     # Calculate class weights for imbalanced data
     labels = []
@@ -108,6 +278,9 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     final_train_loss = 0.0
     final_train_acc = 0.0
     no_improvement_count = 0
+    
+    # Store training history
+    training_history = []
 
     for epoch in range(1, epochs + 1):
         # --- Training phase ---
@@ -162,6 +335,17 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         scheduler.step(val_auc)
         new_lr = optimizer.param_groups[0]['lr']
         
+        # Store epoch data
+        epoch_data = {
+            'epoch': epoch,
+            'train_loss': epoch_loss,
+            'train_acc': epoch_acc,
+            'val_auc': val_auc,
+            'val_acc': val_acc,
+            'lr': new_lr
+        }
+        training_history.append(epoch_data)
+        
         # Print learning rate change if it occurred
         lr_change = ""
         if new_lr != old_lr:
@@ -193,7 +377,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     if best_state is not None:
         model.load_state_dict(best_state)
     
-    return model, best_val_auc, best_val_acc, final_train_loss, final_train_acc
+    return model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history
 
 def k_fold_training(args, k_folds=5):
     """
@@ -226,6 +410,7 @@ def k_fold_training(args, k_folds=5):
     
     # Store results for each fold
     fold_results = []
+    folds_data = []  # For plotting
     
     for fold, (train_ids, test_ids) in enumerate(kfold.split(train_dataset)):
         print(f'\nFOLD {fold + 1}/{k_folds}')
@@ -254,7 +439,7 @@ def k_fold_training(args, k_folds=5):
         model = Simple3DCNN(num_classes=len(args.labels))
         
         # Train the model using training set and test on validation set
-        model, best_val_auc, best_val_acc, final_train_loss, final_train_acc = train_sMRI_model(
+        model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history = train_sMRI_model(
             model, train_loader, val_loader, args.epochs, args.device, args.checkpoint_dir, args
         )
         
@@ -265,6 +450,12 @@ def k_fold_training(args, k_folds=5):
             'best_val_acc': best_val_acc,
             'final_train_loss': final_train_loss,
             'final_train_acc': final_train_acc
+        })
+        
+        # Store training history for plotting
+        folds_data.append({
+            'fold': fold + 1,
+            'data': training_history
         })
         
         # Log metrics for this fold
@@ -290,6 +481,12 @@ def k_fold_training(args, k_folds=5):
     print(f"\nAverage across {k_folds} folds:")
     print(f"Validation AUC: {avg_val_auc:.4f}")
     print(f"Validation Accuracy: {avg_val_acc:.4f}")
+    
+    # Create evaluation plots
+    print("\nGenerating evaluation plots...")
+    output_dir = os.path.join(args.checkpoint_dir, "evaluation_plots")
+    create_training_plots(folds_data, output_dir)
+    print(f"Evaluation plots saved to: {output_dir}")
     
     return fold_results
 
