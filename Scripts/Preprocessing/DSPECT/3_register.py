@@ -5,14 +5,40 @@ import numpy as np
 import shutil
 from nilearn.image import resample_to_img, load_img
 from nilearn.image.resampling import BoundingBoxError
+import yaml
+import argparse
+
+print("Hello World! Step 3 registration script starting...")
+
+def fix_path(path):
+    """Convert config path to actual mounted path"""
+    # Remove any ~, home references, etc
+    clean_path = path.replace('~/', '').replace('reseng202500013-ndd-ml/', '')
+    # Join with the actual mount point
+    return os.path.join('/Volumes/reseng202500013-ndd-ml', clean_path)
+
+# Set up argument parser
+parser = argparse.ArgumentParser(description="Register SPECT images to template.")
+parser.add_argument("--diagnosis", type=str, choices=['CN', 'PD'], required=True, 
+                    help="Diagnosis group to process (CN or PD)")
+args = parser.parse_args()
+
+# Load config
+with open('config.yaml', 'r') as f:
+    config = yaml.safe_load(f)
 
 # === CONFIG ===
-input_dir = "/Volumes/FlaireHD/P4P/SPECT/CN/normalised"
-template_path = "/Users/jacksonschofield/Desktop/P4P/Templates/DSPECT_refs/symFPCITtemplate_MNI_norm.nii"
-output_base = "/Volumes/FlaireHD/P4P/SPECT/CN/registered"
+input_dir = os.path.join(fix_path(config['preprocessed_data']['spect_p']), 'normalised', args.diagnosis)
+template_path = fix_path(config['templates']['SPECT_template'])
+output_base = os.path.join(fix_path(config['preprocessed_data']['spect_p']), 'registered', args.diagnosis)
+
+print(f"\n🔄 Processing {args.diagnosis} subjects")
+print(f"📁 Input directory: {input_dir}")
+print(f"📁 Output directory: {output_base}")
+print(f"🎯 Template: {template_path}\n")
 
 # === HELPERS ===
-def recenter_affine(img):
+def recenter_affine(img): 
     data = img.get_fdata()
     shape = data.shape
     current_affine = img.affine

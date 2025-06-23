@@ -3,18 +3,46 @@ import nibabel as nib
 from nibabel.orientations import axcodes2ornt, ornt_transform, io_orientation
 import argparse
 import shutil
+import yaml
+
+def fix_path(path):
+    """Convert config path to actual mounted path"""
+    # Remove any ~, home references, etc
+    clean_path = path.replace('~/', '').replace('reseng202500013-ndd-ml/', '')
+    # Join with the actual mount point
+    return os.path.join('/Volumes/reseng202500013-ndd-ml', clean_path)
+
+# Set up argument parser
+parser = argparse.ArgumentParser(description="Reorient NIfTI files to RAS orientation.")
+parser.add_argument("--force", action="store_true", help="Force reprocessing even if output exists")
+parser.add_argument("--diagnosis", type=str, choices=['CN', 'PD'], required=True, 
+                    help="Diagnosis group to process (CN or PD)")
+args = parser.parse_args()
+
+# Load config
+with open('config.yaml', 'r') as f:
+    config = yaml.safe_load(f)
 
 # Define input and output directories
-root_dir = "/Volumes/FlaireHD/P4P/SPECT/CN"
-input_dir = os.path.join(root_dir, "raw")
-output_dir = os.path.join(root_dir, "reoriented")
+root_dir = fix_path(config['raw_data']['spect'])
+input_dir = os.path.join(root_dir, "PPMI", args.diagnosis)
+output_dir = os.path.join(fix_path(config['preprocessed_data']['spect_p']), "reoriented", args.diagnosis)
+
+print("\n=== Path Configuration ===")
+print(f"Config SPECT path: {config['raw_data']['spect']}")
+print(f"Root directory: {root_dir}")
+print(f"Input directory: {input_dir}")
+print(f"Output directory: {output_dir}")
+print("========================\n")
+
+# Verify input directory exists
+if not os.path.exists(input_dir):
+    print(f"❌ Error: Input directory does not exist: {input_dir}")
+    print("Please check that the path is correct and the drive is mounted.")
+    exit(1)
 
 # Create output dir if it doesn't exist
 os.makedirs(output_dir, exist_ok=True)
-
-parser = argparse.ArgumentParser(description="Reorient NIfTI files to RAS orientation.")
-parser.add_argument("--force", action="store_true", help="Force reprocessing even if output exists")
-args = parser.parse_args()
 
 def reorient_to_RAS(nifti_path, output_path):
     img = nib.load(nifti_path)
@@ -40,6 +68,9 @@ def reorient_to_RAS(nifti_path, output_path):
         print(f"[OK] Copied JSON -> {json_output_path}")
     else:
         print(f"[WARN] No matching JSON file found")
+
+print(f"\n🔄 Processing {args.diagnosis} subjects from: {input_dir}")
+print(f"📁 Output directory: {output_dir}\n")
 
 # Process all subjects
 for subject in sorted(os.listdir(input_dir)):

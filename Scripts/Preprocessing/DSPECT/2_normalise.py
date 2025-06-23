@@ -2,20 +2,47 @@ import os
 import nibabel as nib
 import numpy as np
 import shutil
+import yaml
+import argparse
 
-input_root = "/Volumes/FlaireHD/P4P/SPECT/CN/reoriented"
-output_root = "/Volumes/FlaireHD/P4P/SPECT/CN/normalised"
+def fix_path(path):
+    """Convert config path to actual mounted path"""
+    # Remove any ~, home references, etc
+    clean_path = path.replace('~/', '').replace('reseng202500013-ndd-ml/', '')
+    # Join with the actual mount point
+    return os.path.join('/Volumes/reseng202500013-ndd-ml', clean_path)
+
+# Set up argument parser
+parser = argparse.ArgumentParser(description="Normalize SPECT images.")
+parser.add_argument("--diagnosis", type=str, choices=['CN', 'PD'], required=True, 
+                    help="Diagnosis group to process (CN or PD)")
+args = parser.parse_args()
+
+with open('config.yaml', 'r') as f:
+    config = yaml.safe_load(f)
+
+input_root = os.path.join(fix_path(config['preprocessed_data']['spect_p']), 'reoriented', args.diagnosis)
+output_root = os.path.join(fix_path(config['preprocessed_data']['spect_p']), 'normalised', args.diagnosis)
+
+print(f"\n🔄 Processing {args.diagnosis} subjects")
+print(f"📁 Input directory: {input_root}")
+print(f"📁 Output directory: {output_root}\n")
 
 for subject in os.listdir(input_root):
-    if subject.startswith("._"):
+    if subject.startswith("._") or subject == ".DS_Store":
         continue  # skip macOS metadata
 
     in_dir = os.path.join(input_root, subject)
+    
+    # Check if it's actually a directory
+    if not os.path.isdir(in_dir):
+        continue  # skip non-directory items
+    
     out_dir = os.path.join(output_root, subject)
     os.makedirs(out_dir, exist_ok=True)
 
     for fname in os.listdir(in_dir):
-        if fname.startswith("._"):
+        if fname.startswith("._") or fname == ".DS_Store":
             continue  # skip macOS files
 
         input_path = os.path.join(in_dir, fname)
@@ -29,6 +56,7 @@ for subject in os.listdir(input_root):
                 norm_data = (data - np.mean(data)) / np.std(data)
                 norm_img = nib.Nifti1Image(norm_data, img.affine, img.header)
                 nib.save(norm_img, output_path)
+                print(f"✅ Successfully normalized {subject}")
             except Exception as e:
                 print(f"❌ Failed on {input_path}: {e}")
 

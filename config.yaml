@@ -4,7 +4,7 @@
 raw_data:
   smri: ~/reseng202500013-ndd-ml/data/raw/MRI
   pet: ~/reseng202500013-ndd-ml/data/raw/PET
-  spect: ~/reseng202500013-ndd-ml/data/raw/PET
+  spect: ~/reseng202500013-ndd-ml/data/raw/SPECT
 
 preprocessed_data:
   smri_p: ~/reseng202500013-ndd-ml/data/preprocessed/MRI/smriprep
@@ -18,4 +18,4 @@ templates:
   PET_brain_mask: ~/reseng202500013-ndd-ml/P4P/Templates/PET/brain_in_petspace.nii.gz
   PET_cereb_mask: ~/reseng202500013-ndd-ml/P4P/Templates/PET/cereb_in_petspace.nii.gz
   SPECT_occipital: ~/reseng202500013-ndd-ml/P4P/Templates/SPECT/occipital_mask.nii.gz
-  SPECT_template: ~/reseng202500013-ndd-ml/P4P/Templates/SPECT/symFPCITtemplate_MNI_norm_nii
+  SPECT_template: ~/reseng202500013-ndd-ml/P4P/Templates/SPECT/symFPCITtemplate_MNI_norm.nii

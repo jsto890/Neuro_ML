@@ -2,8 +2,8 @@ import nibabel as nib
 import matplotlib.pyplot as plt
 
 # === File paths ===
-before_path = "/Volumes/FlaireHD/P4P/SPECT/CN/registered/sub-I246577_PPMI_SPECT_CN/sub-I246577_PPMI_SPECT_CN_registered.nii.gz"
-after_path = "/Volumes/FlaireHD/P4P/SPECT/CN/masked/sub-I246577_PPMI_SPECT_CN/sub-I246577_PPMI_SPECT_CN_masked.nii.gz"
+before_path = "/Volumes/reseng202500013-ndd-ml/data/preprocessed/SPECT/registered/CN/sub-I246577_PPMI_SPECT_CN/sub-I246577_PPMI_SPECT_CN_registered.nii.gz"
+after_path = "/Volumes/reseng202500013-ndd-ml/data/preprocessed/SPECT/masked/CN/sub-I246577_PPMI_SPECT_CN/sub-I246577_PPMI_SPECT_CN_masked.nii.gz"
 
 # === Load data ===
 before_img = nib.load(before_path)
