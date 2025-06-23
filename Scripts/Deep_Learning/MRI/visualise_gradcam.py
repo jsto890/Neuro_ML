@@ -136,7 +136,14 @@ def main():
 
         # 8) Optionally save the entire 3D heatmap as a NIfTI (use the same affine as input)
         #    We need the original affine → load from nibabel:
-        nifti_path = os.path.join(args.data_root, f"{val_dataset.subjects[i]}.nii.gz")
+        # Use the same path construction as the dataset
+        nifti_path = os.path.join(
+            args.data_root,
+            "smriprep",
+            val_dataset.subjects[i],
+            "anat",
+            f"{val_dataset.subjects[i]}_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w_brain_zscore.nii.gz"
+        )
         try:
             orig_nii = nib.load(nifti_path)
             heatmap_nii = nib.Nifti1Image(cam_3d, affine=orig_nii.affine)
