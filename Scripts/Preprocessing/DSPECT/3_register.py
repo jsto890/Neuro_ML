@@ -12,10 +12,8 @@ print("Hello World! Step 3 registration script starting...")
 
 def fix_path(path):
     """Convert config path to actual mounted path"""
-    # Remove any ~, home references, etc
-    clean_path = path.replace('~/', '').replace('reseng202500013-ndd-ml/', '')
-    # Join with the actual mount point
-    return os.path.join('/Volumes/reseng202500013-ndd-ml', clean_path)
+    # Since we're running from inside the research drive, just expand ~
+    return os.path.expanduser(path)
 
 # Set up argument parser
 parser = argparse.ArgumentParser(description="Register SPECT images to template.")

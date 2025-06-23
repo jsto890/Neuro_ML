@@ -2,8 +2,8 @@ import nibabel as nib
 import numpy as np
 
 # File paths
-before_path = "/Volumes/reseng202500013-ndd-ml/data/preprocessed/SPECT/reoriented/CN/sub-I246577_PPMI_SPECT_CN/sub-I246577_PPMI_SPECT_CN_RAS.nii.gz"
-after_path = "/Volumes/reseng202500013-ndd-ml/data/preprocessed/SPECT/normalised/CN/sub-I246577_PPMI_SPECT_CN/sub-I246577_PPMI_SPECT_CN_RAS.nii.gz"
+before_path = "~/reseng202500013-ndd-ml/data/preprocessed/SPECT/reoriented/CN/sub-I246577_PPMI_SPECT_CN/sub-I246577_PPMI_SPECT_CN_RAS.nii.gz"
+after_path = "~/reseng202500013-ndd-ml/data/preprocessed/SPECT/normalised/CN/sub-I246577_PPMI_SPECT_CN/sub-I246577_PPMI_SPECT_CN_RAS.nii.gz"
 
 def get_stats(path):
     img = nib.load(path)

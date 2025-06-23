@@ -3,7 +3,7 @@ import numpy as np
 
 # === CONFIG ===
 subject_id = "sub-I246577_PPMI_SPECT_CN"
-registered_path = f"/Volumes/reseng202500013-ndd-ml/data/preprocessed/SPECT/registered/CN/{subject_id}/{subject_id}_registered.nii.gz"
+registered_path = f"~/reseng202500013-ndd-ml/data/preprocessed/SPECT/registered/CN/{subject_id}/{subject_id}_registered.nii.gz"
 template_path = "/Users/jacksonschofield/Desktop/P4P/Templates/SPECT/symFPCITtemplate_MNI_norm.nii"
 
 print(f"\n🧪 Registration Quality Test for {subject_id}\n")
