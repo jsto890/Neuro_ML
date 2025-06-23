@@ -105,7 +105,9 @@ def main():
         """
         smri = smri.to(args.device)
         true_label = label.item()
-
+        
+        print(f"\nProcessing subject {i+1}: {val_dataset.subjects[i]} (True label: {true_label})")
+        
         # 4) Compute Grad-CAM for the positive class (index=1)
         # Check if we're using the wrapped model
         if hasattr(model, 'model'):  # Wrapped model
@@ -135,9 +137,18 @@ def main():
         # 8) Optionally save the entire 3D heatmap as a NIfTI (use the same affine as input)
         #    We need the original affine → load from nibabel:
         nifti_path = os.path.join(args.data_root, f"{val_dataset.subjects[i]}.nii.gz")
-        orig_nii = nib.load(nifti_path)
-        heatmap_nii = nib.Nifti1Image(cam_3d, affine=orig_nii.affine)
-        nib.save(heatmap_nii, os.path.join(args.output_dir, f"{val_dataset.subjects[i]}_gradcam.nii.gz"))
+        try:
+            orig_nii = nib.load(nifti_path)
+            heatmap_nii = nib.Nifti1Image(cam_3d, affine=orig_nii.affine)
+            nifti_output_path = os.path.join(args.output_dir, f"{val_dataset.subjects[i]}_gradcam.nii.gz")
+            nib.save(heatmap_nii, nifti_output_path)
+            print(f"Saved NIfTI heatmap: {nifti_output_path}")
+        except FileNotFoundError:
+            print(f"Warning: Could not find original NIfTI file: {nifti_path}")
+            print(f"Skipping NIfTI save for subject: {val_dataset.subjects[i]}")
+        except Exception as e:
+            print(f"Warning: Error saving NIfTI for subject {val_dataset.subjects[i]}: {e}")
+            print("Continuing with PNG output only...")
 
         # 9) Break after a few subjects (remove this break to run on all)
         if i >= 4:
