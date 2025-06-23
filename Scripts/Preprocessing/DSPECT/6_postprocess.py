@@ -44,9 +44,19 @@ subjects = [d for d in os.listdir(input_dir) if d.startswith('sub-')]
 all_voxels = []
 subject_stats = []
 
+def find_first_nii_gz(subject_folder):
+    files = [f for f in os.listdir(subject_folder) if f.endswith('.nii.gz')]
+    if not files:
+        return None
+    return os.path.join(subject_folder, files[0])
+
 # First pass: collect all nonzero voxels for global stats
 for subject_id in subjects:
-    input_nii = os.path.join(input_dir, subject_id, f"{subject_id}_finalised.nii.gz")
+    subject_folder = os.path.join(input_dir, subject_id)
+    input_nii = find_first_nii_gz(subject_folder)
+    if input_nii is None:
+        print(f"❌ {subject_id}: No .nii.gz file found in {subject_folder}")
+        continue
     try:
         img = nib.load(input_nii)
         data = img.get_fdata()
@@ -67,8 +77,12 @@ print(f"Global mean: {global_mean:.4f}, Global std: {global_std:.4f}")
 
 # Second pass: normalise and save, collect stats
 for subject_id in subjects:
-    input_nii = os.path.join(input_dir, subject_id, f"{subject_id}_finalised.nii.gz")
+    subject_folder = os.path.join(input_dir, subject_id)
+    input_nii = find_first_nii_gz(subject_folder)
     output_nii = os.path.join(output_dir, f"{subject_id}_postprocessed.nii.gz")
+    if input_nii is None:
+        print(f"❌ {subject_id}: No .nii.gz file found in {subject_folder}")
+        continue
     try:
         img = nib.load(input_nii)
         data = img.get_fdata()
