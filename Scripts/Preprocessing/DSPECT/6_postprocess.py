@@ -40,22 +40,24 @@ print(f"📁 Input directory: {input_dir}")
 print(f"📁 Output directory: {output_dir}")
 print(f"📄 Summary CSV: {summary_csv}\n")
 
-subjects = [d for d in os.listdir(input_dir) if d.startswith('sub-')]
+subjects = sorted(Path(input_dir).glob("sub-*"))
+print(f"DEBUG: Found {len(subjects)} subject folders. Example: {[s.name for s in subjects[:5]]}")
 all_voxels = []
 subject_stats = []
 
-def find_first_nii_gz(subject_folder):
-    files = [f for f in os.listdir(subject_folder) if f.endswith('.nii.gz')]
+def find_first_nii_gz(subject_folder: Path):
+    files = list(subject_folder.glob("*.nii.gz"))
+    print(f"DEBUG: {subject_folder} found {len(files)} nii.gz files: {[f.name for f in files]}")
     if not files:
         return None
-    return os.path.join(subject_folder, files[0])
+    return str(files[0])
 
 # First pass: collect all nonzero voxels for global stats
-for subject_id in subjects:
-    subject_folder = os.path.join(input_dir, subject_id)
-    input_nii = find_first_nii_gz(subject_folder)
+for subject_path in subjects:
+    subject_id = subject_path.name
+    input_nii = find_first_nii_gz(subject_path)
     if input_nii is None:
-        print(f"❌ {subject_id}: No .nii.gz file found in {subject_folder}")
+        print(f"❌ {subject_id}: No .nii.gz file found in {subject_path}")
         continue
     try:
         img = nib.load(input_nii)
@@ -76,12 +78,12 @@ global_std = all_voxels_flat.std()
 print(f"Global mean: {global_mean:.4f}, Global std: {global_std:.4f}")
 
 # Second pass: normalise and save, collect stats
-for subject_id in subjects:
-    subject_folder = os.path.join(input_dir, subject_id)
-    input_nii = find_first_nii_gz(subject_folder)
+for subject_path in subjects:
+    subject_id = subject_path.name
+    input_nii = find_first_nii_gz(subject_path)
     output_nii = os.path.join(output_dir, f"{subject_id}_postprocessed.nii.gz")
     if input_nii is None:
-        print(f"❌ {subject_id}: No .nii.gz file found in {subject_folder}")
+        print(f"❌ {subject_id}: No .nii.gz file found in {subject_path}")
         continue
     try:
         img = nib.load(input_nii)
@@ -112,4 +114,5 @@ with open(summary_csv, 'w', newline='') as csvfile:
     for row in subject_stats:
         writer.writerow(row)
 
-print(f"\n✅ Step 6 complete. Summary written to {summary_csv}") 
+print(f"\n✅ Step 6 complete. Summary written to {summary_csv}")
+print(f"DEBUG: Processed {len(subject_stats)} subjects. Summary written to {summary_csv}")
