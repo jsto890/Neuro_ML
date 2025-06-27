@@ -15,8 +15,8 @@ from datetime import datetime
 # Add the current directory to the path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from improved_optimized_classifier import ImprovedOptimizedRadiomicsClassifier
-from optimized_classifier import OptimizedRadiomicsClassifier
+from improved_optimized_classifier import ImprovedOptimizedRadiomicsClassifier as ImprovedClassifier
+from optimized_classifier import ImprovedOptimizedRadiomicsClassifier as OriginalClassifier
 
 def test_improved_classifier(input_path, output_dir):
     """Test the improved classifier and compare with original."""
@@ -33,7 +33,7 @@ def test_improved_classifier(input_path, output_dir):
     print("\n1. Running Improved Optimized Classifier...")
     print("-" * 40)
     
-    improved_classifier = ImprovedOptimizedRadiomicsClassifier(
+    improved_classifier = ImprovedClassifier(
         input_path=input_path,
         output_dir=str(improved_output),
         random_state=42,
@@ -106,7 +106,7 @@ def test_improved_classifier(input_path, output_dir):
     print("\n2. Running Original Optimized Classifier...")
     print("-" * 40)
     
-    original_classifier = OptimizedRadiomicsClassifier(
+    original_classifier = OriginalClassifier(
         input_path=input_path,
         output_dir=str(original_output),
         random_state=42,
