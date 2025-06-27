@@ -552,8 +552,8 @@ class OptimizedRadiomicsClassifier:
                     'kernel': Categorical(['linear', 'rbf', 'poly']),
                     'degree': Integer(2, 3),  # for poly kernel
                     'class_weight': Categorical(['balanced']),
-                    'max_iter': Integer(15000, 30000),
-                    'tol': Real(1e-4, 1e-1, prior='log-uniform')
+                    'max_iter': Integer(80000, 100000),  # Increased max iterations to 80k-100k
+                    'tol': Real(1e-5, 1e-3, prior='log-uniform')  # Reduced tolerance (smaller values)
                 }
                 
                 # Bayesian optimization
@@ -601,8 +601,8 @@ class OptimizedRadiomicsClassifier:
                     'kernel': ['linear', 'rbf', 'poly'],
                     'degree': [2, 3],  # for poly kernel
                     'class_weight': ['balanced'],
-                    'max_iter': [10000],
-                    'tol': [1e-2]
+                    'max_iter': [80000],  # Increased max iterations to 80k
+                    'tol': [1e-4]  # Reduced tolerance
                 }
                 
                 grid_search = GridSearchCV(
@@ -816,8 +816,8 @@ class OptimizedRadiomicsClassifier:
             
             # 1. Define diverse base models
             base_models = {
-                'svm_linear': SVC(kernel='linear', probability=True, random_state=self.random_state, max_iter=10000, tol=1e-2),
-                'svm_rbf': SVC(kernel='rbf', probability=True, random_state=self.random_state, max_iter=10000, tol=1e-2),
+                'svm_linear': SVC(kernel='linear', probability=True, random_state=self.random_state, max_iter=80000, tol=1e-4),
+                'svm_rbf': SVC(kernel='rbf', probability=True, random_state=self.random_state, max_iter=80000, tol=1e-4),
                 'random_forest': RandomForestClassifier(
                     n_estimators=200, 
                     max_depth=10, 
@@ -829,7 +829,7 @@ class OptimizedRadiomicsClassifier:
                     C=1.0, 
                     class_weight='balanced', 
                     random_state=self.random_state,
-                    max_iter=10000
+                    max_iter=80000
                 )
             }
             
@@ -890,7 +890,7 @@ class OptimizedRadiomicsClassifier:
                 C=1.0, 
                 class_weight='balanced', 
                 random_state=self.random_state,
-                max_iter=10000
+                max_iter=80000
             )
             
             # Use cross-validation to train meta-learner
