@@ -47,8 +47,16 @@ class Simple3DCNN(nn.Module):
             x = self.features(x)
             n_features = x.view(x.size(0), -1).size(1)
         
-        # Replace the first linear layer with the correct size
-        self.classifier[0] = nn.Linear(n_features, 256)
+        # Get the device of the input tensor
+        device = x.device
+        
+        # Replace the first linear layer with the correct size and move to the same device
+        self.classifier[0] = nn.Linear(n_features, 256).to(device)
+        
+        # Ensure all classifier layers are on the same device
+        for layer in self.classifier:
+            layer.to(device)
+            
         self._initialized = True
 
     def forward(self, x):
