@@ -63,7 +63,7 @@ def log_metrics(run_id, model_name, args, best_val_auc, best_val_acc, final_trai
     }
     
     # Define the logging file path
-    log_file_path = os.path.expanduser("~/reseng20215-ndd-ml/data/logging.csv")
+    log_file_path = os.path.expanduser("~/reseng202500013-ndd-ml/data/logging.csv")
     
     # Ensure the directory exists
     log_dir = os.path.dirname(log_file_path)
