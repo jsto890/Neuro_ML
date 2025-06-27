@@ -221,8 +221,8 @@ class ImprovedOptimizedRadiomicsClassifier:
                 
                 # Get unique labels
                 unique_labels = self.data[label_col].unique()
-            self.logger.info(f"Unique labels: {unique_labels}")
-            
+                self.logger.info(f"Unique labels: {unique_labels}")
+                
                 # Filter to binary (0, 1)
                 if len(unique_labels) > 2:
                     # Keep only classes 0 and 1
@@ -236,7 +236,7 @@ class ImprovedOptimizedRadiomicsClassifier:
                 self.subject_ids = np.arange(len(self.data))
                 
                 # Log final data shape
-            self.logger.info(f"Data shape: {self.X.shape}")
+                self.logger.info(f"Data shape: {self.X.shape}")
                 self.logger.info(f"Labels: {np.unique(self.y)} (counts: {[np.sum(self.y == label) for label in np.unique(self.y)]})")
             
             return True
@@ -290,7 +290,7 @@ class ImprovedOptimizedRadiomicsClassifier:
                 # Combine all features
                 X_engineered = np.hstack([X_poly, texture_mean, texture_std])
                 engineered_feature_names = poly_feature_names + ['texture_mean', 'texture_std']
-                else:
+            else:
                 X_engineered = X_poly
                 engineered_feature_names = poly_feature_names
             
