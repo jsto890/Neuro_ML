@@ -570,7 +570,7 @@ class ImprovedOptimizedRadiomicsClassifier:
                     C=1.0,  # Conservative C value
                     gamma='scale'
                 ),
-                'logistic_regression': LogisticRegression(C=0.1  # Strong regularization, 
+                'logistic_regression': LogisticRegression(C=0.1,  # Strong regularization
                     class_weight='balanced', 
                     random_state=self.random_state,
                     max_iter=1000
