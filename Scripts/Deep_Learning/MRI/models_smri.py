@@ -3,6 +3,17 @@
 import torch
 import torch.nn as nn
 
+# --- Additional imports for model variants ---
+try:
+    from monai.networks.nets import resnet, DenseNet121
+except ImportError:
+    resnet = None
+    DenseNet121 = None
+try:
+    from efficientnet_pytorch_3d import EfficientNet3D
+except ImportError:
+    EfficientNet3D = None
+
 class Simple3DCNN(nn.Module):
     """
     A straightforward 3DxCNN for binary classification (e.g. AD vs PD vs CN).
@@ -112,3 +123,27 @@ class SMRI_GradCAM_3DCNN(nn.Module):
         out  = out.view(out.size(0), -1)  # [B, 64]
         logits = self.classifier(out)     # [B, num_classes]
         return logits, fmap
+
+# --- Model Factory Function ---
+def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16):
+    """
+    Returns a 3D CNN model instance by name.
+    Supported: 'Simple3DCNN', 'ResNet18_3D', 'DenseNet121_3D', 'EfficientNetB0_3D'
+    """
+    model_name = model_name.lower()
+    if model_name == "simple3dcnn":
+        return Simple3DCNN(num_classes=num_classes, base_channels=base_channels)
+    elif model_name == "resnet18_3d":
+        if resnet is None:
+            raise ImportError("MONAI is required for 3D ResNet. Install with 'pip install monai'.")
+        return resnet.resnet18(spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes)
+    elif model_name == "densenet121_3d":
+        if DenseNet121 is None:
+            raise ImportError("MONAI is required for 3D DenseNet. Install with 'pip install monai'.")
+        return DenseNet121(spatial_dims=3, in_channels=in_channels, out_channels=num_classes)
+    elif model_name == "efficientnetb0_3d":
+        if EfficientNet3D is None:
+            raise ImportError("efficientnet_pytorch_3d is required for EfficientNet3D. Install with 'pip install git+https://github.com/shijianjian/EfficientNet-PyTorch-3D'.")
+        return EfficientNet3D.from_name("efficientnet-b0", override_params={'num_classes': num_classes, 'in_channels': in_channels})
+    else:
+        raise ValueError(f"Unknown model name: {model_name}")

@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 
 from dataset import SMRIDataset
-from models_smri import Simple3DCNN
+from models_smri import Simple3DCNN, get_3d_model
 
 # Set style for plots
 plt.style.use('default')
@@ -395,33 +395,34 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
 
 def k_fold_training(args, k_folds=5):
     """
-    Perform k-fold cross validation on training set, with fixed validation set.
+    Perform k-fold cross validation on training set, with fixed validation set, for multiple model variants.
     """
+    import copy
     # Create dated folder for this run
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_folder = f"run_{timestamp}"
     run_dir = os.path.join(args.checkpoint_dir, run_folder)
     os.makedirs(run_dir, exist_ok=True)
-    
+
     print(f"\n" + "="*60)
     print(f"STARTING NEW TRAINING RUN: {run_folder}")
     print(f"Output directory: {run_dir}")
     print("="*60)
-    
+
     # Filter the datasets based on labels
     train_df = filter_labels(args.train_csv, args.labels)
     val_df = filter_labels(args.val_csv, args.labels)
-    
+
     # Create temporary CSV files for filtered data
     temp_train_csv = 'temp_train_filtered.csv'
     temp_val_csv = 'temp_val_filtered.csv'
     train_df.to_csv(temp_train_csv, index=False)
     val_df.to_csv(temp_val_csv, index=False)
-    
+
     # Create datasets with filtered data
     train_dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root)
     val_dataset = SMRIDataset(csv_path=temp_val_csv, data_root=args.data_root)
-    
+
     # Create fixed validation loader
     val_loader = DataLoader(
         val_dataset,
@@ -429,148 +430,149 @@ def k_fold_training(args, k_folds=5):
         shuffle=False,
         num_workers=args.num_workers
     )
-    
+
     # Get labels for stratification
     train_labels = [train_dataset.labels[i] for i in range(len(train_dataset))]
-    
+
     # Initialize stratified k-fold to ensure balanced class distribution
     skfold = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=42)
-    
-    # Store results for each fold
-    fold_results = []
-    folds_data = []  # For plotting
-    
-    for fold, (train_ids, test_ids) in enumerate(skfold.split(range(len(train_dataset)), train_labels)):
-        print(f'\nFOLD {fold + 1}/{k_folds}')
-        print(f'Training on {len(train_ids)} subjects, testing on {len(test_ids)} subjects')
-        
-        # Print class distribution for this fold
-        train_labels_fold = [train_labels[i] for i in train_ids]
-        test_labels_fold = [train_labels[i] for i in test_ids]
-        
-        print(f'Training set class distribution:')
-        train_counts = pd.Series(train_labels_fold).value_counts().sort_index()
-        for label, count in train_counts.items():
-            print(f'  Label {label}: {count} subjects ({count/len(train_labels_fold)*100:.1f}%)')
-        
-        print(f'Test set class distribution:')
-        test_counts = pd.Series(test_labels_fold).value_counts().sort_index()
-        for label, count in test_counts.items():
-            print(f'  Label {label}: {count} subjects ({count/len(test_labels_fold)*100:.1f}%)')
-        
-        # Create data samplers for this fold
-        train_sampler = SubsetRandomSampler(train_ids)
-        test_sampler = SubsetRandomSampler(test_ids)
-        
-        # Create data loaders for this fold
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=args.batch_size,
-            sampler=train_sampler,
-            num_workers=args.num_workers
-        )
-        
-        test_loader = DataLoader(
-            train_dataset,
-            batch_size=args.batch_size,
-            sampler=test_sampler,
-            num_workers=args.num_workers
-        )
-        
-        # Initialize model for this fold
-        model = Simple3DCNN(num_classes=len(args.labels))
-        
-        # Train the model using training set and test on validation set
-        model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history = train_sMRI_model(
-            model, train_loader, val_loader, args.epochs, args.device, run_dir, args
-        )
-        
-        # Store results
-        fold_results.append({
-            'fold': fold + 1,
-            'best_val_auc': best_val_auc,
-            'best_val_acc': best_val_acc,
-            'final_train_loss': final_train_loss,
-            'final_train_acc': final_train_acc
+    splits = list(skfold.split(range(len(train_dataset)), train_labels))
+
+    # Model variants to try
+    model_variants = [
+        ("Simple3DCNN", {}),
+        ("ResNet18_3D", {}),
+        ("DenseNet121_3D", {}),
+        ("EfficientNetB0_3D", {})
+    ]
+    all_model_results = []
+
+    for model_name, model_kwargs in model_variants:
+        print(f"\n{'#'*30}\nTraining model: {model_name}\n{'#'*30}")
+        model_dir = os.path.join(run_dir, model_name)
+        os.makedirs(model_dir, exist_ok=True)
+        fold_results = []
+        folds_data = []
+        for fold, (train_ids, test_ids) in enumerate(splits):
+            print(f'\nFOLD {fold + 1}/{k_folds} [{model_name}]')
+            print(f'Training on {len(train_ids)} subjects, testing on {len(test_ids)} subjects')
+            train_labels_fold = [train_labels[i] for i in train_ids]
+            test_labels_fold = [train_labels[i] for i in test_ids]
+            print(f'Training set class distribution:')
+            train_counts = pd.Series(train_labels_fold).value_counts().sort_index()
+            for label, count in train_counts.items():
+                print(f'  Label {label}: {count} subjects ({count/len(train_labels_fold)*100:.1f}%)')
+            print(f'Test set class distribution:')
+            test_counts = pd.Series(test_labels_fold).value_counts().sort_index()
+            for label, count in test_counts.items():
+                print(f'  Label {label}: {count} subjects ({count/len(test_labels_fold)*100:.1f}%)')
+            train_sampler = SubsetRandomSampler(train_ids)
+            test_sampler = SubsetRandomSampler(test_ids)
+            train_loader = DataLoader(
+                train_dataset,
+                batch_size=args.batch_size,
+                sampler=train_sampler,
+                num_workers=args.num_workers
+            )
+            test_loader = DataLoader(
+                train_dataset,
+                batch_size=args.batch_size,
+                sampler=test_sampler,
+                num_workers=args.num_workers
+            )
+            # Initialize model for this fold
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=16)
+            # Train the model using training set and test on validation set
+            model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history = train_sMRI_model(
+                model, train_loader, val_loader, args.epochs, args.device, model_dir, args
+            )
+            fold_results.append({
+                'fold': fold + 1,
+                'best_val_auc': best_val_auc,
+                'best_val_acc': best_val_acc,
+                'final_train_loss': final_train_loss,
+                'final_train_acc': final_train_acc
+            })
+            folds_data.append({
+                'fold': fold + 1,
+                'data': training_history
+            })
+            run_id = f"fold_{fold + 1}_{uuid.uuid4().hex[:8]}"
+            log_metrics(
+                run_id=run_id,
+                model_name=model_name,
+                args=args,
+                best_val_auc=best_val_auc,
+                best_val_acc=best_val_acc,
+                final_train_loss=final_train_loss,
+                final_train_acc=final_train_acc,
+                notes=f"{model_name} Fold {fold + 1}/{k_folds}"
+            )
+        # Save per-model results
+        avg_val_auc = np.mean([r['best_val_auc'] for r in fold_results])
+        avg_val_acc = np.mean([r['best_val_acc'] for r in fold_results])
+        evaluation_dir = os.path.join(model_dir, "evaluation_plots")
+        create_training_plots(folds_data, evaluation_dir)
+        folds_data_filename = f"folds_data.json"
+        folds_data_path = os.path.join(model_dir, folds_data_filename)
+        with open(folds_data_path, "w") as f:
+            json.dump(folds_data, f)
+        run_summary = {
+            'timestamp': timestamp,
+            'run_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'run_folder': run_folder,
+            'model_name': model_name,
+            'model_filename': f"best_smri_model.pth",
+            'folds_data_filename': folds_data_filename,
+            'average_val_auc': avg_val_auc,
+            'average_val_acc': avg_val_acc,
+            'total_folds': len(fold_results),
+            'training_params': {
+                'epochs': args.epochs,
+                'batch_size': args.batch_size,
+                'learning_rate': args.learning_rate,
+                'weight_decay': args.weight_decay,
+                'k_folds': args.k_folds,
+                'labels': args.labels
+            },
+            'fold_results': fold_results
+        }
+        summary_filename = f"run_summary.json"
+        summary_path = os.path.join(model_dir, summary_filename)
+        with open(summary_path, "w") as f:
+            json.dump(run_summary, f, indent=2)
+        all_model_results.append({
+            'model_name': model_name,
+            'avg_val_auc': avg_val_auc,
+            'avg_val_acc': avg_val_acc,
+            'fold_results': fold_results
         })
-        
-        # Store training history for plotting
-        folds_data.append({
-            'fold': fold + 1,
-            'data': training_history
-        })
-        
-        # Log metrics for this fold
-        run_id = f"fold_{fold + 1}_{uuid.uuid4().hex[:8]}"
-        log_metrics(
-            run_id=run_id,
-            model_name="Simple3DCNN",
-            args=args,
-            best_val_auc=best_val_auc,
-            best_val_acc=best_val_acc,
-            final_train_loss=final_train_loss,
-            final_train_acc=final_train_acc,
-            notes=f"Fold {fold + 1}/{k_folds}"
-        )
-    
+        print(f"\n{model_name} results saved to: {model_dir}")
     # Clean up temporary files
     os.remove(temp_train_csv)
     os.remove(temp_val_csv)
-    
-    # Print average results across folds
-    avg_val_auc = np.mean([r['best_val_auc'] for r in fold_results])
-    avg_val_acc = np.mean([r['best_val_acc'] for r in fold_results])
-    print(f"\nAverage across {k_folds} folds:")
-    print(f"Validation AUC: {avg_val_auc:.4f}")
-    print(f"Validation Accuracy: {avg_val_acc:.4f}")
-    
-    # Create evaluation plots in the run directory
-    print("\nGenerating evaluation plots...")
-    evaluation_dir = os.path.join(run_dir, "evaluation_plots")
-    create_training_plots(folds_data, evaluation_dir)
-    print(f"Evaluation plots saved to: {evaluation_dir}")
-
-    # Save folds_data for later plotting
-    folds_data_filename = f"folds_data.json"
-    folds_data_path = os.path.join(run_dir, folds_data_filename)
-    with open(folds_data_path, "w") as f:
-        json.dump(folds_data, f)
-    print(f"folds_data saved to: {folds_data_path}")
-    
-    # Create run summary
-    run_summary = {
-        'timestamp': timestamp,
-        'run_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'run_folder': run_folder,
-        'model_filename': f"best_smri_model.pth",
-        'folds_data_filename': folds_data_filename,
-        'average_val_auc': avg_val_auc,
-        'average_val_acc': avg_val_acc,
-        'total_folds': len(fold_results),
-        'training_params': {
-            'epochs': args.epochs,
-            'batch_size': args.batch_size,
-            'learning_rate': args.learning_rate,
-            'weight_decay': args.weight_decay,
-            'k_folds': args.k_folds,
-            'labels': args.labels
-        },
-        'fold_results': fold_results
-    }
-    
-    # Save run summary
-    summary_filename = f"run_summary.json"
-    summary_path = os.path.join(run_dir, summary_filename)
-    with open(summary_path, "w") as f:
-        json.dump(run_summary, f, indent=2)
-    print(f"Run summary saved to: {summary_path}")
-    
-    print(f"\n" + "="*60)
-    print(f"TRAINING RUN COMPLETED: {run_folder}")
-    print(f"All outputs saved to: {run_dir}")
-    print("="*60)
-    
-    return fold_results
+    # --- Summary comparison plot ---
+    print("\nGenerating summary comparison plot for all models...")
+    model_names = [r['model_name'] for r in all_model_results]
+    avg_aucs = [r['avg_val_auc'] for r in all_model_results]
+    avg_accs = [r['avg_val_acc'] for r in all_model_results]
+    plt.figure(figsize=(10, 6))
+    x = np.arange(len(model_names))
+    width = 0.35
+    plt.bar(x - width/2, avg_aucs, width, label='Avg Val AUC')
+    plt.bar(x + width/2, avg_accs, width, label='Avg Val Acc')
+    plt.xticks(x, model_names, rotation=20)
+    plt.ylabel('Score')
+    plt.ylim(0, 1)
+    plt.title('Model Comparison: Average Validation AUC and Accuracy')
+    plt.legend()
+    plt.tight_layout()
+    summary_plot_path = os.path.join(run_dir, 'model_comparison_summary.png')
+    plt.savefig(summary_plot_path, dpi=200)
+    plt.close()
+    print(f"Summary comparison plot saved to: {summary_plot_path}")
+    print(f"\n{'='*60}\nALL MODEL TRAINING COMPLETED\n{'='*60}\nAll outputs saved to: {run_dir}")
+    return all_model_results
 
 def main():
     parser = argparse.ArgumentParser(description="Train a 3D‐CNN on sMRI volumes")
