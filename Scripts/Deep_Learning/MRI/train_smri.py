@@ -361,8 +361,8 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             lr_change = f"  [LR reduced to {new_lr:.6f}]"
 
         print(f"Epoch {epoch}/{epochs}  "
-              f"Train loss={epoch_loss:.4f}, acc={epoch_acc:.4f}  "
-              f"Val AUC={val_auc:.4f}, acc={val_acc:.4f}  "
+              f"Train loss={epoch_loss:.4f}, Train acc={epoch_acc:.4f}  "
+              f"Val AUC={val_auc:.4f}, Val acc={val_acc:.4f}  "
               f"LR={new_lr:.6f}{lr_change}")
 
         # Checkpoint if this is the best AUC so far
