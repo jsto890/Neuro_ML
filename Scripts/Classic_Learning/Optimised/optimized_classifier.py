@@ -549,7 +549,8 @@ class OptimizedRadiomicsClassifier:
                 search_spaces = {
                     'C': Real(0.01, 100.0, prior='log-uniform'),
                     'gamma': Categorical(['scale', 'auto']),
-                    'kernel': Categorical(['linear', 'rbf']),
+                    'kernel': Categorical(['linear', 'rbf', 'poly']),
+                    'degree': Integer(2, 3),  # for poly kernel
                     'class_weight': Categorical(['balanced']),
                     'max_iter': Integer(15000, 30000),
                     'tol': Real(1e-4, 1e-1, prior='log-uniform')
@@ -597,7 +598,8 @@ class OptimizedRadiomicsClassifier:
                 param_grid = {
                     'C': [0.1, 1.0, 10.0],
                     'gamma': ['scale'],
-                    'kernel': ['linear', 'rbf'],
+                    'kernel': ['linear', 'rbf', 'poly'],
+                    'degree': [2, 3],  # for poly kernel
                     'class_weight': ['balanced'],
                     'max_iter': [10000],
                     'tol': [1e-2]
