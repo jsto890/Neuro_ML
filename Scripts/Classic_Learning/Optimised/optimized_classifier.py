@@ -221,8 +221,8 @@ class ImprovedOptimizedRadiomicsClassifier:
                 
                 # Get unique labels
                 unique_labels = self.data[label_col].unique()
-                self.logger.info(f"Unique labels: {unique_labels}")
-                
+            self.logger.info(f"Unique labels: {unique_labels}")
+            
                 # Filter to binary (0, 1)
                 if len(unique_labels) > 2:
                     # Keep only classes 0 and 1
@@ -236,7 +236,7 @@ class ImprovedOptimizedRadiomicsClassifier:
                 self.subject_ids = np.arange(len(self.data))
                 
                 # Log final data shape
-                self.logger.info(f"Data shape: {self.X.shape}")
+            self.logger.info(f"Data shape: {self.X.shape}")
                 self.logger.info(f"Labels: {np.unique(self.y)} (counts: {[np.sum(self.y == label) for label in np.unique(self.y)]})")
             
             return True
@@ -290,7 +290,7 @@ class ImprovedOptimizedRadiomicsClassifier:
                 # Combine all features
                 X_engineered = np.hstack([X_poly, texture_mean, texture_std])
                 engineered_feature_names = poly_feature_names + ['texture_mean', 'texture_std']
-            else:
+                else:
                 X_engineered = X_poly
                 engineered_feature_names = poly_feature_names
             
@@ -418,8 +418,8 @@ class ImprovedOptimizedRadiomicsClassifier:
         try:
             # First split: train+val vs test
             X_temp, X_test, y_temp, y_test, ids_temp, ids_test = train_test_split(
-                self.X, self.y, self.subject_ids,
-                test_size=test_size,
+                self.X, self.y, self.subject_ids, 
+                test_size=test_size, 
                 random_state=self.random_state,
                 stratify=self.y
             )
@@ -556,7 +556,7 @@ class ImprovedOptimizedRadiomicsClassifier:
                 'svm_linear': SVC(
                     kernel='linear', 
                     probability=True, 
-                    random_state=self.random_state, 
+                        random_state=self.random_state,
                     max_iter=10000, 
                     tol=1e-3,
                     C=1.0  # Conservative C value
@@ -564,7 +564,7 @@ class ImprovedOptimizedRadiomicsClassifier:
                 'svm_rbf': SVC(
                     kernel='rbf', 
                     probability=True, 
-                    random_state=self.random_state, 
+                        random_state=self.random_state,
                     max_iter=10000, 
                     tol=1e-3,
                     C=1.0,  # Conservative C value
@@ -580,17 +580,17 @@ class ImprovedOptimizedRadiomicsClassifier:
             
             # Add XGBoost with regularization if available
             if XGBOOST_AVAILABLE:
-                base_models['xgboost'] = xgb.XGBClassifier(
-                    n_estimators=100,
+                    base_models['xgboost'] = xgb.XGBClassifier(
+                        n_estimators=100,
                     max_depth=4,  # Reduced depth
-                    learning_rate=0.1,
+                        learning_rate=0.1,
                     subsample=0.8,  # Add regularization
                     colsample_bytree=0.8,  # Add regularization
                     reg_alpha=0.1,  # L1 regularization
                     reg_lambda=1.0,  # L2 regularization
-                    random_state=self.random_state,
-                    eval_metric='logloss'
-                )
+                        random_state=self.random_state,
+                        eval_metric='logloss'
+                    )
             
             # Train base models and get cross-validation predictions
             base_predictions = {}

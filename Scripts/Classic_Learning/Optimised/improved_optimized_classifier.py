@@ -202,7 +202,7 @@ class ImprovedOptimizedRadiomicsClassifier:
                 raise ValueError(f"Insufficient features: only {len(self.data.columns)} columns")
             
             # Remove diagnostic columns (keep only radiomics features)
-            diagnostic_cols = [col for col in self.data.columns if any(x in col.lower() for x in ['diagnosis', 'label', 'class', 'target'])]
+            diagnostic_cols = [col for col in self.data.columns if any(x in col.lower() for x in ['diagnostics_', 'subject_id'])]
             if diagnostic_cols:
                 self.data = self.data.drop(columns=diagnostic_cols)
                 self.logger.info(f"Removed {len(diagnostic_cols)} diagnostic columns")
@@ -212,7 +212,7 @@ class ImprovedOptimizedRadiomicsClassifier:
                 # Find label column
                 label_col = None
                 for col in self.data.columns:
-                    if any(x in col.lower() for x in ['label', 'class', 'target', 'diagnosis']):
+                    if col.lower() == 'label':
                         label_col = col
                         break
                 
