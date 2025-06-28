@@ -425,11 +425,11 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         val_acc = accuracy_score(val_labels, val_preds)
         
         # Calculate additional metrics
-        precision, recall, f1, support = precision_recall_fscore_support(val_labels, val_preds, average=None)
+        precision, recall, f1, support = precision_recall_fscore_support(val_labels, val_preds, average=None, zero_division=0)
         cm = confusion_matrix(val_labels, val_preds)
         
         # Calculate macro averages for multi-class
-        precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(val_labels, val_preds, average='macro')
+        precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(val_labels, val_preds, average='macro', zero_division=0)
         
         # Store per-class metrics
         class_metrics = {}
