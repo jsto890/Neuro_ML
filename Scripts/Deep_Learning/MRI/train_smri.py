@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, SubsetRandomSampler
 import numpy as np
-from sklearn.metrics import roc_auc_score, accuracy_score
+from sklearn.metrics import roc_auc_score, accuracy_score, confusion_matrix, classification_report, precision_recall_fscore_support
 import csv
 from datetime import datetime
 import uuid
@@ -85,8 +85,8 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
-    # Create comprehensive plot
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    # Create comprehensive plot with more subplots
+    fig, axes = plt.subplots(3, 3, figsize=(20, 16))
     fig.suptitle(f'Deep Learning Training Results - {model_name} - AD vs CN Classification', fontsize=16, fontweight='bold')
     
     # 1. Training Loss
@@ -197,6 +197,71 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_
     ax6.set_title(f'{model_name} - Training vs Validation Performance')
     ax6.grid(True, alpha=0.3)
     
+    # 7. Precision, Recall, F1 by Fold
+    ax7 = axes[2, 0]
+    precision_scores = []
+    recall_scores = []
+    f1_scores = []
+    
+    for fold_data in folds_data:
+        final_epoch = fold_data['data'][-1]
+        precision_scores.append(final_epoch['precision_macro'])
+        recall_scores.append(final_epoch['recall_macro'])
+        f1_scores.append(final_epoch['f1_macro'])
+    
+    x = np.arange(len(folds_data))
+    width = 0.25
+    
+    ax7.bar(x - width, precision_scores, width, label='Precision', alpha=0.8, color='lightcoral')
+    ax7.bar(x, recall_scores, width, label='Recall', alpha=0.8, color='lightblue')
+    ax7.bar(x + width, f1_scores, width, label='F1', alpha=0.8, color='lightgreen')
+    
+    ax7.set_xlabel('Fold')
+    ax7.set_ylabel('Score')
+    ax7.set_title(f'{model_name} - Precision, Recall, F1 by Fold')
+    ax7.set_xticks(x)
+    ax7.set_xticklabels(fold_numbers)
+    ax7.legend()
+    ax7.grid(True, alpha=0.3)
+    
+    # 8. Confusion Matrix (average across folds)
+    ax8 = axes[2, 1]
+    avg_cm = np.zeros((2, 2))  # Assuming binary classification
+    cm_count = 0
+    
+    for fold_data in folds_data:
+        final_epoch = fold_data['data'][-1]
+        if 'confusion_matrix' in final_epoch and final_epoch['confusion_matrix'] is not None:
+            cm = np.array(final_epoch['confusion_matrix'])
+            if cm.shape == (2, 2):  # Ensure it's 2x2
+                avg_cm += cm
+                cm_count += 1
+    
+    if cm_count > 0:
+        avg_cm /= cm_count
+        sns.heatmap(avg_cm, annot=True, fmt='.1f', cmap='Blues', 
+                   xticklabels=['CN', 'AD'], yticklabels=['CN', 'AD'],
+                   ax=ax8)
+        ax8.set_title(f'{model_name} - Average Confusion Matrix')
+        ax8.set_xlabel('Predicted')
+        ax8.set_ylabel('Actual')
+    else:
+        ax8.text(0.5, 0.5, 'No confusion matrix data', ha='center', va='center', transform=ax8.transAxes)
+        ax8.set_title(f'{model_name} - Confusion Matrix (No Data)')
+    
+    # 9. Learning Rate over time
+    ax9 = axes[2, 2]
+    for fold_data in folds_data:
+        epochs = [d['epoch'] for d in fold_data['data']]
+        lrs = [d['lr'] for d in fold_data['data']]
+        ax9.plot(epochs, lrs, alpha=0.7, label=f"Fold {fold_data['fold']}")
+    ax9.set_xlabel('Epoch')
+    ax9.set_ylabel('Learning Rate')
+    ax9.set_title(f'{model_name} - Learning Rate by Fold')
+    ax9.legend()
+    ax9.grid(True, alpha=0.3)
+    ax9.set_yscale('log')
+    
     plt.tight_layout()
     plt.savefig(output_path / f'{model_name}_training_analysis.png', dpi=300, bbox_inches='tight')
     plt.close()
@@ -209,17 +274,24 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_
         'std_best_auc': np.std(best_aucs),
         'min_best_auc': np.min(best_aucs),
         'max_best_auc': np.max(best_aucs),
+        'average_precision_macro': np.mean(precision_scores),
+        'average_recall_macro': np.mean(recall_scores),
+        'average_f1_macro': np.mean(f1_scores),
         'fold_results': []
     }
     
     for fold_data in folds_data:
+        final_epoch = fold_data['data'][-1]
         fold_result = {
             'fold': fold_data['fold'],
             'epochs_trained': len(fold_data['data']),
             'best_val_auc': max([d['val_auc'] for d in fold_data['data']]),
-            'final_val_auc': fold_data['data'][-1]['val_auc'],
-            'final_val_acc': fold_data['data'][-1]['val_acc'],
-            'final_train_acc': fold_data['data'][-1]['train_acc']
+            'final_val_auc': final_epoch['val_auc'],
+            'final_val_acc': final_epoch['val_acc'],
+            'final_train_acc': final_epoch['train_acc'],
+            'final_precision_macro': final_epoch['precision_macro'],
+            'final_recall_macro': final_epoch['recall_macro'],
+            'final_f1_macro': final_epoch['f1_macro']
         }
         summary['fold_results'].append(fold_result)
     
@@ -235,11 +307,15 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_
     print(f"Total folds: {summary['total_folds']}")
     print(f"Average best AUC: {summary['average_best_auc']:.4f} ± {summary['std_best_auc']:.4f}")
     print(f"AUC range: {summary['min_best_auc']:.4f} - {summary['max_best_auc']:.4f}")
+    print(f"Average Precision: {summary['average_precision_macro']:.4f}")
+    print(f"Average Recall: {summary['average_recall_macro']:.4f}")
+    print(f"Average F1: {summary['average_f1_macro']:.4f}")
     print("\nFOLD DETAILS:")
     for fold_result in summary['fold_results']:
         print(f"Fold {fold_result['fold']}: {fold_result['epochs_trained']} epochs, "
               f"Best AUC: {fold_result['best_val_auc']:.4f}, "
-              f"Final Val Acc: {fold_result['final_val_acc']:.4f}")
+              f"Final Val Acc: {fold_result['final_val_acc']:.4f}, "
+              f"F1: {fold_result['final_f1_macro']:.4f}")
     print("="*60)
     
     return summary
@@ -289,6 +365,13 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     final_train_loss = 0.0
     final_train_acc = 0.0
     no_improvement_count = 0
+    
+    # Store best metrics
+    best_precision_macro = 0.0
+    best_recall_macro = 0.0
+    best_f1_macro = 0.0
+    best_class_metrics = {}
+    best_confusion_matrix = None
     
     # Store training history
     training_history = []
@@ -340,6 +423,23 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         val_auc = roc_auc_score(val_labels, probs)  # Binary classification
         val_preds = np.argmax(val_logits, axis=1)
         val_acc = accuracy_score(val_labels, val_preds)
+        
+        # Calculate additional metrics
+        precision, recall, f1, support = precision_recall_fscore_support(val_labels, val_preds, average=None)
+        cm = confusion_matrix(val_labels, val_preds)
+        
+        # Calculate macro averages for multi-class
+        precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(val_labels, val_preds, average='macro')
+        
+        # Store per-class metrics
+        class_metrics = {}
+        for i, class_label in enumerate(sorted(set(val_labels))):
+            class_metrics[f'class_{class_label}'] = {
+                'precision': precision[i],
+                'recall': recall[i],
+                'f1_score': f1[i],
+                'support': support[i]
+            }
 
         # Update learning rate based on validation AUC
         old_lr = optimizer.param_groups[0]['lr']
@@ -353,7 +453,12 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             'train_acc': epoch_acc,
             'val_auc': val_auc,
             'val_acc': val_acc,
-            'lr': new_lr
+            'lr': new_lr,
+            'precision_macro': precision_macro,
+            'recall_macro': recall_macro,
+            'f1_macro': f1_macro,
+            'class_metrics': class_metrics,
+            'confusion_matrix': cm.tolist()
         }
         training_history.append(epoch_data)
         
@@ -381,6 +486,13 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             torch.save(best_state, model_path)
             print(f"  [Checkpoint] Saved new best model (AUC={val_auc:.4f}) -> {model_filename}")
             no_improvement_count = 0
+            
+            # Update best metrics
+            best_precision_macro = precision_macro
+            best_recall_macro = recall_macro
+            best_f1_macro = f1_macro
+            best_class_metrics = class_metrics
+            best_confusion_matrix = cm
         else:
             no_improvement_count += 1
             
@@ -393,7 +505,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     if best_state is not None:
         model.load_state_dict(best_state)
     
-    return model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history
+    return model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix
 
 def k_fold_training(args, k_folds=5, models_to_run=None):
     """
@@ -482,7 +594,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             # Initialize model for this fold
             model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=16)
             # Train the model using training set and test on validation set
-            model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history = train_sMRI_model(
+            model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix = train_sMRI_model(
                 model, train_loader, val_loader, args.epochs, args.device, model_dir, args
             )
             fold_results.append({
@@ -490,7 +602,12 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 'best_val_auc': best_val_auc,
                 'best_val_acc': best_val_acc,
                 'final_train_loss': final_train_loss,
-                'final_train_acc': final_train_acc
+                'final_train_acc': final_train_acc,
+                'best_precision_macro': best_precision_macro,
+                'best_recall_macro': best_recall_macro,
+                'best_f1_macro': best_f1_macro,
+                'best_class_metrics': best_class_metrics,
+                'best_confusion_matrix': best_confusion_matrix.tolist() if best_confusion_matrix is not None else None
             })
             folds_data.append({
                 'fold': fold + 1,
@@ -510,6 +627,10 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         # Save per-model results
         avg_val_auc = np.mean([r['best_val_auc'] for r in fold_results])
         avg_val_acc = np.mean([r['best_val_acc'] for r in fold_results])
+        avg_precision_macro = np.mean([r['best_precision_macro'] for r in fold_results])
+        avg_recall_macro = np.mean([r['best_recall_macro'] for r in fold_results])
+        avg_f1_macro = np.mean([r['best_f1_macro'] for r in fold_results])
+        
         evaluation_dir = os.path.join(model_dir, "evaluation_plots")
         create_training_plots(folds_data, evaluation_dir, model_name)
         folds_data_filename = f"{model_name}_folds_data.json"
@@ -525,6 +646,9 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'folds_data_filename': folds_data_filename,
             'average_val_auc': avg_val_auc,
             'average_val_acc': avg_val_acc,
+            'average_precision_macro': avg_precision_macro,
+            'average_recall_macro': avg_recall_macro,
+            'average_f1_macro': avg_f1_macro,
             'total_folds': len(fold_results),
             'training_params': {
                 'epochs': args.epochs,
@@ -544,6 +668,9 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'model_name': model_name,
             'avg_val_auc': avg_val_auc,
             'avg_val_acc': avg_val_acc,
+            'avg_precision_macro': avg_precision_macro,
+            'avg_recall_macro': avg_recall_macro,
+            'avg_f1_macro': avg_f1_macro,
             'fold_results': fold_results
         })
         print(f"\n{model_name} results saved to: {model_dir}")
@@ -555,17 +682,38 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     model_names = [r['model_name'] for r in all_model_results]
     avg_aucs = [r['avg_val_auc'] for r in all_model_results]
     avg_accs = [r['avg_val_acc'] for r in all_model_results]
-    plt.figure(figsize=(12, 8))
+    avg_precisions = [r['avg_precision_macro'] for r in all_model_results]
+    avg_recalls = [r['avg_recall_macro'] for r in all_model_results]
+    avg_f1s = [r['avg_f1_macro'] for r in all_model_results]
+    
+    # Create a larger figure for more metrics
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    
+    # Plot 1: AUC and Accuracy
     x = np.arange(len(model_names))
     width = 0.35
-    plt.bar(x - width/2, avg_aucs, width, label='Avg Val AUC', alpha=0.8, color='skyblue')
-    plt.bar(x + width/2, avg_accs, width, label='Avg Val Acc', alpha=0.8, color='lightcoral')
-    plt.xticks(x, model_names, rotation=20)
-    plt.ylabel('Score')
-    plt.ylim(0, 1)
-    plt.title(f'Model Comparison: Average Validation AUC and Accuracy\n{get_label_description(args.labels)} Classification')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
+    ax1.bar(x - width/2, avg_aucs, width, label='Avg Val AUC', alpha=0.8, color='skyblue')
+    ax1.bar(x + width/2, avg_accs, width, label='Avg Val Acc', alpha=0.8, color='lightcoral')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(model_names, rotation=20)
+    ax1.set_ylabel('Score')
+    ax1.set_ylim(0, 1)
+    ax1.set_title(f'AUC and Accuracy Comparison\n{get_label_description(args.labels)} Classification')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: Precision, Recall, F1
+    ax2.bar(x - width, avg_precisions, width, label='Precision', alpha=0.8, color='lightgreen')
+    ax2.bar(x, avg_recalls, width, label='Recall', alpha=0.8, color='lightblue')
+    ax2.bar(x + width, avg_f1s, width, label='F1 Score', alpha=0.8, color='orange')
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(model_names, rotation=20)
+    ax2.set_ylabel('Score')
+    ax2.set_ylim(0, 1)
+    ax2.set_title(f'Precision, Recall, F1 Comparison\n{get_label_description(args.labels)} Classification')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
     plt.tight_layout()
     summary_plot_path = os.path.join(run_dir, f'model_comparison_summary_{get_label_description(args.labels).replace(" vs ", "_vs_")}.png')
     plt.savefig(summary_plot_path, dpi=200, bbox_inches='tight')
@@ -581,8 +729,12 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         'comparison_results': all_model_results,
         'best_model_by_auc': model_names[np.argmax(avg_aucs)],
         'best_model_by_acc': model_names[np.argmax(avg_accs)],
+        'best_model_by_f1': model_names[np.argmax(avg_f1s)],
         'best_auc': max(avg_aucs),
-        'best_acc': max(avg_accs)
+        'best_acc': max(avg_accs),
+        'best_f1': max(avg_f1s),
+        'best_precision': max(avg_precisions),
+        'best_recall': max(avg_recalls)
     }
     comparison_summary_path = os.path.join(run_dir, f'model_comparison_summary_{get_label_description(args.labels).replace(" vs ", "_vs_")}.json')
     with open(comparison_summary_path, "w") as f:
@@ -592,6 +744,9 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     print(f"\n{'='*60}\nALL MODEL TRAINING COMPLETED\n{'='*60}")
     print(f"Best model by AUC: {comparison_summary['best_model_by_auc']} ({comparison_summary['best_auc']:.4f})")
     print(f"Best model by Accuracy: {comparison_summary['best_model_by_acc']} ({comparison_summary['best_acc']:.4f})")
+    print(f"Best model by F1: {comparison_summary['best_model_by_f1']} ({comparison_summary['best_f1']:.4f})")
+    print(f"Best Precision: {comparison_summary['best_precision']:.4f}")
+    print(f"Best Recall: {comparison_summary['best_recall']:.4f}")
     print(f"All outputs saved to: {run_dir}")
     return all_model_results
 
