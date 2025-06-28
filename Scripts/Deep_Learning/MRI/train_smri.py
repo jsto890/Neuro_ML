@@ -592,7 +592,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 num_workers=args.num_workers
             )
             # Initialize model for this fold
-            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=16)
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels)
             # Train the model using training set and test on validation set
             model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix = train_sMRI_model(
                 model, train_loader, val_loader, args.epochs, args.device, model_dir, args
@@ -653,6 +653,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'training_params': {
                 'epochs': args.epochs,
                 'batch_size': args.batch_size,
+                'base_channels': args.base_channels,
                 'learning_rate': args.learning_rate,
                 'weight_decay': args.weight_decay,
                 'k_folds': args.k_folds,
@@ -784,6 +785,8 @@ Examples:
     parser.add_argument("--epochs",      type=int, default=30)
     parser.add_argument("--batch_size",  type=int, default=2)
     parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--base_channels", type=int, default=32,
+                        help="Number of base channels for CNN models (default: 32)")
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
     parser.add_argument("--device",      type=str, default="cuda")
     parser.add_argument("--learning_rate", type=float, default=1e-4)
