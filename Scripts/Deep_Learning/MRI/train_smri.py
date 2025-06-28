@@ -80,14 +80,14 @@ def log_metrics(run_id, model_name, args, best_val_auc, best_val_acc, final_trai
     
     print(f"Metrics logged to: {log_file_path}")
 
-def create_training_plots(folds_data, output_dir="./deep_learning_plots"):
+def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_name="Model"):
     """Create comprehensive training plots."""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
     # Create comprehensive plot
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    fig.suptitle('Deep Learning Training Results - AD vs CN Classification', fontsize=16, fontweight='bold')
+    fig.suptitle(f'Deep Learning Training Results - {model_name} - AD vs CN Classification', fontsize=16, fontweight='bold')
     
     # 1. Training Loss
     ax1 = axes[0, 0]
@@ -97,7 +97,7 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots"):
         ax1.plot(epochs, losses, alpha=0.7, label=f"Fold {fold_data['fold']}")
     ax1.set_xlabel('Epoch')
     ax1.set_ylabel('Training Loss')
-    ax1.set_title('Training Loss by Fold')
+    ax1.set_title(f'{model_name} - Training Loss by Fold')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     
@@ -109,7 +109,7 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots"):
         ax2.plot(epochs, accs, alpha=0.7, label=f"Fold {fold_data['fold']}")
     ax2.set_xlabel('Epoch')
     ax2.set_ylabel('Training Accuracy')
-    ax2.set_title('Training Accuracy by Fold')
+    ax2.set_title(f'{model_name} - Training Accuracy by Fold')
     ax2.legend()
     ax2.grid(True, alpha=0.3)
     
@@ -121,7 +121,7 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots"):
         ax3.plot(epochs, aucs, alpha=0.7, label=f"Fold {fold_data['fold']}")
     ax3.set_xlabel('Epoch')
     ax3.set_ylabel('Validation AUC')
-    ax3.set_title('Validation AUC by Fold')
+    ax3.set_title(f'{model_name} - Validation AUC by Fold')
     ax3.legend()
     ax3.grid(True, alpha=0.3)
     
@@ -137,7 +137,7 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots"):
     bars = ax4.bar(fold_numbers, best_aucs, alpha=0.7, color='skyblue', edgecolor='black')
     ax4.set_xlabel('Fold')
     ax4.set_ylabel('Best Validation AUC')
-    ax4.set_title('Best AUC per Fold')
+    ax4.set_title(f'{model_name} - Best AUC per Fold')
     ax4.set_ylim(0.5, 1.0)
     
     # Add value labels on bars
@@ -174,7 +174,7 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots"):
     
     ax5.set_xlabel('Fold')
     ax5.set_ylabel('Score')
-    ax5.set_title('Final Metrics by Fold')
+    ax5.set_title(f'{model_name} - Final Metrics by Fold')
     ax5.set_xticks(x)
     ax5.set_xticklabels(fold_numbers)
     ax5.legend()
@@ -194,15 +194,16 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots"):
     
     ax6.set_xlabel('Final Training Accuracy')
     ax6.set_ylabel('Final Validation Accuracy')
-    ax6.set_title('Training vs Validation Performance')
+    ax6.set_title(f'{model_name} - Training vs Validation Performance')
     ax6.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(output_path / 'deep_learning_training_analysis.png', dpi=300, bbox_inches='tight')
+    plt.savefig(output_path / f'{model_name}_training_analysis.png', dpi=300, bbox_inches='tight')
     plt.close()
     
     # Create summary statistics
     summary = {
+        'model_name': model_name,
         'total_folds': len(folds_data),
         'average_best_auc': np.mean(best_aucs),
         'std_best_auc': np.std(best_aucs),
@@ -223,13 +224,14 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots"):
         summary['fold_results'].append(fold_result)
     
     # Save summary
-    with open(output_path / 'training_summary.json', 'w') as f:
+    with open(output_path / f'{model_name}_training_summary.json', 'w') as f:
         json.dump(summary, f, indent=2)
     
     # Print summary
     print("\n" + "="*60)
-    print("DEEP LEARNING TRAINING SUMMARY")
+    print(f"DEEP LEARNING TRAINING SUMMARY - {model_name}")
     print("="*60)
+    print(f"Model: {model_name}")
     print(f"Total folds: {summary['total_folds']}")
     print(f"Average best AUC: {summary['average_best_auc']:.4f} ± {summary['std_best_auc']:.4f}")
     print(f"AUC range: {summary['min_best_auc']:.4f} - {summary['max_best_auc']:.4f}")
@@ -509,8 +511,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         avg_val_auc = np.mean([r['best_val_auc'] for r in fold_results])
         avg_val_acc = np.mean([r['best_val_acc'] for r in fold_results])
         evaluation_dir = os.path.join(model_dir, "evaluation_plots")
-        create_training_plots(folds_data, evaluation_dir)
-        folds_data_filename = f"folds_data.json"
+        create_training_plots(folds_data, evaluation_dir, model_name)
+        folds_data_filename = f"{model_name}_folds_data.json"
         folds_data_path = os.path.join(model_dir, folds_data_filename)
         with open(folds_data_path, "w") as f:
             json.dump(folds_data, f)
@@ -519,7 +521,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'run_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             'run_folder': run_folder,
             'model_name': model_name,
-            'model_filename': f"best_smri_model.pth",
+            'model_filename': f"{model_name}_best_smri_model.pth",
             'folds_data_filename': folds_data_filename,
             'average_val_auc': avg_val_auc,
             'average_val_acc': avg_val_acc,
@@ -534,7 +536,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             },
             'fold_results': fold_results
         }
-        summary_filename = f"run_summary.json"
+        summary_filename = f"{model_name}_run_summary.json"
         summary_path = os.path.join(model_dir, summary_filename)
         with open(summary_path, "w") as f:
             json.dump(run_summary, f, indent=2)
@@ -553,22 +555,44 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     model_names = [r['model_name'] for r in all_model_results]
     avg_aucs = [r['avg_val_auc'] for r in all_model_results]
     avg_accs = [r['avg_val_acc'] for r in all_model_results]
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(12, 8))
     x = np.arange(len(model_names))
     width = 0.35
-    plt.bar(x - width/2, avg_aucs, width, label='Avg Val AUC')
-    plt.bar(x + width/2, avg_accs, width, label='Avg Val Acc')
+    plt.bar(x - width/2, avg_aucs, width, label='Avg Val AUC', alpha=0.8, color='skyblue')
+    plt.bar(x + width/2, avg_accs, width, label='Avg Val Acc', alpha=0.8, color='lightcoral')
     plt.xticks(x, model_names, rotation=20)
     plt.ylabel('Score')
     plt.ylim(0, 1)
-    plt.title('Model Comparison: Average Validation AUC and Accuracy')
+    plt.title(f'Model Comparison: Average Validation AUC and Accuracy\n{get_label_description(args.labels)} Classification')
     plt.legend()
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    summary_plot_path = os.path.join(run_dir, 'model_comparison_summary.png')
-    plt.savefig(summary_plot_path, dpi=200)
+    summary_plot_path = os.path.join(run_dir, f'model_comparison_summary_{get_label_description(args.labels).replace(" vs ", "_vs_")}.png')
+    plt.savefig(summary_plot_path, dpi=200, bbox_inches='tight')
     plt.close()
     print(f"Summary comparison plot saved to: {summary_plot_path}")
-    print(f"\n{'='*60}\nALL MODEL TRAINING COMPLETED\n{'='*60}\nAll outputs saved to: {run_dir}")
+    
+    # Save overall comparison summary
+    comparison_summary = {
+        'run_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        'run_folder': run_folder,
+        'classification_task': get_label_description(args.labels),
+        'models_tested': model_names,
+        'comparison_results': all_model_results,
+        'best_model_by_auc': model_names[np.argmax(avg_aucs)],
+        'best_model_by_acc': model_names[np.argmax(avg_accs)],
+        'best_auc': max(avg_aucs),
+        'best_acc': max(avg_accs)
+    }
+    comparison_summary_path = os.path.join(run_dir, f'model_comparison_summary_{get_label_description(args.labels).replace(" vs ", "_vs_")}.json')
+    with open(comparison_summary_path, "w") as f:
+        json.dump(comparison_summary, f, indent=2)
+    print(f"Model comparison summary saved to: {comparison_summary_path}")
+    
+    print(f"\n{'='*60}\nALL MODEL TRAINING COMPLETED\n{'='*60}")
+    print(f"Best model by AUC: {comparison_summary['best_model_by_auc']} ({comparison_summary['best_auc']:.4f})")
+    print(f"Best model by Accuracy: {comparison_summary['best_model_by_acc']} ({comparison_summary['best_acc']:.4f})")
+    print(f"All outputs saved to: {run_dir}")
     return all_model_results
 
 def main():
