@@ -64,7 +64,7 @@ svm_optimization:
   param_grid:
     C: [0.1, 1.0, 10.0, 50.0]  # Reduced upper bound
     gamma: ["scale", "auto"]
-    kernel: ["linear", "rbf"]  # Removed poly kernel
+    kernel: ["linear", "rbf", "poly"]  # Removed poly kernel
     class_weight: ["balanced"]
     max_iter: [10000]  # Reduced max_iter
     tol: [1e-3]  # Increased tolerance

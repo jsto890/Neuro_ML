@@ -393,7 +393,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     
     return model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history
 
-def k_fold_training(args, k_folds=5):
+def k_fold_training(args, k_folds=5, models_to_run=None):
     """
     Perform k-fold cross validation on training set, with fixed validation set, for multiple model variants.
     """
@@ -439,15 +439,12 @@ def k_fold_training(args, k_folds=5):
     splits = list(skfold.split(range(len(train_dataset)), train_labels))
 
     # Model variants to try
-    model_variants = [
-        ("Simple3DCNN", {}),
-        ("ResNet18_3D", {}),
-        ("DenseNet121_3D", {}),
-        ("EfficientNetB0_3D", {})
-    ]
+    if models_to_run is None:
+        models_to_run = ["Simple3DCNN", "ResNet18_3D", "DenseNet121_3D", "EfficientNetB0_3D"]
+
     all_model_results = []
 
-    for model_name, model_kwargs in model_variants:
+    for model_name in models_to_run:
         print(f"\n{'#'*30}\nTraining model: {model_name}\n{'#'*30}")
         model_dir = os.path.join(run_dir, model_name)
         os.makedirs(model_dir, exist_ok=True)
@@ -575,7 +572,30 @@ def k_fold_training(args, k_folds=5):
     return all_model_results
 
 def main():
-    parser = argparse.ArgumentParser(description="Train a 3D‐CNN on sMRI volumes")
+    parser = argparse.ArgumentParser(
+        description="Train a 3D‐CNN on sMRI volumes",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Available models:
+  Simple3DCNN        - Simple 3D CNN baseline
+  ResNet18_3D        - 3D ResNet-18 (requires MONAI)
+  DenseNet121_3D     - 3D DenseNet-121 (requires MONAI)
+  EfficientNetB0_3D  - 3D EfficientNet-B0 (requires efficientnet_pytorch_3d)
+
+Examples:
+  # Run all models (default)
+  python train_smri.py --train_csv train.csv --val_csv val.csv --data_root /path/to/data --labels 0 1
+
+  # Run single model
+  python train_smri.py --train_csv train.csv --val_csv val.csv --data_root /path/to/data --labels 0 1 --model EfficientNetB0_3D
+
+  # Run specific models
+  python train_smri.py --train_csv train.csv --val_csv val.csv --data_root /path/to/data --labels 0 1 --models Simple3DCNN EfficientNetB0_3D
+
+  # Explicitly run all models
+  python train_smri.py --train_csv train.csv --val_csv val.csv --data_root /path/to/data --labels 0 1 --run_all
+        """
+    )
     parser.add_argument("--train_csv",   type=str, required=True,
                         help="Path to train_labels.csv")
     parser.add_argument("--val_csv",     type=str, required=True,
@@ -593,10 +613,45 @@ def main():
                         help="Number of folds for cross-validation")
     parser.add_argument("--labels",      type=int, nargs='+', required=True,
                         help="Labels to include in training (e.g., 0 1 for CN vs AD)")
+    
+    # New arguments for model selection
+    parser.add_argument("--model",       type=str, default=None,
+                        help="Single model to train (e.g., 'Simple3DCNN', 'ResNet18_3D', 'DenseNet121_3D', 'EfficientNetB0_3D')")
+    parser.add_argument("--models",      type=str, nargs='+', default=None,
+                        help="Specific models to train (e.g., 'Simple3DCNN' 'EfficientNetB0_3D')")
+    parser.add_argument("--run_all",     action='store_true',
+                        help="Run all available models (default behavior)")
+    
     args = parser.parse_args()
 
-    # Perform k-fold cross validation
-    fold_results = k_fold_training(args, k_folds=args.k_folds)
+    # Define available models
+    available_models = ["Simple3DCNN", "ResNet18_3D", "DenseNet121_3D", "EfficientNetB0_3D"]
+    
+    # Determine which models to run
+    if args.model:
+        # Single model specified
+        if args.model not in available_models:
+            raise ValueError(f"Unknown model: {args.model}. Available models: {available_models}")
+        models_to_run = [args.model]
+        print(f"Running single model: {args.model}")
+    elif args.models:
+        # Multiple specific models specified
+        for model in args.models:
+            if model not in available_models:
+                raise ValueError(f"Unknown model: {model}. Available models: {available_models}")
+        models_to_run = args.models
+        print(f"Running models: {', '.join(models_to_run)}")
+    elif args.run_all:
+        # Run all models (explicit)
+        models_to_run = available_models
+        print(f"Running all models: {', '.join(models_to_run)}")
+    else:
+        # Default behavior: run all models
+        models_to_run = available_models
+        print(f"No model selection specified. Running all models: {', '.join(models_to_run)}")
+
+    # Perform k-fold cross validation with selected models
+    fold_results = k_fold_training(args, k_folds=args.k_folds, models_to_run=models_to_run)
 
 if __name__ == "__main__":
     main()

@@ -221,23 +221,22 @@ class ImprovedOptimizedRadiomicsClassifier:
                 
                 # Get unique labels
                 unique_labels = self.data[label_col].unique()
-                self.logger.info(f"Unique labels: {unique_labels}")
-                
+            self.logger.info(f"Unique labels: {unique_labels}")
+            
                 # Filter to binary (0, 1)
-                if len(unique_labels) > 2:
-                    # Keep only classes 0 and 1
-                    self.data = self.data[self.data[label_col].isin([0, 1])]
-                    self.logger.info(f"Filtered to binary classification: {len(self.data)} samples")
+            if len(unique_labels) > 2:
+                # Keep only classes 0 and 1
+                self.data = self.data[self.data[label_col].isin([0, 1])]
+                self.logger.info(f"Filtered to binary classification: {len(self.data)} samples")
                 
                 # Extract features and labels
-                self.y = self.data[label_col].values
-                self.X = self.data.drop(columns=[label_col]).values
-                self.feature_names = self.data.drop(columns=[label_col]).columns.tolist()
-                self.subject_ids = np.arange(len(self.data))
-                
+            self.y = self.data[label_col].values
+            self.X = self.data.drop(columns=[label_col]).values
+            self.feature_names = self.data.drop(columns=[label_col]).columns.tolist()
+            self.subject_ids = np.arange(len(self.data))
                 # Log final data shape
-                self.logger.info(f"Data shape: {self.X.shape}")
-                self.logger.info(f"Labels: {np.unique(self.y)} (counts: {[np.sum(self.y == label) for label in np.unique(self.y)]})")
+            self.logger.info(f"Data shape: {self.X.shape}")
+            self.logger.info(f"Labels: {np.unique(self.y)} (counts: {[np.sum(self.y == label) for label in np.unique(self.y)]})")
             
             return True
             
