@@ -16,9 +16,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import json
 from pathlib import Path
+import shutil
 
 from dataset import SMRIDataset
 from models_smri import Simple3DCNN, get_3d_model
+from evaluate_model import evaluate_model, calculate_metrics, create_evaluation_plots
 
 # Set style for plots
 plt.style.use('default')
@@ -675,6 +677,35 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'fold_results': fold_results
         })
         print(f"\n{model_name} results saved to: {model_dir}")
+        # --- Test set evaluation ---
+        if hasattr(args, 'test_csv') and args.test_csv:
+            print(f"\nEvaluating {model_name} on the test set...")
+            # Load test set
+            test_dataset = SMRIDataset(csv_path=args.test_csv, data_root=args.data_root)
+            test_loader = DataLoader(
+                test_dataset,
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_workers=args.num_workers
+            )
+            # Load best model checkpoint
+            best_model_path = os.path.join(model_dir, "best_smri_model.pth")
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels)
+            state_dict = torch.load(best_model_path, map_location=args.device)
+            model.load_state_dict(state_dict)
+            model.to(args.device)
+            model.eval()
+            # Evaluate
+            predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
+            metrics = calculate_metrics(predictions, probabilities, labels)
+            # Save metrics
+            test_metrics_path = os.path.join(model_dir, "test_metrics.json")
+            with open(test_metrics_path, "w") as f:
+                json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+            # Save plots
+            test_eval_dir = os.path.join(model_dir, "test_evaluation_plots")
+            create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
+            print(f"Test set evaluation for {model_name} saved to: {test_eval_dir}")
     # Clean up temporary files
     os.remove(temp_train_csv)
     os.remove(temp_val_csv)
@@ -803,6 +834,8 @@ Examples:
                         help="Specific models to train (e.g., 'Simple3DCNN' 'EfficientNetB0_3D')")
     parser.add_argument("--run_all",     action='store_true',
                         help="Run all available models (default behavior)")
+    parser.add_argument("--test_csv", type=str, required=False, default=None,
+                        help="Path to test_labels.csv (for final test set evaluation)")
     
     args = parser.parse_args()
 
