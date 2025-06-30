@@ -547,6 +547,13 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         num_workers=args.num_workers
     )
 
+    # Print validation set info (fixed for all folds)
+    val_labels = [val_dataset.labels[i] for i in range(len(val_dataset))]
+    print(f"Validation set: {len(val_labels)} subjects")
+    val_counts = pd.Series(val_labels).value_counts().sort_index()
+    for label, count in val_counts.items():
+        print(f"  Label {label}: {count} subjects ({count/len(val_labels)*100:.1f}%)")
+
     # Get labels for stratification
     train_labels = [train_dataset.labels[i] for i in range(len(train_dataset))]
 
