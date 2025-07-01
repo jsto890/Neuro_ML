@@ -403,9 +403,15 @@ class ImprovedOptimizedRadiomicsClassifier:
             outlier_indices = np.where(outlier_mask)[0]
             
             # Remove outliers from training data only
-            X_train_clean = X_train_engineered[~outlier_mask]
-            y_train_clean = y_train[~outlier_mask]
-            ids_train_clean = ids_train[~outlier_mask]
+            if len(outlier_indices) > 0.5 * X_train_engineered.shape[0]:
+                self.logger.warning(f"Too many outliers ({len(outlier_indices)} of {X_train_engineered.shape[0]}). Skipping outlier removal.")
+                X_train_clean = X_train_engineered
+                y_train_clean = y_train
+                ids_train_clean = ids_train
+            else:
+                X_train_clean = X_train_engineered[~outlier_mask]
+                y_train_clean = y_train[~outlier_mask]
+                ids_train_clean = ids_train[~outlier_mask]
             
             self.logger.info(f"Removed {len(outlier_indices)} outliers from training data (conservative IQR method)")
             
