@@ -15,11 +15,13 @@ import pandas as pd
 import tempfile
 import os
 from pathlib import Path
-import sys
 
 # Add Classic and Optimised directories to sys.path
-sys.path.insert(0, str(Path(__file__).parent.parent / "Classic_Learning" / "Classic"))
-sys.path.insert(0, str(Path(__file__).parent.parent / "Classic_Learning" / "Optimised"))
+# sys.path.insert(0, str(Path(__file__).parent.parent / "Classic_Learning" / "Classic"))
+# sys.path.insert(0, str(Path(__file__).parent.parent / "Classic_Learning" / "Optimised"))
+
+from Scripts.Classic_Learning.Classic.radiomics_classifier import RadiomicsClassifier
+from Scripts.Classic_Learning.Optimised.improved_optimized_classifier import ImprovedOptimizedRadiomicsClassifier
 
 def create_synthetic_radiomics_data(n_samples=100, n_features=50, random_state=42):
     """Create synthetic radiomics data for testing."""
@@ -83,8 +85,6 @@ def test_data_leakage_fix():
         
         # Import and run the fixed classifier
         try:
-            from radiomics_classifier import RadiomicsClassifier
-            
             print("🔧 Running fixed radiomics classifier...")
             classifier = RadiomicsClassifier(
                 input_path=str(data_path),
@@ -206,9 +206,6 @@ def test_optimized_classifier():
         
         # Import and run the optimized classifier
         try:
-            sys.path.append(str(Path(__file__).parent.parent / 'Classic_Learning' / 'Optimised'))
-            from improved_optimized_classifier import ImprovedOptimizedRadiomicsClassifier
-            
             print("🔧 Running improved optimized classifier...")
             classifier = ImprovedOptimizedRadiomicsClassifier(
                 input_path=str(data_path),
