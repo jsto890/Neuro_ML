@@ -17,8 +17,9 @@ import os
 from pathlib import Path
 import sys
 
-# Add the parent directory to the path to import the classifier
-sys.path.append(str(Path(__file__).parent.parent / 'Classic_Learning' / 'Classic'))
+# Add Classic and Optimised directories to sys.path
+sys.path.insert(0, str(Path(__file__).parent.parent / "Classic_Learning" / "Classic"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "Classic_Learning" / "Optimised"))
 
 def create_synthetic_radiomics_data(n_samples=100, n_features=50, random_state=42):
     """Create synthetic radiomics data for testing."""
