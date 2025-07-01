@@ -6,13 +6,16 @@ Radiomics-based Classical Learning Pipeline
 A comprehensive pipeline for training and evaluating Random Forest models
 on radiomics features extracted from neuroimaging data.
 
+FIXED: Data leakage issue - preprocessing now applied correctly after data splitting.
+
 Stages:
-1. Data Loading + Preprocessing
-2. Train-Test Split
-3. Model Training (Random Forest)
-4. Evaluation
-5. Interpretation
-6. Output Artifacts
+1. Data Loading
+2. Data Splitting (FIRST - before any preprocessing)
+3. Preprocessing (fitted on training data only)
+4. Model Training (Random Forest)
+5. Evaluation
+6. Interpretation
+7. Output Artifacts
 
 Usage:
     python radiomics_classifier.py --input ~/reseng202500013-ndd-ml/data/radiomics_MRI_mri_labels.csv --output-dir results/
@@ -72,8 +75,12 @@ class RadiomicsClassifier:
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Initialize components
+        # Initialize preprocessing components (will be fitted on training data only)
+        self.variance_selector = VarianceThreshold(threshold=0.01)
         self.scaler = StandardScaler()
+        self.feature_selector = None  # Will be set during preprocessing
+        
+        # Initialize model components
         self.model = None
         self.best_params = None
         self.cv_results = None
@@ -105,8 +112,8 @@ class RadiomicsClassifier:
         self.logger = logging.getLogger(__name__)
         
     def load_data(self):
-        """Stage 0: Load and validate input data."""
-        self.logger.info("Stage 0: Loading data...")
+        """Stage 1: Load and validate input data."""
+        self.logger.info("Stage 1: Loading data...")
         
         try:
             self.data = pd.read_csv(self.input_path)
@@ -149,64 +156,9 @@ class RadiomicsClassifier:
             self.logger.error(f"Error loading data: {e}")
             return False
     
-    def preprocess_data(self):
-        """Stage 1: Data preprocessing and feature engineering."""
-        self.logger.info("Stage 1: Preprocessing data...")
-        
-        try:
-            # Check for missing values - handle different data types
-            if hasattr(self.X, 'dtype') and np.issubdtype(self.X.dtype, np.number):
-                missing_count = np.isnan(self.X).sum()
-            else:
-                # Convert to numeric and then check
-                X_numeric = pd.DataFrame(self.X, columns=self.feature_names).apply(pd.to_numeric, errors='coerce')
-                missing_count = X_numeric.isnull().sum().sum()
-            
-            if missing_count > 0:
-                self.logger.warning(f"Found {missing_count} missing values")
-                
-                # Use imputation instead of dropping rows
-                from sklearn.impute import SimpleImputer
-                imputer = SimpleImputer(strategy='median')
-                
-                if hasattr(self.X, 'dtype') and np.issubdtype(self.X.dtype, np.number):
-                    self.X = imputer.fit_transform(self.X)
-                else:
-                    X_numeric = pd.DataFrame(self.X, columns=self.feature_names).apply(pd.to_numeric, errors='coerce')
-                    X_imputed = imputer.fit_transform(X_numeric)
-                    self.X = X_imputed
-                
-                self.logger.info(f"Imputed missing values using median strategy")
-                self.logger.info(f"Data shape after imputation: {self.X.shape}")
-            
-            # Remove constant features
-            variance_selector = VarianceThreshold(threshold=0.01)
-            self.X = variance_selector.fit_transform(self.X)
-            kept_features = variance_selector.get_support()
-            self.feature_names = [f for f, keep in zip(self.feature_names, kept_features) if keep]
-            self.logger.info(f"After removing constant features: {self.X.shape}")
-            
-            # Standardize features
-            self.X = self.scaler.fit_transform(self.X)
-            self.logger.info("Features standardized")
-            
-            # Feature selection (optional - keep top 100 features)
-            if self.X.shape[1] > 100:
-                k_best = SelectKBest(score_func=f_classif, k=100)
-                self.X = k_best.fit_transform(self.X, self.y)
-                kept_features = k_best.get_support()
-                self.feature_names = [f for f, keep in zip(self.feature_names, kept_features) if keep]
-                self.logger.info(f"Selected top 100 features: {self.X.shape}")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error in preprocessing: {e}")
-            return False
-    
     def split_data(self, test_size=0.2, val_size=0.2):
-        """Stage 2: Train-validation-test split."""
-        self.logger.info("Stage 2: Splitting data...")
+        """Stage 2: Train-validation-test split (BEFORE any preprocessing)."""
+        self.logger.info("Stage 2: Splitting data (before preprocessing)...")
         
         try:
             # First split: train+val vs test
@@ -226,15 +178,17 @@ class RadiomicsClassifier:
                 stratify=y_temp
             )
             
+            # Store raw splits (before preprocessing)
             self.splits = {
                 'train': (X_train, y_train, ids_train),
                 'val': (X_val, y_val, ids_val),
                 'test': (X_test, y_test, ids_test)
             }
             
-            self.logger.info(f"Train: {X_train.shape[0]} samples")
-            self.logger.info(f"Validation: {X_val.shape[0]} samples")
-            self.logger.info(f"Test: {X_test.shape[0]} samples")
+            self.logger.info(f"Raw data splits:")
+            self.logger.info(f"  Train: {X_train.shape[0]} samples")
+            self.logger.info(f"  Validation: {X_val.shape[0]} samples")
+            self.logger.info(f"  Test: {X_test.shape[0]} samples")
             
             return True
             
@@ -242,9 +196,96 @@ class RadiomicsClassifier:
             self.logger.error(f"Error in data splitting: {e}")
             return False
     
+    def preprocess_data(self):
+        """Stage 3: Data preprocessing (fitted on training data only)."""
+        self.logger.info("Stage 3: Preprocessing data (training data only)...")
+        
+        try:
+            X_train, y_train, _ = self.splits['train']
+            X_val, y_val, _ = self.splits['val']
+            X_test, y_test, _ = self.splits['test']
+            
+            # Handle missing values with imputation (fit on train, apply to all)
+            if hasattr(X_train, 'dtype') and np.issubdtype(X_train.dtype, np.number):
+                missing_count = np.isnan(X_train).sum()
+            else:
+                X_train_numeric = pd.DataFrame(X_train, columns=self.feature_names).apply(pd.to_numeric, errors='coerce')
+                missing_count = X_train_numeric.isnull().sum().sum()
+            
+            if missing_count > 0:
+                self.logger.warning(f"Found {missing_count} missing values in training data")
+                
+                # Use imputation fitted on training data
+                from sklearn.impute import SimpleImputer
+                imputer = SimpleImputer(strategy='median')
+                
+                if hasattr(X_train, 'dtype') and np.issubdtype(X_train.dtype, np.number):
+                    X_train = imputer.fit_transform(X_train)
+                    X_val = imputer.transform(X_val)
+                    X_test = imputer.transform(X_test)
+                else:
+                    X_train_numeric = pd.DataFrame(X_train, columns=self.feature_names).apply(pd.to_numeric, errors='coerce')
+                    X_val_numeric = pd.DataFrame(X_val, columns=self.feature_names).apply(pd.to_numeric, errors='coerce')
+                    X_test_numeric = pd.DataFrame(X_test, columns=self.feature_names).apply(pd.to_numeric, errors='coerce')
+                    
+                    X_train = imputer.fit_transform(X_train_numeric)
+                    X_val = imputer.transform(X_val_numeric)
+                    X_test = imputer.transform(X_test_numeric)
+                
+                self.logger.info(f"Imputed missing values using median strategy (fitted on training data)")
+            
+            # Remove constant features (fitted on train, applied to all)
+            X_train_var = self.variance_selector.fit_transform(X_train)
+            X_val_var = self.variance_selector.transform(X_val)
+            X_test_var = self.variance_selector.transform(X_test)
+            
+            # Update feature names after variance thresholding
+            kept_features = self.variance_selector.get_support()
+            self.feature_names = [f for f, keep in zip(self.feature_names, kept_features) if keep]
+            
+            self.logger.info(f"After variance thresholding: {X_train_var.shape}")
+            
+            # Standardize features (fitted on train, applied to all)
+            X_train_scaled = self.scaler.fit_transform(X_train_var)
+            X_val_scaled = self.scaler.transform(X_val_var)
+            X_test_scaled = self.scaler.transform(X_test_var)
+            
+            self.logger.info("Features standardized (fitted on training data)")
+            
+            # Feature selection (fitted on train, applied to all)
+            if X_train_scaled.shape[1] > 100:
+                self.feature_selector = SelectKBest(score_func=f_classif, k=100)
+                X_train_final = self.feature_selector.fit_transform(X_train_scaled, y_train)
+                X_val_final = self.feature_selector.transform(X_val_scaled)
+                X_test_final = self.feature_selector.transform(X_test_scaled)
+                
+                # Update feature names after feature selection
+                kept_features = self.feature_selector.get_support()
+                self.feature_names = [f for f, keep in zip(self.feature_names, kept_features) if keep]
+                
+                self.logger.info(f"Selected top 100 features (fitted on training data): {X_train_final.shape}")
+            else:
+                X_train_final = X_train_scaled
+                X_val_final = X_val_scaled
+                X_test_final = X_test_scaled
+            
+            # Update splits with preprocessed data
+            self.splits = {
+                'train': (X_train_final, y_train, self.splits['train'][2]),
+                'val': (X_val_final, y_val, self.splits['val'][2]),
+                'test': (X_test_final, y_test, self.splits['test'][2])
+            }
+            
+            self.logger.info(f"Preprocessing completed. Final feature count: {len(self.feature_names)}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error in preprocessing: {e}")
+            return False
+    
     def train_model(self):
-        """Stage 3: Train Random Forest model with hyperparameter tuning."""
-        self.logger.info("Stage 3: Training Random Forest model...")
+        """Stage 4: Train Random Forest model with hyperparameter tuning."""
+        self.logger.info("Stage 4: Training Random Forest model...")
         
         try:
             X_train, y_train, _ = self.splits['train']
@@ -287,8 +328,8 @@ class RadiomicsClassifier:
             return False
     
     def evaluate_model(self):
-        """Stage 4: Evaluate model performance."""
-        self.logger.info("Stage 4: Evaluating model...")
+        """Stage 5: Evaluate model performance."""
+        self.logger.info("Stage 5: Evaluating model...")
         
         try:
             results = {}
@@ -330,8 +371,8 @@ class RadiomicsClassifier:
             return False
     
     def interpret_model(self):
-        """Stage 5: Model interpretation and feature importance."""
-        self.logger.info("Stage 5: Model interpretation...")
+        """Stage 6: Model interpretation and feature importance."""
+        self.logger.info("Stage 6: Model interpretation...")
         
         try:
             # Extract feature importances
@@ -356,25 +397,39 @@ class RadiomicsClassifier:
             return False
     
     def save_artifacts(self):
-        """Stage 6: Save all artifacts and generate plots."""
-        self.logger.info("Stage 6: Saving artifacts...")
+        """Stage 7: Save all artifacts and generate plots."""
+        self.logger.info("Stage 7: Saving artifacts...")
         
         try:
             # Save model
             with open(self.output_dir / 'random_forest_model.pkl', 'wb') as f:
                 pickle.dump(self.model, f)
             
-            # Save scaler
+            # Save preprocessing components
+            with open(self.output_dir / 'variance_selector.pkl', 'wb') as f:
+                pickle.dump(self.variance_selector, f)
+            
             with open(self.output_dir / 'scaler.pkl', 'wb') as f:
                 pickle.dump(self.scaler, f)
+            
+            if self.feature_selector:
+                with open(self.output_dir / 'feature_selector.pkl', 'wb') as f:
+                    pickle.dump(self.feature_selector, f)
             
             # Save results summary
             summary = {
                 'timestamp': datetime.now().isoformat(),
                 'input_file': self.input_path,
                 'data_shape': self.X.shape,
+                'final_feature_count': len(self.feature_names),
                 'best_parameters': self.best_params,
                 'feature_names': self.feature_names,
+                'preprocessing_info': {
+                    'variance_threshold': 0.01,
+                    'scaling_method': 'StandardScaler',
+                    'feature_selection': 'SelectKBest (f_classif, k=100)' if self.feature_selector else 'None',
+                    'data_leakage_fixed': True
+                },
                 'results': {
                     split: {k: v for k, v in results.items() if k not in ['predictions', 'probabilities', 'true_labels', 'subject_ids']}
                     for split, results in self.results.items()
@@ -399,7 +454,7 @@ class RadiomicsClassifier:
         try:
             # Set up figure
             fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-            fig.suptitle('Radiomics Random Forest Model Evaluation', fontsize=16)
+            fig.suptitle('Radiomics Random Forest Model Evaluation (Data Leakage Fixed)', fontsize=16)
             
             # 1. ROC Curves
             ax1 = axes[0, 0]
@@ -472,12 +527,12 @@ class RadiomicsClassifier:
     
     def run_pipeline(self):
         """Run the complete pipeline."""
-        self.logger.info("Starting Radiomics Classification Pipeline")
+        self.logger.info("Starting Radiomics Classification Pipeline (Data Leakage Fixed)")
         
         stages = [
             ("Data Loading", self.load_data),
-            ("Preprocessing", self.preprocess_data),
             ("Data Splitting", self.split_data),
+            ("Preprocessing", self.preprocess_data),
             ("Model Training", self.train_model),
             ("Model Evaluation", self.evaluate_model),
             ("Model Interpretation", self.interpret_model),
@@ -495,6 +550,7 @@ class RadiomicsClassifier:
         
         self.logger.info(f"\n{'='*50}")
         self.logger.info("Pipeline completed successfully!")
+        self.logger.info("✅ Data leakage issue has been fixed!")
         self.logger.info(f"Results saved to: {self.output_dir}")
         self.logger.info(f"{'='*50}")
         
