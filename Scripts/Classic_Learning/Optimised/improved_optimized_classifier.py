@@ -297,9 +297,9 @@ class ImprovedOptimizedRadiomicsClassifier:
         self.logger.info("Stage 3: Improved feature engineering (training data only)...")
         
         try:
-            X_train, y_train, _ = self.splits['train']
-            X_val, y_val, _ = self.splits['val']
-            X_test, y_test, _ = self.splits['test']
+            X_train, y_train, ids_train = self.splits['train']
+            X_val, y_val, ids_val = self.splits['val']
+            X_test, y_test, ids_test = self.splits['test']
             
             # Handle missing values with imputation (fit on train, apply to all)
             if hasattr(X_train, 'dtype') and np.issubdtype(X_train.dtype, np.number):
