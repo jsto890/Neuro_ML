@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, SubsetRandomSampler
 import numpy as np
-from sklearn.metrics import roc_auc_score, accuracy_score, confusion_matrix, classification_report, precision_recall_fscore_support
+from sklearn.metrics import roc_auc_score, accuracy_score, confusion_matrix, classification_report, precision_recall_fscore_support, matthews_corrcoef
 import csv
 from datetime import datetime
 import uuid
@@ -449,6 +449,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         new_lr = optimizer.param_groups[0]['lr']
         
         # Store epoch data
+        val_mcc = matthews_corrcoef(val_labels, val_preds)
         epoch_data = {
             'epoch': epoch,
             'train_loss': epoch_loss,
@@ -460,7 +461,8 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             'recall_macro': recall_macro,
             'f1_macro': f1_macro,
             'class_metrics': class_metrics,
-            'confusion_matrix': cm.tolist()
+            'confusion_matrix': cm.tolist(),
+            'val_mcc': val_mcc
         }
         training_history.append(epoch_data)
         

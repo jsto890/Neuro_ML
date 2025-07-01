@@ -16,7 +16,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import (
     roc_auc_score, accuracy_score, precision_score, recall_score, f1_score,
-    confusion_matrix, classification_report, roc_curve, precision_recall_curve
+    confusion_matrix, classification_report, roc_curve, precision_recall_curve,
+    matthews_corrcoef
 )
 from torch.utils.data import DataLoader
 import json
@@ -91,12 +92,15 @@ def calculate_metrics(predictions, probabilities, labels):
     # Classification report
     report = classification_report(labels, predictions, output_dict=True)
     
+    mcc = matthews_corrcoef(labels, predictions)
+    
     return {
         'accuracy': accuracy,
         'precision': precision,
         'recall': recall,
         'f1_score': f1,
         'auc': auc,
+        'mcc': mcc,
         'confusion_matrix': cm,
         'classification_report': report
     }
@@ -150,9 +154,9 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     
     # 4. Metrics Bar Chart
     ax4 = axes[1, 0]
-    metric_names = ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'AUC']
+    metric_names = ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'AUC', 'MCC']
     metric_values = [metrics['accuracy'], metrics['precision'], 
-                    metrics['recall'], metrics['f1_score'], metrics['auc']]
+                    metrics['recall'], metrics['f1_score'], metrics['auc'], metrics['mcc']]
     
     bars = ax4.bar(metric_names, metric_values, alpha=0.7, color='skyblue', edgecolor='black')
     ax4.set_ylabel('Score')
@@ -211,6 +215,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         'recall': float(metrics['recall']),
         'f1_score': float(metrics['f1_score']),
         'auc': float(metrics['auc']),
+        'mcc': float(metrics['mcc']),
         'confusion_matrix': metrics['confusion_matrix'].tolist(),
         'classification_report': metrics['classification_report']
     }
@@ -229,6 +234,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     print(f"Recall:    {metrics['recall']:.4f}")
     print(f"F1-Score:  {metrics['f1_score']:.4f}")
     print(f"AUC:       {metrics['auc']:.4f}")
+    print(f"MCC:       {metrics['mcc']:.4f}")
     print("\nConfusion Matrix:")
     print(metrics['confusion_matrix'])
     print("\nClassification Report:")

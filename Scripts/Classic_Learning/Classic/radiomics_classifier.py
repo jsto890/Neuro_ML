@@ -43,7 +43,7 @@ from sklearn.feature_selection import VarianceThreshold, SelectKBest, f_classif
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     roc_auc_score, confusion_matrix, classification_report,
-    roc_curve, precision_recall_curve
+    roc_curve, precision_recall_curve, matthews_corrcoef
 )
 from sklearn.pipeline import Pipeline
 import warnings
@@ -347,6 +347,7 @@ class RadiomicsClassifier:
                 recall = recall_score(y_split, y_pred, average='weighted')
                 f1 = f1_score(y_split, y_pred, average='weighted')
                 auc = roc_auc_score(y_split, y_pred_proba)
+                mcc = matthews_corrcoef(y_split, y_pred)
                 
                 # Store results
                 results[split_name] = {
@@ -355,13 +356,14 @@ class RadiomicsClassifier:
                     'recall': recall,
                     'f1': f1,
                     'auc': auc,
+                    'mcc': mcc,
                     'predictions': y_pred,
                     'probabilities': y_pred_proba,
                     'true_labels': y_split,
                     'subject_ids': ids_split
                 }
                 
-                self.logger.info(f"{split_name.capitalize()} - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}")
+                self.logger.info(f"{split_name.capitalize()} - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}, MCC: {mcc:.4f}")
             
             self.results = results
             return True
@@ -498,7 +500,7 @@ class RadiomicsClassifier:
             
             # 4. Performance Metrics
             ax4 = axes[1, 1]
-            metrics = ['accuracy', 'precision', 'recall', 'f1', 'auc']
+            metrics = ['accuracy', 'precision', 'recall', 'f1', 'auc', 'mcc']
             splits = list(self.results.keys())
             
             x = np.arange(len(metrics))

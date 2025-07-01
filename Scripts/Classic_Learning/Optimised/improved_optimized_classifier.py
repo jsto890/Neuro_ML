@@ -35,7 +35,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score, 
     roc_auc_score, confusion_matrix, classification_report,
-    roc_curve, precision_recall_curve
+    roc_curve, precision_recall_curve, matthews_corrcoef
 )
 from sklearn.feature_selection import VarianceThreshold
 import matplotlib.pyplot as plt
@@ -743,6 +743,7 @@ class ImprovedOptimizedRadiomicsClassifier:
             recall = recall_score(y_split, y_pred, average='weighted')
             f1 = f1_score(y_split, y_pred, average='weighted')
             auc = roc_auc_score(y_split, y_pred_proba)
+            mcc = matthews_corrcoef(y_split, y_pred)
             
             results[split_name] = {
                 'accuracy': accuracy,
@@ -750,13 +751,14 @@ class ImprovedOptimizedRadiomicsClassifier:
                 'recall': recall,
                 'f1': f1,
                 'auc': auc,
+                'mcc': mcc,
                 'predictions': y_pred,
                 'probabilities': y_pred_proba,
                 'true_labels': y_split,
                 'subject_ids': ids_split
             }
             
-            self.logger.info(f"{model_name} {split_name} - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}")
+            self.logger.info(f"{model_name} {split_name} - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}, MCC: {mcc:.4f}")
         
         return results
 
