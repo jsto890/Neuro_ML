@@ -114,7 +114,7 @@ class ImprovedStackingEnsemble:
 class ImprovedOptimizedRadiomicsClassifier:
     """Improved optimized radiomics classifier with focus on preventing overfitting and data leakage."""
     
-    def __init__(self, input_path, output_dir, random_state=42, binary_only=True):
+    def __init__(self, input_path, output_dir, random_state=42, binary_only=True, selected_features=None):
         """
         Initialize the Improved Optimized Radiomics Classifier.
         
@@ -123,11 +123,13 @@ class ImprovedOptimizedRadiomicsClassifier:
             output_dir (str): Output directory for results
             random_state (int): Random seed for reproducibility
             binary_only (bool): If True, only use labels 0 and 1
+            selected_features (list or None): If provided, use only these features and skip internal feature selection
         """
         self.input_path = input_path
         self.output_dir = Path(output_dir)
         self.random_state = random_state
         self.binary_only = binary_only
+        self.selected_features = selected_features
         
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -201,50 +203,44 @@ class ImprovedOptimizedRadiomicsClassifier:
             self.data = pd.read_csv(self.input_path)
             self.logger.info(f"Loaded {len(self.data)} samples with {len(self.data.columns)} columns")
             
-            # Validate data quality
-            if len(self.data) < 10:
-                raise ValueError(f"Insufficient data: only {len(self.data)} samples")
-            
-            if len(self.data.columns) < 5:
-                raise ValueError(f"Insufficient features: only {len(self.data.columns)} columns")
-            
-            # Remove diagnostic columns (keep only radiomics features)
-            diagnostic_cols = [col for col in self.data.columns if any(x in col.lower() for x in ['diagnostics_', 'subject_id'])]
+            # Remove diagnostic columns
+            diagnostic_cols = [col for col in self.data.columns if col.startswith('diagnostics_')]
             if diagnostic_cols:
                 self.data = self.data.drop(columns=diagnostic_cols)
                 self.logger.info(f"Removed {len(diagnostic_cols)} diagnostic columns")
             
-            # Handle binary classification
+            # Validate required columns
+            required_cols = ['subject_id', 'label']
+            missing_cols = [col for col in required_cols if col not in self.data.columns]
+            if missing_cols:
+                raise ValueError(f"Missing required columns: {missing_cols}")
+            
+            # Filter for binary classification if requested
             if self.binary_only:
-                # Find label column
-                label_col = None
-                for col in self.data.columns:
-                    if col.lower() == 'label':
-                        label_col = col
-                        break
-                
-                if label_col is None:
-                    raise ValueError("No label column found")
-                
-                # Get unique labels
-                unique_labels = self.data[label_col].unique()
-                self.logger.info(f"Unique labels: {unique_labels}")
-                
-                # Filter to binary (0, 1)
-                if len(unique_labels) > 2:
-                    # Keep only classes 0 and 1
-                    self.data = self.data[self.data[label_col].isin([0, 1])]
-                    self.logger.info(f"Filtered to binary classification: {len(self.data)} samples")
-                
-                # Extract features and labels
-                self.y = self.data[label_col].values
-                self.X = self.data.drop(columns=[label_col]).values
-                self.feature_names = self.data.drop(columns=[label_col]).columns.tolist()
-                self.subject_ids = np.arange(len(self.data))
-                
-                # Log final data shape
-                self.logger.info(f"Data shape: {self.X.shape}")
-                self.logger.info(f"Labels: {np.unique(self.y)} (counts: {[np.sum(self.y == label) for label in np.unique(self.y)]})")
+                initial_count = len(self.data)
+                self.data = self.data[self.data['label'].isin([0, 1])]
+                final_count = len(self.data)
+                self.logger.info(f"Filtered to binary classification: {initial_count} → {final_count} samples")
+                if final_count == 0:
+                    raise ValueError("No samples remaining after binary filtering")
+                unique_labels = self.data['label'].unique()
+                if len(unique_labels) != 2 or not all(label in [0, 1] for label in unique_labels):
+                    raise ValueError(f"Expected binary labels [0, 1], got: {unique_labels}")
+            
+            # Extract components
+            self.subject_ids = self.data['subject_id'].values
+            self.y = self.data['label'].values
+            
+            # Use only selected features if provided
+            if self.selected_features is not None:
+                self.logger.info(f"Using externally provided feature list ({len(self.selected_features)} features). Skipping internal feature selection.")
+                self.feature_names = [f for f in self.selected_features if f in self.data.columns]
+            else:
+                self.feature_names = [col for col in self.data.columns if col not in ['subject_id', 'label']]
+            
+            self.X = self.data[self.feature_names].values
+            self.logger.info(f"Data shape: {self.X.shape}")
+            self.logger.info(f"Labels: {np.unique(self.y)} (counts: {np.bincount(self.y)})")
             
             return True
             
@@ -465,6 +461,9 @@ class ImprovedOptimizedRadiomicsClassifier:
     
     def improved_feature_selection(self):
         """Stage 4: Improved feature selection with cross-validation (training data only)."""
+        if self.selected_features is not None:
+            self.logger.info("Skipping improved feature selection (using externally provided features).")
+            return True
         self.logger.info("Stage 4: Improved feature selection (training data only)...")
         
         try:
