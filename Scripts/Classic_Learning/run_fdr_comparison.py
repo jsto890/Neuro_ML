@@ -75,7 +75,7 @@ Examples:
     parser.add_argument(
         '--binary-only', '-b',
         action='store_true',
-        help='Use only binary classification (labels 0 and 1)'
+        help='Use only binary classification (labels 0 and 1) (default: True)'
     )
     
     parser.add_argument(
@@ -110,7 +110,7 @@ Examples:
             input_path=args.input,
             output_dir=args.output,
             random_state=args.random_state,
-            binary_only=args.binary_only,
+            binary_only=True,  # Always use binary classification for now
             fdr_alpha=args.fdr_alpha
         )
         

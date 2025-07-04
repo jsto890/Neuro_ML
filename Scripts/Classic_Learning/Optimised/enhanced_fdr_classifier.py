@@ -181,6 +181,11 @@ class EnhancedFDRRadiomicsClassifier:
                 
                 if final_count == 0:
                     raise ValueError("No samples remaining after binary filtering")
+                
+                # Verify we only have binary labels
+                unique_labels = self.data['label'].unique()
+                if len(unique_labels) != 2 or not all(label in [0, 1] for label in unique_labels):
+                    raise ValueError(f"Expected binary labels [0, 1], got: {unique_labels}")
             
             # Extract components
             self.subject_ids = self.data['subject_id'].values
@@ -601,7 +606,7 @@ class EnhancedFDRRadiomicsClassifier:
             self.logger.info("="*50)
             
             X_train_fdr, X_val_fdr, X_test_fdr, features_fdr = self.fdr_feature_selection(
-                X_train_processed, y_train, X_val_processed, y_val, X_test_processed, y_test, self.feature_names
+                X_train_processed, y_train, X_val_processed, X_test_processed, self.feature_names
             )
             
             self.train_models_for_approach('fdr_selection', X_train_fdr, y_train, X_val_fdr, y_val, X_test_fdr, y_test)
@@ -612,7 +617,7 @@ class EnhancedFDRRadiomicsClassifier:
         self.logger.info("="*50)
         
         X_train_current, X_val_current, X_test_current, features_current = self.current_feature_selection(
-            X_train_processed, y_train, X_val_processed, y_val, X_test_processed, y_test, self.feature_names
+            X_train_processed, y_train, X_val_processed, X_test_processed, self.feature_names
         )
         
         self.train_models_for_approach('current_selection', X_train_current, y_train, X_val_current, y_val, X_test_current, y_test)
