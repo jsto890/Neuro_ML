@@ -14,6 +14,12 @@ try:
 except ImportError:
     EfficientNet3D = None
 
+# Import transformer models
+try:
+    from transformer_models import get_transformer_model
+except ImportError:
+    get_transformer_model = None
+
 class Simple3DCNN(nn.Module):
     """
     A straightforward 3DxCNN for binary classification (e.g. AD vs PD vs CN).
@@ -128,7 +134,8 @@ class SMRI_GradCAM_3DCNN(nn.Module):
 def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16):
     """
     Returns a 3D CNN model instance by name.
-    Supported: 'Simple3DCNN', 'ResNet18_3D', 'DenseNet121_3D', 'EfficientNetB0_3D'
+    Supported: 'Simple3DCNN', 'ResNet18_3D', 'DenseNet121_3D', 'EfficientNetB0_3D',
+               'VisionTransformer3D', 'SwinUNETRClassifier', 'SwinUNETRClassifier_GradCAM'
     """
     model_name = model_name.lower()
     if model_name == "simple3dcnn":
@@ -160,5 +167,10 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16):
             )
         
         return model
+    # Transformer models
+    elif model_name in ["visiontransformer3d", "swinunetrclassifier", "swinunetrclassifier_gradcam"]:
+        if get_transformer_model is None:
+            raise ImportError("Transformer models are not available. Install required dependencies.")
+        return get_transformer_model(model_name, num_classes=num_classes, in_channels=in_channels, base_channels=base_channels)
     else:
         raise ValueError(f"Unknown model name: {model_name}")

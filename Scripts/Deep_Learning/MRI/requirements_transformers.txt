@@ -1,0 +1,24 @@
+# Requirements for Transformer-based 3D Medical Imaging Models
+# Core dependencies
+torch>=1.12.0
+torchvision>=0.13.0
+monai>=1.2.0
+
+# Vision Transformer dependencies
+timm>=0.6.0
+einops>=0.6.0
+
+# Swin Transformer dependencies
+swin-transformer-unetr>=0.1.0
+
+# Additional utilities
+numpy>=1.21.0
+scikit-learn>=1.1.0
+matplotlib>=3.5.0
+seaborn>=0.11.0
+pandas>=1.4.0
+nibabel>=3.2.0
+
+# Optional: For advanced transformer implementations
+transformers>=4.20.0
+accelerate>=0.20.0 

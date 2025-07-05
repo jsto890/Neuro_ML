@@ -1,0 +1,450 @@
+#!/usr/bin/env python3
+"""
+Transformer Model Training Script
+================================
+
+Specialized training script for 3D Vision Transformers and Swin UNETR models
+with advanced features like warmup scheduling, mixed precision training,
+and gradient accumulation.
+"""
+
+import os
+import argparse
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, SubsetRandomSampler
+import numpy as np
+from sklearn.metrics import roc_auc_score, accuracy_score, confusion_matrix, classification_report, precision_recall_fscore_support, matthews_corrcoef
+import csv
+from datetime import datetime
+import uuid
+from sklearn.model_selection import StratifiedKFold
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import json
+from pathlib import Path
+import yaml
+from torch.cuda.amp import GradScaler, autocast
+
+from dataset import SMRIDataset
+from models_smri import get_3d_model
+from transformer_models import get_transformer_model
+from evaluate_model import evaluate_model, calculate_metrics, create_evaluation_plots
+
+# Set style for plots
+plt.style.use('default')
+sns.set_palette("husl")
+
+def load_transformer_config(config_path):
+    """Load transformer-specific configuration."""
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    return config
+
+def create_transformer_optimizer(model, config):
+    """Create optimizer with transformer-specific settings."""
+    if config['training']['optimizer'].lower() == 'adamw':
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=config['training']['learning_rate'],
+            weight_decay=config['training']['weight_decay'],
+            betas=tuple(config['training']['betas']),
+            eps=config['training']['eps']
+        )
+    else:
+        optimizer = torch.optim.Adam(
+            model.parameters(),
+            lr=config['training']['learning_rate'],
+            weight_decay=config['training']['weight_decay']
+        )
+    return optimizer
+
+def create_transformer_scheduler(optimizer, config, total_steps):
+    """Create learning rate scheduler with warmup for transformers."""
+    warmup_steps = int(config['training']['warmup_epochs'] * total_steps)
+    
+    if config['training']['cosine_schedule']:
+        from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR
+        warmup_scheduler = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_steps)
+        main_scheduler = CosineAnnealingLR(optimizer, T_max=total_steps - warmup_steps)
+        
+        def lr_lambda(step):
+            if step < warmup_steps:
+                return warmup_scheduler.get_last_lr()[0] / optimizer.param_groups[0]['lr']
+            else:
+                return main_scheduler.get_last_lr()[0] / optimizer.param_groups[0]['lr']
+        
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    else:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='max', factor=0.5, patience=10, min_lr=1e-6
+        )
+    
+    return scheduler, warmup_steps
+
+def create_transformer_loss(config):
+    """Create loss function with label smoothing for transformers."""
+    if config['training']['label_smoothing'] > 0:
+        return nn.CrossEntropyLoss(label_smoothing=config['training']['label_smoothing'])
+    else:
+        return nn.CrossEntropyLoss()
+
+def train_transformer_model(model, train_loader, val_loader, epochs, device, checkpoint_dir, args, config):
+    """
+    Train transformer model with advanced features.
+    """
+    # Create optimizer and scheduler
+    optimizer = create_transformer_optimizer(model, config)
+    total_steps = len(train_loader) * epochs
+    scheduler, warmup_steps = create_transformer_scheduler(optimizer, config, total_steps)
+    
+    # Create loss function
+    criterion = create_transformer_loss(config)
+    
+    # Mixed precision training
+    scaler = GradScaler() if config['training']['mixed_precision'] else None
+    
+    # Gradient accumulation
+    accumulation_steps = config['training']['gradient_accumulation_steps']
+    
+    model.to(device)
+    best_val_auc = 0.0
+    best_val_acc = 0.0
+    best_state = None
+    final_train_loss = 0.0
+    final_train_acc = 0.0
+    no_improvement_count = 0
+    
+    # Store best metrics
+    best_precision_macro = 0.0
+    best_recall_macro = 0.0
+    best_f1_macro = 0.0
+    best_class_metrics = {}
+    best_confusion_matrix = None
+    
+    # Store training history
+    training_history = []
+    global_step = 0
+
+    for epoch in range(1, epochs + 1):
+        # --- Training phase ---
+        model.train()
+        running_loss = 0.0
+        running_corrects = 0
+        total_samples = 0
+        optimizer.zero_grad()
+
+        for batch_idx, (smri, labels) in enumerate(train_loader):
+            smri, labels = smri.to(device), labels.to(device)
+            
+            # Mixed precision forward pass
+            if scaler is not None:
+                with autocast():
+                    logits = model(smri)
+                    loss = criterion(logits, labels) / accumulation_steps
+                
+                # Backward pass with gradient scaling
+                scaler.scale(loss).backward()
+                
+                if (batch_idx + 1) % accumulation_steps == 0:
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
+                    
+                    # Update learning rate
+                    if scheduler is not None and global_step < warmup_steps:
+                        scheduler.step()
+            else:
+                logits = model(smri)
+                loss = criterion(logits, labels) / accumulation_steps
+                loss.backward()
+                
+                if (batch_idx + 1) % accumulation_steps == 0:
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    
+                    # Update learning rate
+                    if scheduler is not None and global_step < warmup_steps:
+                        scheduler.step()
+
+            running_loss += loss.item() * smri.size(0) * accumulation_steps
+            preds = torch.argmax(logits, dim=1)
+            running_corrects += (preds == labels).sum().item()
+            total_samples += smri.size(0)
+            
+            global_step += 1
+
+        epoch_loss = running_loss / total_samples
+        epoch_acc = running_corrects / total_samples
+        
+        if epoch == epochs:
+            final_train_loss = epoch_loss
+            final_train_acc = epoch_acc
+
+        # --- Validation phase ---
+        model.eval()
+        val_logits = []
+        val_labels = []
+
+        with torch.no_grad():
+            for smri, labels in val_loader:
+                smri = smri.to(device)
+                if scaler is not None:
+                    with autocast():
+                        logits = model(smri)
+                else:
+                    logits = model(smri)
+                val_logits.append(logits.cpu().numpy())
+                val_labels.append(labels.numpy())
+
+        val_logits = np.concatenate(val_logits, axis=0)
+        val_labels = np.concatenate(val_labels, axis=0)
+
+        # Calculate metrics
+        probs = nn.Softmax(dim=1)(torch.from_numpy(val_logits)).numpy()[:, 1]
+        val_auc = roc_auc_score(val_labels, probs)
+        val_preds = np.argmax(val_logits, axis=1)
+        val_acc = accuracy_score(val_labels, val_preds)
+        
+        # Additional metrics
+        precision, recall, f1, support = precision_recall_fscore_support(val_labels, val_preds, average=None, zero_division=0)
+        cm = confusion_matrix(val_labels, val_preds)
+        precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(val_labels, val_preds, average='macro', zero_division=0)
+        
+        # Store per-class metrics
+        class_metrics = {}
+        for i, class_label in enumerate(sorted(set(val_labels))):
+            class_metrics[f'class_{class_label}'] = {
+                'precision': precision[i],
+                'recall': recall[i],
+                'f1_score': f1[i],
+                'support': support[i]
+            }
+
+        # Update learning rate for non-warmup schedulers
+        if scheduler is not None and global_step >= warmup_steps:
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(val_auc)
+            else:
+                scheduler.step()
+
+        # Store epoch data
+        val_mcc = matthews_corrcoef(val_labels, val_preds)
+        current_lr = optimizer.param_groups[0]['lr']
+        
+        epoch_data = {
+            'epoch': epoch,
+            'global_step': global_step,
+            'train_loss': epoch_loss,
+            'train_acc': epoch_acc,
+            'val_auc': val_auc,
+            'val_acc': val_acc,
+            'lr': current_lr,
+            'precision_macro': precision_macro,
+            'recall_macro': recall_macro,
+            'f1_macro': f1_macro,
+            'class_metrics': class_metrics,
+            'confusion_matrix': cm.tolist(),
+            'val_mcc': val_mcc
+        }
+        training_history.append(epoch_data)
+
+        print(f"Epoch {epoch}/{epochs} (Step {global_step})  "
+              f"Train loss={epoch_loss:.4f}, Train acc={epoch_acc:.4f}  "
+              f"Val AUC={val_auc:.4f}, Val acc={val_acc:.4f}  "
+              f"LR={current_lr:.6f}")
+
+        # Checkpoint if this is the best AUC so far
+        if val_auc > best_val_auc:
+            best_val_auc = val_auc
+            best_val_acc = val_acc
+            best_state = model.state_dict().copy()
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            
+            model_filename = "best_transformer_model.pth"
+            model_path = os.path.join(checkpoint_dir, model_filename)
+            
+            torch.save(best_state, model_path)
+            print(f"  [Checkpoint] Saved new best model (AUC={val_auc:.4f}) -> {model_filename}")
+            no_improvement_count = 0
+            
+            # Update best metrics
+            best_precision_macro = precision_macro
+            best_recall_macro = recall_macro
+            best_f1_macro = f1_macro
+            best_class_metrics = class_metrics
+            best_confusion_matrix = cm
+        else:
+            no_improvement_count += 1
+            
+        # Early stopping
+        if no_improvement_count >= 20:
+            print(f"\nEarly stopping triggered after {epoch} epochs")
+            break
+
+    # Load best model weights
+    if best_state is not None:
+        model.load_state_dict(best_state)
+    
+    return model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Train transformer models on sMRI volumes",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Available transformer models:
+  VisionTransformer3D        - 3D Vision Transformer
+  SwinUNETRClassifier        - Swin UNETR for classification
+  SwinUNETRClassifier_GradCAM - Swin UNETR with Grad-CAM support
+
+Examples:
+  # Train Vision Transformer
+  python train_transformers.py --train_csv train.csv --val_csv val.csv --data_root /path/to/data --labels 0 1 --model VisionTransformer3D --config config_transformers.yaml
+
+  # Train Swin UNETR
+  python train_transformers.py --train_csv train.csv --val_csv val.csv --data_root /path/to/data --labels 0 1 --model SwinUNETRClassifier --config config_transformers.yaml
+        """
+    )
+    
+    # Required arguments
+    parser.add_argument("--train_csv", type=str, required=True,
+                        help="Path to train_labels.csv")
+    parser.add_argument("--val_csv", type=str, required=True,
+                        help="Path to val_labels.csv")
+    parser.add_argument("--data_root", type=str, required=True,
+                        help="Folder containing sMRI NIfTIs")
+    parser.add_argument("--labels", type=int, nargs='+', required=True,
+                        help="Labels to include in training (e.g., 0 1 for CN vs AD)")
+    parser.add_argument("--model", type=str, required=True,
+                        help="Transformer model to train")
+    parser.add_argument("--config", type=str, required=True,
+                        help="Path to transformer configuration file")
+    
+    # Optional arguments
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--batch_size", type=int, default=4,
+                        help="Batch size (optimized for RTX 6000)")
+    parser.add_argument("--num_workers", type=int, default=16,
+                        help="Number of workers (optimized for 128-thread CPU)")
+    parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--test_csv", type=str, default=None,
+                        help="Path to test_labels.csv (for final evaluation)")
+    
+    args = parser.parse_args()
+    
+    # Load configuration
+    config = load_transformer_config(args.config)
+    
+    # Create dated folder for this run
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_folder = f"transformer_run_{timestamp}"
+    run_dir = os.path.join(args.checkpoint_dir, run_folder)
+    os.makedirs(run_dir, exist_ok=True)
+    
+    print(f"\n{'='*60}")
+    print(f"TRANSFORMER TRAINING RUN: {run_folder}")
+    print(f"Model: {args.model}")
+    print(f"Output directory: {run_dir}")
+    print(f"{'='*60}")
+    
+    # Create datasets
+    train_dataset = SMRIDataset(csv_path=args.train_csv, data_root=args.data_root)
+    val_dataset = SMRIDataset(csv_path=args.val_csv, data_root=args.data_root)
+    
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers
+    )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers
+    )
+    
+    # Initialize model
+    if args.model.lower() in ["visiontransformer3d", "swinunetrclassifier", "swinunetrclassifier_gradcam"]:
+        model = get_transformer_model(
+            args.model.lower(),
+            num_classes=len(args.labels),
+            in_channels=1,
+            **config.get(args.model.lower(), {})
+        )
+    else:
+        raise ValueError(f"Unknown transformer model: {args.model}")
+    
+    print(f"Model initialized: {args.model}")
+    print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"Trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
+    
+    # Train model
+    model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix = train_transformer_model(
+        model, train_loader, val_loader, args.epochs, args.device, run_dir, args, config
+    )
+    
+    # Save training results
+    results = {
+        'model_name': args.model,
+        'best_val_auc': best_val_auc,
+        'best_val_acc': best_val_acc,
+        'final_train_loss': final_train_loss,
+        'final_train_acc': final_train_acc,
+        'best_precision_macro': best_precision_macro,
+        'best_recall_macro': best_recall_macro,
+        'best_f1_macro': best_f1_macro,
+        'training_history': training_history,
+        'config': config
+    }
+    
+    results_path = os.path.join(run_dir, f"{args.model}_results.json")
+    with open(results_path, 'w') as f:
+        json.dump(results, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+    
+    print(f"\nTraining completed!")
+    print(f"Best validation AUC: {best_val_auc:.4f}")
+    print(f"Best validation accuracy: {best_val_acc:.4f}")
+    print(f"Results saved to: {run_dir}")
+    
+    # Test set evaluation if provided
+    if args.test_csv:
+        print(f"\nEvaluating on test set...")
+        test_dataset = SMRIDataset(csv_path=args.test_csv, data_root=args.data_root)
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.num_workers
+        )
+        
+        # Load best model
+        best_model_path = os.path.join(run_dir, "best_transformer_model.pth")
+        model.load_state_dict(torch.load(best_model_path, map_location=args.device))
+        model.to(args.device)
+        model.eval()
+        
+        # Evaluate
+        predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
+        metrics = calculate_metrics(predictions, probabilities, labels)
+        
+        # Save test metrics
+        test_metrics_path = os.path.join(run_dir, "test_metrics.json")
+        with open(test_metrics_path, "w") as f:
+            json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+        
+        # Save test plots
+        test_eval_dir = os.path.join(run_dir, "test_evaluation_plots")
+        create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
+        
+        print(f"Test evaluation completed!")
+        print(f"Test AUC: {metrics['auc']:.4f}")
+        print(f"Test accuracy: {metrics['accuracy']:.4f}")
+
+if __name__ == "__main__":
+    main() 

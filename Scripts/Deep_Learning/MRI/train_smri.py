@@ -565,7 +565,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
 
     # Model variants to try
     if models_to_run is None:
-        models_to_run = ["Simple3DCNN", "ResNet18_3D", "DenseNet121_3D", "EfficientNetB0_3D"]
+        models_to_run = ["Simple3DCNN", "ResNet18_3D", "DenseNet121_3D", "EfficientNetB0_3D", 
+                        "VisionTransformer3D", "SwinUNETRClassifier"]
 
     all_model_results = []
 
@@ -823,8 +824,8 @@ Examples:
     parser.add_argument("--data_root",   type=str, required=True,
                         help="Folder containing sMRI NIfTIs, e.g. data/preprocessed/sMRI")
     parser.add_argument("--epochs",      type=int, default=30)
-    parser.add_argument("--batch_size",  type=int, default=2)
-    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--batch_size",  type=int, default=4)
+    parser.add_argument("--num_workers", type=int, default=16)
     parser.add_argument("--base_channels", type=int, default=32,
                         help="Number of base channels for CNN models (default: 32)")
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
@@ -838,7 +839,7 @@ Examples:
     
     # New arguments for model selection
     parser.add_argument("--model",       type=str, default=None,
-                        help="Single model to train (e.g., 'Simple3DCNN', 'ResNet18_3D', 'DenseNet121_3D', 'EfficientNetB0_3D')")
+                        help="Single model to train (e.g., 'Simple3DCNN', 'ResNet18_3D', 'DenseNet121_3D', 'EfficientNetB0_3D', 'VisionTransformer3D', 'SwinUNETRClassifier')")
     parser.add_argument("--models",      type=str, nargs='+', default=None,
                         help="Specific models to train (e.g., 'Simple3DCNN' 'EfficientNetB0_3D')")
     parser.add_argument("--run_all",     action='store_true',
@@ -849,7 +850,8 @@ Examples:
     args = parser.parse_args()
 
     # Define available models
-    available_models = ["Simple3DCNN", "ResNet18_3D", "DenseNet121_3D", "EfficientNetB0_3D"]
+    available_models = ["Simple3DCNN", "ResNet18_3D", "DenseNet121_3D", "EfficientNetB0_3D",
+                       "VisionTransformer3D", "SwinUNETRClassifier", "SwinUNETRClassifier_GradCAM"]
     
     # Determine which models to run
     if args.model:
