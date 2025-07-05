@@ -291,7 +291,7 @@ def train_transformer_model(model, train_loader, val_loader, epochs, device, che
             best_state = model.state_dict().copy()
             os.makedirs(checkpoint_dir, exist_ok=True)
             
-            model_filename = "best_transformer_model.pth"
+            model_filename = "best_smri_model.pth"
             model_path = os.path.join(checkpoint_dir, model_filename)
             
             torch.save(best_state, model_path)
@@ -329,19 +329,20 @@ Available transformer models:
   SwinUNETRClassifier_GradCAM - Swin UNETR with Grad-CAM support
 
 Examples:
-  # Train Vision Transformer
-  python train_transformers.py --train_csv train.csv --val_csv val.csv --data_root /path/to/data --labels 0 1 --model VisionTransformer3D --config config_transformers.yaml
+  # Train Vision Transformer with automatic splits
+  python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI --labels 0 1 --model VisionTransformer3D --config config_transformers.yaml
 
-  # Train Swin UNETR
-  python train_transformers.py --train_csv train.csv --val_csv val.csv --data_root /path/to/data --labels 0 1 --model SwinUNETRClassifier --config config_transformers.yaml
+  # Train Swin UNETR with custom split ratios
+  python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI --labels 0 1 --model SwinUNETRClassifier --config config_hardware_optimized.yaml --val_ratio 0.2 --test_ratio 0.2
+
+  # Train with reproducible splits
+  python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI --labels 0 1 --model SwinUNETRClassifier --config config_hardware_optimized.yaml --random_seed 42
         """
     )
     
     # Required arguments
-    parser.add_argument("--train_csv", type=str, required=True,
-                        help="Path to train_labels.csv")
-    parser.add_argument("--val_csv", type=str, required=True,
-                        help="Path to val_labels.csv")
+    parser.add_argument("--master_csv", type=str, default="~/reseng202500013-ndd-ml/data/mri_labels.csv",
+                        help="Path to master labels CSV file")
     parser.add_argument("--data_root", type=str, required=True,
                         help="Folder containing sMRI NIfTIs")
     parser.add_argument("--labels", type=int, nargs='+', required=True,
@@ -357,19 +358,23 @@ Examples:
                         help="Batch size (optimized for RTX 6000)")
     parser.add_argument("--num_workers", type=int, default=16,
                         help="Number of workers (optimized for 128-thread CPU)")
-    parser.add_argument("--checkpoint_dir", type=str, default="~/reseng202500013-ndd-ml/data/checkpoints_ad_cn/checkpoints_t")
+    parser.add_argument("--checkpoint_dir", type=str, default="~/reseng202500013-ndd-ml/data/checkpoints_ad_cn")
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--test_csv", type=str, default=None,
-                        help="Path to test_labels.csv (for final evaluation)")
+    parser.add_argument("--test_ratio", type=float, default=0.15,
+                        help="Proportion of data for test set")
+    parser.add_argument("--val_ratio", type=float, default=0.15,
+                        help="Proportion of data for validation set")
+    parser.add_argument("--random_seed", type=int, default=None,
+                        help="Random seed for reproducible splits (None for random)")
     
     args = parser.parse_args()
     
     # Load configuration
     config = load_transformer_config(args.config)
     
-    # Create dated folder for this run
+    # Create dated folder for this run (same pattern as train_smri.py)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_folder = f"transformer_run_{timestamp}"
+    run_folder = f"run_{timestamp}"
     
     # Expand user path and create directory structure
     checkpoint_dir = os.path.expanduser(args.checkpoint_dir)
@@ -382,12 +387,23 @@ Examples:
     print(f"Output directory: {run_dir}")
     print(f"{'='*60}")
     
-    # Filter datasets based on specified labels
-    def filter_dataset_by_labels(csv_path, labels):
-        """Filter dataset to only include specified labels."""
-        df = pd.read_csv(csv_path)
+    # Set random seed for reproducible splits (if specified)
+    if args.random_seed is not None:
+        np.random.seed(args.random_seed)
+        torch.manual_seed(args.random_seed)
+        print(f"Using random seed: {args.random_seed}")
+    else:
+        print("Using random seed for different subject mix each run")
+    
+    # Load and filter master dataset
+    def load_and_filter_master_dataset(master_csv_path, labels):
+        """Load master dataset and filter by specified labels."""
+        print(f"Loading master dataset from: {master_csv_path}")
+        
+        # Load CSV
+        df = pd.read_csv(master_csv_path)
         if 'subject_id' not in df.columns or 'label' not in df.columns:
-            df = pd.read_csv(csv_path, header=None, names=['subject_id', 'label'])
+            df = pd.read_csv(master_csv_path, header=None, names=['subject_id', 'label'])
         
         # Drop header rows if present
         df = df[~df['subject_id'].isin(['subject_id', ''])]
@@ -397,31 +413,82 @@ Examples:
         df['label'] = df['label'].astype(int)
         filtered_df = df[df['label'].isin(labels)]
         
-        # Create temporary CSV
-        temp_csv = f'temp_filtered_{os.path.basename(csv_path)}'
-        filtered_df.to_csv(temp_csv, index=False)
-        return temp_csv, filtered_df
+        print(f"Master dataset: {len(df)} total subjects")
+        print(f"After filtering for labels {labels}: {len(filtered_df)} subjects")
+        
+        # Show label distribution
+        label_counts = filtered_df['label'].value_counts().sort_index()
+        for label, count in label_counts.items():
+            print(f"  Label {label}: {count} subjects ({count/len(filtered_df)*100:.1f}%)")
+        
+        return filtered_df
     
-    # Filter datasets
-    temp_train_csv, train_df = filter_dataset_by_labels(args.train_csv, args.labels)
-    temp_val_csv, val_df = filter_dataset_by_labels(args.val_csv, args.labels)
+    # Create stratified train/val/test splits
+    def create_stratified_splits(df, val_ratio, test_ratio, labels):
+        """Create stratified train/val/test splits."""
+        from sklearn.model_selection import train_test_split
+        
+        # First split: train+val vs test
+        train_val, test = train_test_split(
+            df, 
+            test_size=test_ratio, 
+            stratify=df['label'], 
+            random_state=args.random_seed
+        )
+        
+        # Second split: train vs val
+        val_relative_size = val_ratio / (1 - test_ratio)
+        train, val = train_test_split(
+            train_val, 
+            test_size=val_relative_size, 
+            stratify=train_val['label'], 
+            random_state=args.random_seed
+        )
+        
+        return train, val, test
     
-    # Create datasets with filtered data
+    # Load and filter master dataset
+    master_df = load_and_filter_master_dataset(args.master_csv, args.labels)
+    
+    # Create splits
+    train_df, val_df, test_df = create_stratified_splits(
+        master_df, args.val_ratio, args.test_ratio, args.labels
+    )
+    
+    # Save splits to data directory
+    data_dir = os.path.dirname(args.master_csv)
+    temp_train_csv = os.path.join(data_dir, f'temp_train_{run_folder}.csv')
+    temp_val_csv = os.path.join(data_dir, f'temp_val_{run_folder}.csv')
+    temp_test_csv = os.path.join(data_dir, f'temp_test_{run_folder}.csv')
+    
+    train_df.to_csv(temp_train_csv, index=False)
+    val_df.to_csv(temp_val_csv, index=False)
+    test_df.to_csv(temp_test_csv, index=False)
+    
+    # Create datasets with split data
     train_dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root)
     val_dataset = SMRIDataset(csv_path=temp_val_csv, data_root=args.data_root)
+    test_dataset = SMRIDataset(csv_path=temp_test_csv, data_root=args.data_root)
     
-    # Print dataset info
-    print(f"Training set: {len(train_dataset)} subjects")
+    # Print split information
+    print(f"\nDataset splits:")
+    print(f"Training set: {len(train_dataset)} subjects ({len(train_dataset)/len(master_df)*100:.1f}%)")
     train_labels = [train_dataset.labels[i] for i in range(len(train_dataset))]
     train_counts = pd.Series(train_labels).value_counts().sort_index()
     for label, count in train_counts.items():
         print(f"  Label {label}: {count} subjects ({count/len(train_labels)*100:.1f}%)")
     
-    print(f"Validation set: {len(val_dataset)} subjects")
+    print(f"Validation set: {len(val_dataset)} subjects ({len(val_dataset)/len(master_df)*100:.1f}%)")
     val_labels = [val_dataset.labels[i] for i in range(len(val_dataset))]
     val_counts = pd.Series(val_labels).value_counts().sort_index()
     for label, count in val_counts.items():
         print(f"  Label {label}: {count} subjects ({count/len(val_labels)*100:.1f}%)")
+    
+    print(f"Test set: {len(test_dataset)} subjects ({len(test_dataset)/len(master_df)*100:.1f}%)")
+    test_labels = [test_dataset.labels[i] for i in range(len(test_dataset))]
+    test_counts = pd.Series(test_labels).value_counts().sort_index()
+    for label, count in test_counts.items():
+        print(f"  Label {label}: {count} subjects ({count/len(test_labels)*100:.1f}%)")
     
     # Create data loaders
     train_loader = DataLoader(
@@ -484,45 +551,44 @@ Examples:
     print(f"Best validation accuracy: {best_val_acc:.4f}")
     print(f"Results saved to: {run_dir}")
     
-    # Test set evaluation if provided
-    if args.test_csv:
-        print(f"\nEvaluating on test set...")
-        test_dataset = SMRIDataset(csv_path=args.test_csv, data_root=args.data_root)
-        test_loader = DataLoader(
-            test_dataset,
-            batch_size=args.batch_size,
-            shuffle=False,
-            num_workers=args.num_workers
-        )
-        
-        # Load best model
-        best_model_path = os.path.join(run_dir, "best_transformer_model.pth")
-        model.load_state_dict(torch.load(best_model_path, map_location=args.device))
-        model.to(args.device)
-        model.eval()
-        
-        # Evaluate
-        predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
-        metrics = calculate_metrics(predictions, probabilities, labels)
-        
-        # Save test metrics
-        test_metrics_path = os.path.join(run_dir, "test_metrics.json")
-        with open(test_metrics_path, "w") as f:
-            json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
-        
-        # Save test plots
-        test_eval_dir = os.path.join(run_dir, "test_evaluation_plots")
-        create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
-        
-        print(f"Test evaluation completed!")
-        print(f"Test AUC: {metrics['auc']:.4f}")
-        print(f"Test accuracy: {metrics['accuracy']:.4f}")
+    # Test set evaluation (always available now)
+    print(f"\nEvaluating on test set...")
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers
+    )
+    
+    # Load best model
+    best_model_path = os.path.join(run_dir, "best_smri_model.pth")
+    model.load_state_dict(torch.load(best_model_path, map_location=args.device))
+    model.to(args.device)
+    model.eval()
+    
+    # Evaluate
+    predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
+    metrics = calculate_metrics(predictions, probabilities, labels)
+    
+    # Save test metrics
+    test_metrics_path = os.path.join(run_dir, "test_metrics.json")
+    with open(test_metrics_path, "w") as f:
+        json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+    
+    # Save test plots
+    test_eval_dir = os.path.join(run_dir, "test_evaluation_plots")
+    create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
+    
+    print(f"Test evaluation completed!")
+    print(f"Test AUC: {metrics['auc']:.4f}")
+    print(f"Test accuracy: {metrics['accuracy']:.4f}")
     
     # Clean up temporary files
     try:
         os.remove(temp_train_csv)
         os.remove(temp_val_csv)
-        print(f"Cleaned up temporary files")
+        os.remove(temp_test_csv)
+        print(f"Cleaned up temporary files from data directory")
     except:
         pass
 

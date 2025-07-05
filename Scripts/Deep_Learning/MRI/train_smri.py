@@ -17,6 +17,7 @@ import seaborn as sns
 import json
 from pathlib import Path
 import shutil
+from sklearn.model_selection import train_test_split
 
 from dataset import SMRIDataset
 from models_smri import Simple3DCNN, get_3d_model
@@ -513,9 +514,11 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
 
 def k_fold_training(args, k_folds=5, models_to_run=None):
     """
-    Perform k-fold cross validation on training set, with fixed validation set, for multiple model variants.
+    Perform k-fold cross validation on master dataset with proper train/val/test splits.
     """
     import copy
+    from sklearn.model_selection import train_test_split
+    
     # Create dated folder for this run
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_folder = f"run_{timestamp}"
@@ -527,21 +530,92 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     print(f"Output directory: {run_dir}")
     print("="*60)
 
-    # Filter the datasets based on labels
-    train_df = filter_labels(args.train_csv, args.labels)
-    val_df = filter_labels(args.val_csv, args.labels)
+    # Set random seed for reproducible splits (if specified)
+    if args.random_seed is not None:
+        np.random.seed(args.random_seed)
+        torch.manual_seed(args.random_seed)
+        print(f"Using random seed: {args.random_seed}")
+    else:
+        print("Using random seed for different subject mix each run")
 
-    # Create temporary CSV files for filtered data
-    temp_train_csv = 'temp_train_filtered.csv'
-    temp_val_csv = 'temp_val_filtered.csv'
-    train_df.to_csv(temp_train_csv, index=False)
-    val_df.to_csv(temp_val_csv, index=False)
+    # Load and filter master dataset
+    print(f"Loading master dataset from: {args.master_csv}")
+    master_df = pd.read_csv(args.master_csv)
+    if 'subject_id' not in master_df.columns or 'label' not in master_df.columns:
+        master_df = pd.read_csv(args.master_csv, header=None, names=['subject_id', 'label'])
+    
+    # Drop header rows if present
+    master_df = master_df[~master_df['subject_id'].isin(['subject_id', ''])]
+    master_df = master_df[~master_df['label'].isin(['label', ''])]
+    
+    # Convert labels to int and filter
+    master_df['label'] = master_df['label'].astype(int)
+    filtered_df = master_df[master_df['label'].isin(args.labels)]
+    
+    print(f"Master dataset: {len(master_df)} total subjects")
+    print(f"After filtering for labels {args.labels}: {len(filtered_df)} subjects")
+    
+    # Show label distribution
+    label_counts = filtered_df['label'].value_counts().sort_index()
+    for label, count in label_counts.items():
+        print(f"  Label {label}: {count} subjects ({count/len(filtered_df)*100:.1f}%)")
 
-    # Create datasets with filtered data
+    # Create stratified train/val/test splits
+    print(f"\nCreating stratified splits (train: {1-args.val_ratio-args.test_ratio:.1%}, val: {args.val_ratio:.1%}, test: {args.test_ratio:.1%})")
+    
+    # First split: train+val vs test
+    train_val, test = train_test_split(
+        filtered_df, 
+        test_size=args.test_ratio, 
+        stratify=filtered_df['label'], 
+        random_state=args.random_seed
+    )
+    
+    # Second split: train vs val
+    val_relative_size = args.val_ratio / (1 - args.test_ratio)
+    train, val = train_test_split(
+        train_val, 
+        test_size=val_relative_size, 
+        stratify=train_val['label'], 
+        random_state=args.random_seed
+    )
+
+    # Save splits to data directory
+    data_dir = os.path.dirname(args.master_csv)
+    temp_train_csv = os.path.join(data_dir, f'temp_train_{run_folder}.csv')
+    temp_val_csv = os.path.join(data_dir, f'temp_val_{run_folder}.csv')
+    temp_test_csv = os.path.join(data_dir, f'temp_test_{run_folder}.csv')
+    
+    train.to_csv(temp_train_csv, index=False)
+    val.to_csv(temp_val_csv, index=False)
+    test.to_csv(temp_test_csv, index=False)
+
+    # Create datasets with split data
     train_dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root)
     val_dataset = SMRIDataset(csv_path=temp_val_csv, data_root=args.data_root)
+    test_dataset = SMRIDataset(csv_path=temp_test_csv, data_root=args.data_root)
 
-    # Create fixed validation loader
+    # Print split information
+    print(f"\nDataset splits:")
+    print(f"Training set: {len(train_dataset)} subjects ({len(train_dataset)/len(filtered_df)*100:.1f}%)")
+    train_labels = [train_dataset.labels[i] for i in range(len(train_dataset))]
+    train_counts = pd.Series(train_labels).value_counts().sort_index()
+    for label, count in train_counts.items():
+        print(f"  Label {label}: {count} subjects ({count/len(train_labels)*100:.1f}%)")
+    
+    print(f"Validation set: {len(val_dataset)} subjects ({len(val_dataset)/len(filtered_df)*100:.1f}%)")
+    val_labels = [val_dataset.labels[i] for i in range(len(val_dataset))]
+    val_counts = pd.Series(val_labels).value_counts().sort_index()
+    for label, count in val_counts.items():
+        print(f"  Label {label}: {count} subjects ({count/len(val_labels)*100:.1f}%)")
+    
+    print(f"Test set: {len(test_dataset)} subjects ({len(test_dataset)/len(filtered_df)*100:.1f}%)")
+    test_labels = [test_dataset.labels[i] for i in range(len(test_dataset))]
+    test_counts = pd.Series(test_labels).value_counts().sort_index()
+    for label, count in test_counts.items():
+        print(f"  Label {label}: {count} subjects ({count/len(test_labels)*100:.1f}%)")
+
+    # Create fixed validation and test loaders
     val_loader = DataLoader(
         val_dataset,
         batch_size=args.batch_size,
@@ -549,18 +623,18 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         num_workers=args.num_workers
     )
 
-    # Print validation set info (fixed for all folds)
-    val_labels = [val_dataset.labels[i] for i in range(len(val_dataset))]
-    print(f"Validation set: {len(val_labels)} subjects")
-    val_counts = pd.Series(val_labels).value_counts().sort_index()
-    for label, count in val_counts.items():
-        print(f"  Label {label}: {count} subjects ({count/len(val_labels)*100:.1f}%)")
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers
+    )
 
     # Get labels for stratification
     train_labels = [train_dataset.labels[i] for i in range(len(train_dataset))]
 
     # Initialize stratified k-fold to ensure balanced class distribution
-    skfold = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=42)
+    skfold = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=args.random_seed)
     splits = list(skfold.split(range(len(train_dataset)), train_labels))
 
     # Model variants to try
@@ -576,39 +650,44 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         os.makedirs(model_dir, exist_ok=True)
         fold_results = []
         folds_data = []
-        for fold, (train_ids, test_ids) in enumerate(splits):
+        for fold, (train_ids, val_fold_ids) in enumerate(splits):
             print(f'\nFOLD {fold + 1}/{k_folds} [{model_name}]')
-            print(f'Training on {len(train_ids)} subjects, testing on {len(test_ids)} subjects')
+            print(f'Training on {len(train_ids)} subjects, validating on {len(val_fold_ids)} subjects')
             train_labels_fold = [train_labels[i] for i in train_ids]
-            test_labels_fold = [train_labels[i] for i in test_ids]
+            val_fold_labels = [train_labels[i] for i in val_fold_ids]
             print(f'Training set class distribution:')
             train_counts = pd.Series(train_labels_fold).value_counts().sort_index()
             for label, count in train_counts.items():
                 print(f'  Label {label}: {count} subjects ({count/len(train_labels_fold)*100:.1f}%)')
-            print(f'Test set class distribution:')
-            test_counts = pd.Series(test_labels_fold).value_counts().sort_index()
-            for label, count in test_counts.items():
-                print(f'  Label {label}: {count} subjects ({count/len(test_labels_fold)*100:.1f}%)')
+            print(f'Validation fold class distribution:')
+            val_fold_counts = pd.Series(val_fold_labels).value_counts().sort_index()
+            for label, count in val_fold_counts.items():
+                print(f'  Label {label}: {count} subjects ({count/len(val_fold_labels)*100:.1f}%)')
+            
             train_sampler = SubsetRandomSampler(train_ids)
-            test_sampler = SubsetRandomSampler(test_ids)
+            val_fold_sampler = SubsetRandomSampler(val_fold_ids)
+            
             train_loader = DataLoader(
                 train_dataset,
                 batch_size=args.batch_size,
                 sampler=train_sampler,
                 num_workers=args.num_workers
             )
-            test_loader = DataLoader(
+            val_fold_loader = DataLoader(
                 train_dataset,
                 batch_size=args.batch_size,
-                sampler=test_sampler,
+                sampler=val_fold_sampler,
                 num_workers=args.num_workers
             )
+            
             # Initialize model for this fold
             model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels)
-            # Train the model using training set and test on validation set
+            
+            # Train the model using training fold and validate on validation fold
             model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix = train_sMRI_model(
-                model, train_loader, val_loader, args.epochs, args.device, model_dir, args
+                model, train_loader, val_fold_loader, args.epochs, args.device, model_dir, args
             )
+            
             fold_results.append({
                 'fold': fold + 1,
                 'best_val_auc': best_val_auc,
@@ -636,6 +715,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 final_train_acc=final_train_acc,
                 notes=f"{model_name} Fold {fold + 1}/{k_folds}"
             )
+        
         # Save per-model results
         avg_val_auc = np.mean([r['best_val_auc'] for r in fold_results])
         avg_val_acc = np.mean([r['best_val_acc'] for r in fold_results])
@@ -669,7 +749,10 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 'learning_rate': args.learning_rate,
                 'weight_decay': args.weight_decay,
                 'k_folds': args.k_folds,
-                'labels': args.labels
+                'labels': args.labels,
+                'val_ratio': args.val_ratio,
+                'test_ratio': args.test_ratio,
+                'random_seed': args.random_seed
             },
             'fold_results': fold_results
         }
@@ -687,38 +770,37 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'fold_results': fold_results
         })
         print(f"\n{model_name} results saved to: {model_dir}")
-        # --- Test set evaluation ---
-        if hasattr(args, 'test_csv') and args.test_csv:
-            print(f"\nEvaluating {model_name} on the test set...")
-            # Load test set
-            test_dataset = SMRIDataset(csv_path=args.test_csv, data_root=args.data_root)
-            test_loader = DataLoader(
-                test_dataset,
-                batch_size=args.batch_size,
-                shuffle=False,
-                num_workers=args.num_workers
-            )
-            # Load best model checkpoint
-            best_model_path = os.path.join(model_dir, "best_smri_model.pth")
-            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels)
-            state_dict = torch.load(best_model_path, map_location=args.device)
-            model.load_state_dict(state_dict)
-            model.to(args.device)
-            model.eval()
-            # Evaluate
-            predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
-            metrics = calculate_metrics(predictions, probabilities, labels)
-            # Save metrics
-            test_metrics_path = os.path.join(model_dir, "test_metrics.json")
-            with open(test_metrics_path, "w") as f:
-                json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
-            # Save plots
-            test_eval_dir = os.path.join(model_dir, "test_evaluation_plots")
-            create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
-            print(f"Test set evaluation for {model_name} saved to: {test_eval_dir}")
+        
+        # Test set evaluation (always available now)
+        print(f"\nEvaluating {model_name} on the test set...")
+        # Load best model checkpoint
+        best_model_path = os.path.join(model_dir, "best_smri_model.pth")
+        model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels)
+        state_dict = torch.load(best_model_path, map_location=args.device)
+        model.load_state_dict(state_dict)
+        model.to(args.device)
+        model.eval()
+        # Evaluate
+        predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
+        metrics = calculate_metrics(predictions, probabilities, labels)
+        # Save metrics
+        test_metrics_path = os.path.join(model_dir, "test_metrics.json")
+        with open(test_metrics_path, "w") as f:
+            json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+        # Save plots
+        test_eval_dir = os.path.join(model_dir, "test_evaluation_plots")
+        create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
+        print(f"Test set evaluation for {model_name} saved to: {test_eval_dir}")
+    
     # Clean up temporary files
-    os.remove(temp_train_csv)
-    os.remove(temp_val_csv)
+    try:
+        os.remove(temp_train_csv)
+        os.remove(temp_val_csv)
+        os.remove(temp_test_csv)
+        print(f"Cleaned up temporary files from data directory")
+    except:
+        pass
+    
     # --- Summary comparison plot ---
     print("\nGenerating summary comparison plot for all models...")
     model_names = [r['model_name'] for r in all_model_results]
@@ -805,22 +887,20 @@ Available models:
 
 Examples:
   # Run all models (default)
-  python train_smri.py --train_csv train.csv --val_csv val.csv --data_root /path/to/data --labels 0 1
+  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1
 
   # Run single model
-  python train_smri.py --train_csv train.csv --val_csv val.csv --data_root /path/to/data --labels 0 1 --model EfficientNetB0_3D
+  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --model EfficientNetB0_3D
 
   # Run specific models
-  python train_smri.py --train_csv train.csv --val_csv val.csv --data_root /path/to/data --labels 0 1 --models Simple3DCNN EfficientNetB0_3D
+  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --models Simple3DCNN EfficientNetB0_3D
 
   # Explicitly run all models
-  python train_smri.py --train_csv train.csv --val_csv val.csv --data_root /path/to/data --labels 0 1 --run_all
+  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --run_all
         """
     )
-    parser.add_argument("--train_csv",   type=str, required=True,
-                        help="Path to train_labels.csv")
-    parser.add_argument("--val_csv",     type=str, required=True,
-                        help="Path to val_labels.csv")
+    parser.add_argument("--master_csv", type=str, default="~/reseng202500013-ndd-ml/data/mri_labels.csv",
+                        help="Path to master labels CSV file")
     parser.add_argument("--data_root",   type=str, required=True,
                         help="Folder containing sMRI NIfTIs, e.g. data/preprocessed/sMRI")
     parser.add_argument("--epochs",      type=int, default=30)
@@ -828,7 +908,7 @@ Examples:
     parser.add_argument("--num_workers", type=int, default=16)
     parser.add_argument("--base_channels", type=int, default=32,
                         help="Number of base channels for CNN models (default: 32)")
-    parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
+    parser.add_argument("--checkpoint_dir", type=str, default="~/reseng202500013-ndd-ml/data/checkpoints_ad_cn")
     parser.add_argument("--device",      type=str, default="cuda")
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-5)
@@ -836,6 +916,12 @@ Examples:
                         help="Number of folds for cross-validation")
     parser.add_argument("--labels",      type=int, nargs='+', required=True,
                         help="Labels to include in training (e.g., 0 1 for CN vs AD)")
+    parser.add_argument("--val_ratio", type=float, default=0.15,
+                        help="Proportion of data for validation set")
+    parser.add_argument("--test_ratio", type=float, default=0.15,
+                        help="Proportion of data for test set")
+    parser.add_argument("--random_seed", type=int, default=None,
+                        help="Random seed for reproducible splits (None for random)")
     
     # New arguments for model selection
     parser.add_argument("--model",       type=str, default=None,
@@ -844,8 +930,6 @@ Examples:
                         help="Specific models to train (e.g., 'Simple3DCNN' 'EfficientNetB0_3D')")
     parser.add_argument("--run_all",     action='store_true',
                         help="Run all available models (default behavior)")
-    parser.add_argument("--test_csv", type=str, required=False, default=None,
-                        help="Path to test_labels.csv (for final test set evaluation)")
     
     args = parser.parse_args()
 
