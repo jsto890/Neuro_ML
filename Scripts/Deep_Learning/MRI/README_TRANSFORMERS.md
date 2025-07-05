@@ -58,7 +58,7 @@ Input: [B, 1, D, H, W] → Swin Encoder → Global Pooling → Classification He
 
 ### Prerequisites
 
-- Python 3.9+
+- Python 3.9+ (in current environment)
 - CUDA 11.8+ (for GPU acceleration)
 - GPU with at least 8GB VRAM (16GB recommended, 24GB optimal)
 - 32GB RAM recommended (64GB optimal)
@@ -70,18 +70,14 @@ Input: [B, 1, D, H, W] → Swin Encoder → Global Pooling → Classification He
 # Make the installation script executable
 chmod +x install_transformers.sh
 
-# Run the installation script
+# Run the installation script (installs in current environment)
 ./install_transformers.sh
 ```
 
 ### Manual Installation
 
 ```bash
-# Create conda environment
-conda create -n transformers_3d python=3.9 -y
-conda activate transformers_3d
-
-# Install PyTorch
+# Install PyTorch (if not already installed)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
 # Install MONAI

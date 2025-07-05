@@ -2,19 +2,12 @@
 
 # Installation script for Transformer-based 3D Medical Imaging Models
 # This script installs all required dependencies for Vision Transformers and Swin UNETR
+# in the current environment
 
 echo "=========================================="
 echo "Installing Transformer Model Dependencies"
+echo "Installing in current environment..."
 echo "=========================================="
-
-# Check if conda is available
-if command -v conda &> /dev/null; then
-    echo "Conda detected. Creating new environment..."
-    conda create -n transformers_3d python=3.9 -y
-    conda activate transformers_3d
-else
-    echo "Conda not found. Using pip for installation..."
-fi
 
 # Upgrade pip
 echo "Upgrading pip..."
@@ -100,9 +93,8 @@ echo "Installation completed!"
 echo "=========================================="
 echo ""
 echo "Next steps:"
-echo "1. Activate the environment: conda activate transformers_3d"
-echo "2. Test the models: python -c 'from transformer_models import *; print(\"Models ready!\")'"
-echo "3. Run training: python train_transformers.py --help"
+echo "1. Test the models: python -c 'from transformer_models import *; print(\"Models ready!\")'"
+echo "2. Run training: python train_transformers.py --help"
 echo ""
 echo "Hardware requirements:"
 echo "- GPU with at least 8GB VRAM (16GB recommended)"
