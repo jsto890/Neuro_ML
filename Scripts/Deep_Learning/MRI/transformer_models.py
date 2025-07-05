@@ -257,7 +257,7 @@ class SwinUNETRClassifier(nn.Module):
     def __init__(self, 
                  in_channels: int = 1,
                  num_classes: int = 2,
-                 feature_size: int = 96,
+                 feature_size: int = 48,
                  drop_rate: float = 0.0,
                  attn_drop_rate: float = 0.0,
                  dropout_path_rate: float = 0.0,

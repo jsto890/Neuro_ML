@@ -16,11 +16,11 @@ vision_transformer_3d:
   attn_drop_rate: 0.0      # Attention dropout rate
   drop_path_rate: 0.1      # Stochastic depth rate
 
-# Swin UNETR Configuration (Large - Optimized for RTX 6000)
+# Swin UNETR Configuration (Medium - Optimized for RTX 6000)
 swin_unetr_classifier:
   in_channels: 1           # Single channel for sMRI
   num_classes: 2           # Binary classification
-  feature_size: 96         # Feature size for Swin Transformer (Large)
+  feature_size: 48         # Feature size for Swin Transformer (Medium)
   drop_rate: 0.1           # Dropout rate
   attn_drop_rate: 0.0      # Attention dropout rate
   dropout_path_rate: 0.1   # Stochastic depth rate

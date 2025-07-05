@@ -25,7 +25,7 @@ import seaborn as sns
 import json
 from pathlib import Path
 import yaml
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 
 from dataset import SMRIDataset
 from models_smri import get_3d_model
@@ -132,7 +132,7 @@ def train_transformer_model(model, train_loader, val_loader, epochs, device, che
     criterion = create_transformer_loss(config)
     
     # Mixed precision training
-    scaler = GradScaler() if config['training']['mixed_precision'] else None
+    scaler = GradScaler('cuda') if config['training']['mixed_precision'] else None
     
     # Gradient accumulation
     accumulation_steps = int(config['training']['gradient_accumulation_steps'])
@@ -169,7 +169,7 @@ def train_transformer_model(model, train_loader, val_loader, epochs, device, che
             
             # Mixed precision forward pass
             if scaler is not None:
-                with autocast():
+                with autocast('cuda'):
                     logits = model(smri)
                     loss = criterion(logits, labels) / accumulation_steps
                 
@@ -220,7 +220,7 @@ def train_transformer_model(model, train_loader, val_loader, epochs, device, che
             for smri, labels in val_loader:
                 smri = smri.to(device)
                 if scaler is not None:
-                    with autocast():
+                    with autocast('cuda'):
                         logits = model(smri)
                 else:
                     logits = model(smri)
@@ -353,7 +353,7 @@ Examples:
     
     # Optional arguments
     parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--batch_size", type=int, default=4,
+    parser.add_argument("--batch_size", type=int, default=2,
                         help="Batch size (optimized for RTX 6000)")
     parser.add_argument("--num_workers", type=int, default=16,
                         help="Number of workers (optimized for 128-thread CPU)")
