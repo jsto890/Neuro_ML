@@ -255,7 +255,6 @@ class SwinUNETRClassifier(nn.Module):
     """
     
     def __init__(self, 
-                 img_size: Tuple[int, int, int] = (97, 115, 97),
                  in_channels: int = 1,
                  num_classes: int = 2,
                  feature_size: int = 96,
@@ -272,15 +271,14 @@ class SwinUNETRClassifier(nn.Module):
         
         # Create Swin UNETR model
         self.swin_unetr = SwinUNETR(
-            img_size=img_size,
+            spatial_dims=spatial_dims,
             in_channels=in_channels,
             out_channels=num_classes,  # We'll override this
             feature_size=feature_size,
             drop_rate=drop_rate,
             attn_drop_rate=attn_drop_rate,
             dropout_path_rate=dropout_path_rate,
-            use_checkpoint=use_checkpoint,
-            spatial_dims=spatial_dims
+            use_checkpoint=use_checkpoint
         )
         
         # Remove the decoder and output blocks, keep only encoder

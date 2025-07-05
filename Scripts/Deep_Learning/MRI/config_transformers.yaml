@@ -17,7 +17,6 @@ vision_transformer_3d:
 
 # Swin UNETR Configuration (Large)
 swin_unetr_classifier:
-  img_size: [97, 115, 97]  # Input volume size (actual image dimensions)
   in_channels: 1           # Single channel for sMRI
   num_classes: 2           # Binary classification
   feature_size: 96         # Feature size for Swin Transformer (Large)

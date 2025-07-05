@@ -95,9 +95,9 @@ pip install numpy scipy scikit-learn matplotlib seaborn pandas nibabel
 ```bash
 # Train Vision Transformer (Hardware Optimized)
 python train_transformers.py \
-    --train_csv train.csv \
-    --val_csv val.csv \
-    --data_root /path/to/data \
+    --train_csv ~/reseng202500013-ndd-ml/data/train.csv \
+    --val_csv ~/reseng202500013-ndd-ml/data/val.csv \
+    --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI \
     --labels 0 1 \
     --model VisionTransformer3D \
     --config config_hardware_optimized.yaml \
@@ -107,9 +107,9 @@ python train_transformers.py \
 
 # Train Swin UNETR (Hardware Optimized)
 python train_transformers.py \
-    --train_csv train.csv \
-    --val_csv val.csv \
-    --data_root /path/to/data \
+    --train_csv ~/reseng202500013-ndd-ml/data/train.csv \
+    --val_csv ~/reseng202500013-ndd-ml/data/val.csv \
+    --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI \
     --labels 0 1 \
     --model SwinUNETRClassifier \
     --config config_hardware_optimized.yaml \

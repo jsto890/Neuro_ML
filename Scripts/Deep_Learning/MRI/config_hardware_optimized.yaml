@@ -18,7 +18,6 @@ vision_transformer_3d:
 
 # Swin UNETR Configuration (Large - Optimized for RTX 6000)
 swin_unetr_classifier:
-  img_size: [97, 115, 97]  # Actual image dimensions
   in_channels: 1           # Single channel for sMRI
   num_classes: 2           # Binary classification
   feature_size: 96         # Feature size for Swin Transformer (Large)
