@@ -37,32 +37,60 @@ plt.style.use('default')
 sns.set_palette("husl")
 
 def load_transformer_config(config_path):
-    """Load transformer-specific configuration."""
+    """Load transformer-specific configuration with proper type conversion."""
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
+    
+    # Ensure proper type conversion for training parameters
+    if 'training' in config:
+        training_config = config['training']
+        
+        # Convert numeric values to proper types
+        if 'learning_rate' in training_config:
+            training_config['learning_rate'] = float(training_config['learning_rate'])
+        if 'weight_decay' in training_config:
+            training_config['weight_decay'] = float(training_config['weight_decay'])
+        if 'warmup_epochs' in training_config:
+            training_config['warmup_epochs'] = float(training_config['warmup_epochs'])
+        if 'label_smoothing' in training_config:
+            training_config['label_smoothing'] = float(training_config['label_smoothing'])
+        if 'gradient_accumulation_steps' in training_config:
+            training_config['gradient_accumulation_steps'] = int(training_config['gradient_accumulation_steps'])
+        if 'eps' in training_config:
+            training_config['eps'] = float(training_config['eps'])
+        if 'betas' in training_config:
+            training_config['betas'] = [float(b) for b in training_config['betas']]
+    
     return config
 
 def create_transformer_optimizer(model, config):
     """Create optimizer with transformer-specific settings."""
+    # Ensure proper type conversion
+    lr = float(config['training']['learning_rate'])
+    weight_decay = float(config['training']['weight_decay'])
+    
     if config['training']['optimizer'].lower() == 'adamw':
+        betas = tuple(config['training']['betas'])
+        eps = float(config['training']['eps'])
+        
         optimizer = torch.optim.AdamW(
             model.parameters(),
-            lr=config['training']['learning_rate'],
-            weight_decay=config['training']['weight_decay'],
-            betas=tuple(config['training']['betas']),
-            eps=config['training']['eps']
+            lr=lr,
+            weight_decay=weight_decay,
+            betas=betas,
+            eps=eps
         )
     else:
         optimizer = torch.optim.Adam(
             model.parameters(),
-            lr=config['training']['learning_rate'],
-            weight_decay=config['training']['weight_decay']
+            lr=lr,
+            weight_decay=weight_decay
         )
     return optimizer
 
 def create_transformer_scheduler(optimizer, config, total_steps):
     """Create learning rate scheduler with warmup for transformers."""
-    warmup_steps = int(config['training']['warmup_epochs'] * total_steps)
+    warmup_steps = int(float(config['training']['warmup_epochs']) * total_steps)
     
     if config['training']['cosine_schedule']:
         from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR
@@ -85,8 +113,9 @@ def create_transformer_scheduler(optimizer, config, total_steps):
 
 def create_transformer_loss(config):
     """Create loss function with label smoothing for transformers."""
-    if config['training']['label_smoothing'] > 0:
-        return nn.CrossEntropyLoss(label_smoothing=config['training']['label_smoothing'])
+    label_smoothing = float(config['training']['label_smoothing'])
+    if label_smoothing > 0:
+        return nn.CrossEntropyLoss(label_smoothing=label_smoothing)
     else:
         return nn.CrossEntropyLoss()
 
@@ -106,7 +135,7 @@ def train_transformer_model(model, train_loader, val_loader, epochs, device, che
     scaler = GradScaler() if config['training']['mixed_precision'] else None
     
     # Gradient accumulation
-    accumulation_steps = config['training']['gradient_accumulation_steps']
+    accumulation_steps = int(config['training']['gradient_accumulation_steps'])
     
     model.to(device)
     best_val_auc = 0.0
@@ -328,7 +357,7 @@ Examples:
                         help="Batch size (optimized for RTX 6000)")
     parser.add_argument("--num_workers", type=int, default=16,
                         help="Number of workers (optimized for 128-thread CPU)")
-    parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
+    parser.add_argument("--checkpoint_dir", type=str, default="~/reseng202500013-ndd-ml/data/checkpoints_ad_cn/checkpoints_t")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--test_csv", type=str, default=None,
                         help="Path to test_labels.csv (for final evaluation)")
@@ -341,7 +370,10 @@ Examples:
     # Create dated folder for this run
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_folder = f"transformer_run_{timestamp}"
-    run_dir = os.path.join(args.checkpoint_dir, run_folder)
+    
+    # Expand user path and create directory structure
+    checkpoint_dir = os.path.expanduser(args.checkpoint_dir)
+    run_dir = os.path.join(checkpoint_dir, run_folder)
     os.makedirs(run_dir, exist_ok=True)
     
     print(f"\n{'='*60}")
