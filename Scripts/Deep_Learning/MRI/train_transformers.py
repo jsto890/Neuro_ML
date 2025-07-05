@@ -382,9 +382,46 @@ Examples:
     print(f"Output directory: {run_dir}")
     print(f"{'='*60}")
     
-    # Create datasets
-    train_dataset = SMRIDataset(csv_path=args.train_csv, data_root=args.data_root)
-    val_dataset = SMRIDataset(csv_path=args.val_csv, data_root=args.data_root)
+    # Filter datasets based on specified labels
+    def filter_dataset_by_labels(csv_path, labels):
+        """Filter dataset to only include specified labels."""
+        df = pd.read_csv(csv_path)
+        if 'subject_id' not in df.columns or 'label' not in df.columns:
+            df = pd.read_csv(csv_path, header=None, names=['subject_id', 'label'])
+        
+        # Drop header rows if present
+        df = df[~df['subject_id'].isin(['subject_id', ''])]
+        df = df[~df['label'].isin(['label', ''])]
+        
+        # Convert labels to int and filter
+        df['label'] = df['label'].astype(int)
+        filtered_df = df[df['label'].isin(labels)]
+        
+        # Create temporary CSV
+        temp_csv = f'temp_filtered_{os.path.basename(csv_path)}'
+        filtered_df.to_csv(temp_csv, index=False)
+        return temp_csv, filtered_df
+    
+    # Filter datasets
+    temp_train_csv, train_df = filter_dataset_by_labels(args.train_csv, args.labels)
+    temp_val_csv, val_df = filter_dataset_by_labels(args.val_csv, args.labels)
+    
+    # Create datasets with filtered data
+    train_dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root)
+    val_dataset = SMRIDataset(csv_path=temp_val_csv, data_root=args.data_root)
+    
+    # Print dataset info
+    print(f"Training set: {len(train_dataset)} subjects")
+    train_labels = [train_dataset.labels[i] for i in range(len(train_dataset))]
+    train_counts = pd.Series(train_labels).value_counts().sort_index()
+    for label, count in train_counts.items():
+        print(f"  Label {label}: {count} subjects ({count/len(train_labels)*100:.1f}%)")
+    
+    print(f"Validation set: {len(val_dataset)} subjects")
+    val_labels = [val_dataset.labels[i] for i in range(len(val_dataset))]
+    val_counts = pd.Series(val_labels).value_counts().sort_index()
+    for label, count in val_counts.items():
+        print(f"  Label {label}: {count} subjects ({count/len(val_labels)*100:.1f}%)")
     
     # Create data loaders
     train_loader = DataLoader(
@@ -411,6 +448,9 @@ Examples:
         )
     else:
         raise ValueError(f"Unknown transformer model: {args.model}")
+    
+    print(f"Model initialized with {len(args.labels)} classes: {args.labels}")
+    print(f"Expected label range: 0 to {len(args.labels)-1}")
     
     print(f"Model initialized: {args.model}")
     print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -477,6 +517,14 @@ Examples:
         print(f"Test evaluation completed!")
         print(f"Test AUC: {metrics['auc']:.4f}")
         print(f"Test accuracy: {metrics['accuracy']:.4f}")
+    
+    # Clean up temporary files
+    try:
+        os.remove(temp_train_csv)
+        os.remove(temp_val_csv)
+        print(f"Cleaned up temporary files")
+    except:
+        pass
 
 if __name__ == "__main__":
     main() 
