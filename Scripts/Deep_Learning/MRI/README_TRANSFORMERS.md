@@ -59,7 +59,7 @@ Input: [B, 1, D, H, W] → Swin Encoder → Global Pooling → Classification He
 ### Prerequisites
 
 - Python 3.9+ (in current environment)
-- CUDA 11.8+ (for GPU acceleration)
+- CUDA 12.6+ (for GPU acceleration)
 - GPU with at least 8GB VRAM (16GB recommended, 24GB optimal)
 - 32GB RAM recommended (64GB optimal)
 - Multi-core CPU for data loading (64+ cores optimal)
@@ -78,7 +78,7 @@ chmod +x install_transformers.sh
 
 ```bash
 # Install PyTorch (if not already installed)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
 
 # Install MONAI
 pip install monai

@@ -1,7 +1,8 @@
 # Requirements for Transformer-based 3D Medical Imaging Models
-# Core dependencies
-torch>=1.12.0
-torchvision>=0.13.0
+# Core dependencies (CUDA 12.6 compatible)
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
 monai>=1.2.0
 
 # Vision Transformer dependencies

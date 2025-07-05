@@ -13,9 +13,9 @@ echo "=========================================="
 echo "Upgrading pip..."
 pip install --upgrade pip
 
-# Install PyTorch with CUDA support (adjust CUDA version as needed)
-echo "Installing PyTorch..."
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+# Install PyTorch with CUDA support (matching your CUDA 12.6)
+echo "Installing PyTorch with CUDA 12.6..."
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
 
 # Install MONAI (Medical Open Network for AI)
 echo "Installing MONAI..."
@@ -99,6 +99,6 @@ echo ""
 echo "Hardware requirements:"
 echo "- GPU with at least 8GB VRAM (16GB recommended)"
 echo "- 32GB RAM recommended"
-echo "- CUDA 11.8 or later"
+echo "- CUDA 12.6 or later"
 echo ""
 echo "For more information, see the README and configuration files." 
