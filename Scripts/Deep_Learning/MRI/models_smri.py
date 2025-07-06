@@ -174,7 +174,7 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
         
         if use_pretrained:
             print("Loading pretrained ResNet50_3D...")
-            model = resnet50(pretrained=True, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes, feed_forward=False, shortcut_type='A', bias_downsample=True)
+            model = resnet50(pretrained=True, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes, feed_forward=False, shortcut_type='B', bias_downsample=False)
         else:
             print("Creating ResNet50_3D from scratch...")
             model = resnet50(pretrained=False, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes)
@@ -185,8 +185,9 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
             raise ImportError("MONAI is required for 3D DenseNet. Install with 'pip install monai'.")
         
         if use_pretrained:
-            print("Loading pretrained DenseNet121_3D...")
-            model = DenseNet121(pretrained=True, spatial_dims=3, in_channels=in_channels, out_channels=num_classes)
+            print("Warning: DenseNet121_3D does not support pretrained weights for 3D spatial dimensions.")
+            print("Creating DenseNet121_3D from scratch...")
+            model = DenseNet121(pretrained=False, spatial_dims=3, in_channels=in_channels, out_channels=num_classes)
         else:
             print("Creating DenseNet121_3D from scratch...")
             model = DenseNet121(pretrained=False, spatial_dims=3, in_channels=in_channels, out_channels=num_classes)
@@ -280,8 +281,8 @@ def get_pretrained_model_info():
             "source": "MONAI",
             "pretrained_on": "Medical imaging datasets (various)", 
             "input_size": "Flexible (3D)",
-            "pretrained_available": True,
-            "notes": "Dense connections, good feature reuse"
+            "pretrained_available": False,
+            "notes": "Dense connections, good feature reuse. No pretrained weights for 3D."
         },
         "EfficientNetB0_3D": {
             "source": "Community (GitHub)",
