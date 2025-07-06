@@ -550,6 +550,23 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     print(f"STARTING NEW TRAINING RUN: {run_folder}")
     print(f"Output directory: {run_dir}")
     print("="*60)
+    
+    # Clean up any existing temporary CSV files from previous runs
+    data_dir = os.path.dirname(args.master_csv)
+    temp_files_pattern = os.path.join(data_dir, "temp_*.csv")
+    import glob
+    existing_temp_files = glob.glob(temp_files_pattern)
+    if existing_temp_files:
+        print(f"Cleaning up {len(existing_temp_files)} previous temporary CSV files...")
+        for temp_file in existing_temp_files:
+            try:
+                os.remove(temp_file)
+                print(f"  Removed: {os.path.basename(temp_file)}")
+            except Exception as e:
+                print(f"  Warning: Could not remove {os.path.basename(temp_file)}: {e}")
+        print("Cleanup completed.")
+    else:
+        print("No previous temporary CSV files found.")
 
     # Set random seed for reproducible splits (if specified)
     if args.random_seed is not None:
