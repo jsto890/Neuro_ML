@@ -76,9 +76,9 @@ def calculate_metrics(predictions, probabilities, labels):
     """Calculate comprehensive evaluation metrics."""
     # Basic metrics
     accuracy = accuracy_score(labels, predictions)
-    precision = precision_score(labels, predictions, average='weighted')
-    recall = recall_score(labels, predictions, average='weighted')
-    f1 = f1_score(labels, predictions, average='weighted')
+    precision = precision_score(labels, predictions, average='weighted', zero_division=0)
+    recall = recall_score(labels, predictions, average='weighted', zero_division=0)
+    f1 = f1_score(labels, predictions, average='weighted', zero_division=0)
     
     # AUC for binary classification
     if probabilities.shape[1] == 2:
@@ -90,7 +90,7 @@ def calculate_metrics(predictions, probabilities, labels):
     cm = confusion_matrix(labels, predictions)
     
     # Classification report
-    report = classification_report(labels, predictions, output_dict=True)
+    report = classification_report(labels, predictions, output_dict=True, zero_division=0)
     
     mcc = matthews_corrcoef(labels, predictions)
     
@@ -238,7 +238,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     print("\nConfusion Matrix:")
     print(metrics['confusion_matrix'])
     print("\nClassification Report:")
-    print(classification_report(labels, predictions))
+    print(classification_report(labels, predictions, zero_division=0))
     print("="*60)
     
     return metrics

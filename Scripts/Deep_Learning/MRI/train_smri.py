@@ -814,8 +814,15 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         
         # Test set evaluation (always available now)
         print(f"\nEvaluating {model_name} on the test set...")
-        # Load best model checkpoint
+        
+        # Debug: Check if model file exists and has reasonable size
         best_model_path = os.path.join(model_dir, "best_smri_model.pth")
+        if os.path.exists(best_model_path):
+            file_size = os.path.getsize(best_model_path) / (1024*1024)  # MB
+            print(f"Model file size: {file_size:.2f} MB")
+        else:
+            print(f"ERROR: Model file not found: {best_model_path}")
+            continue
         state_dict = torch.load(best_model_path, map_location=args.device)
         
         # For Simple3DCNN, we need to handle the classifier size mismatch
