@@ -269,6 +269,15 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_
     plt.savefig(output_path / f'{model_name}_training_analysis.png', dpi=300, bbox_inches='tight')
     plt.close()
     
+    # Calculate MCC scores for each fold
+    mcc_scores = []
+    for fold_data in folds_data:
+        final_epoch = fold_data['data'][-1]
+        if 'val_mcc' in final_epoch:
+            mcc_scores.append(final_epoch['val_mcc'])
+        else:
+            mcc_scores.append(0.0)  # Fallback if MCC not available
+    
     # Create summary statistics
     summary = {
         'model_name': model_name,
@@ -280,6 +289,7 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_
         'average_precision_macro': np.mean(precision_scores),
         'average_recall_macro': np.mean(recall_scores),
         'average_f1_macro': np.mean(f1_scores),
+        'average_mcc': np.mean(mcc_scores),
         'fold_results': []
     }
     
@@ -294,7 +304,8 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_
             'final_train_acc': final_epoch['train_acc'],
             'final_precision_macro': final_epoch['precision_macro'],
             'final_recall_macro': final_epoch['recall_macro'],
-            'final_f1_macro': final_epoch['f1_macro']
+            'final_f1_macro': final_epoch['f1_macro'],
+            'final_mcc': final_epoch.get('val_mcc', 0.0)
         }
         summary['fold_results'].append(fold_result)
     
@@ -313,12 +324,14 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_
     print(f"Average Precision: {summary['average_precision_macro']:.4f}")
     print(f"Average Recall: {summary['average_recall_macro']:.4f}")
     print(f"Average F1: {summary['average_f1_macro']:.4f}")
+    print(f"Average MCC: {summary['average_mcc']:.4f}")
     print("\nFOLD DETAILS:")
     for fold_result in summary['fold_results']:
         print(f"Fold {fold_result['fold']}: {fold_result['epochs_trained']} epochs, "
               f"Best AUC: {fold_result['best_val_auc']:.4f}, "
               f"Final Val Acc: {fold_result['final_val_acc']:.4f}, "
-              f"F1: {fold_result['final_f1_macro']:.4f}")
+              f"F1: {fold_result['final_f1_macro']:.4f}, "
+              f"MCC: {fold_result['final_mcc']:.4f}")
     print("="*60)
     
     return summary
@@ -730,6 +743,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         avg_precision_macro = float(np.mean([r['best_precision_macro'] for r in fold_results]))
         avg_recall_macro = float(np.mean([r['best_recall_macro'] for r in fold_results]))
         avg_f1_macro = float(np.mean([r['best_f1_macro'] for r in fold_results]))
+        avg_mcc = float(np.mean([r.get('best_mcc', 0.0) for r in fold_results]))
         
         evaluation_dir = os.path.join(model_dir, "evaluation_plots")
         create_training_plots(folds_data, evaluation_dir, model_name)
@@ -749,6 +763,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'average_precision_macro': avg_precision_macro,
             'average_recall_macro': avg_recall_macro,
             'average_f1_macro': avg_f1_macro,
+            'average_mcc': avg_mcc,
             'total_folds': len(fold_results),
             'training_params': {
                 'epochs': args.epochs,
@@ -775,6 +790,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'avg_precision_macro': float(avg_precision_macro),
             'avg_recall_macro': float(avg_recall_macro),
             'avg_f1_macro': float(avg_f1_macro),
+            'avg_mcc': float(avg_mcc),
             'fold_results': fold_results
         })
         print(f"\n{model_name} results saved to: {model_dir}")
@@ -783,8 +799,22 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         print(f"\nEvaluating {model_name} on the test set...")
         # Load best model checkpoint
         best_model_path = os.path.join(model_dir, "best_smri_model.pth")
-        model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels)
         state_dict = torch.load(best_model_path, map_location=args.device)
+        
+        # For Simple3DCNN, we need to handle the classifier size mismatch
+        if model_name == "Simple3DCNN":
+            # Extract the actual input size from the saved classifier weight
+            classifier_weight = state_dict['classifier.0.weight']
+            actual_input_size = classifier_weight.shape[1]
+            
+            # Create model with correct classifier size
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels)
+            model.classifier[0] = nn.Linear(actual_input_size, 256)
+            model._initialized = True
+        else:
+            # For other models, create normally
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels)
+        
         model.load_state_dict(state_dict)
         model.to(args.device)
         model.eval()
