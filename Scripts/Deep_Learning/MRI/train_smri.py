@@ -380,7 +380,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     training_history = []
     
     # Initialize mixed precision training for memory efficiency
-    scaler = torch.cuda.amp.GradScaler()
+    scaler = torch.amp.GradScaler('cuda')
 
     for epoch in range(1, epochs + 1):
         # --- Training phase ---
@@ -394,7 +394,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             optimizer.zero_grad()
             
             # Use mixed precision training
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 logits = model(smri)              # [B, 2]
                 loss = criterion(logits, labels)
             
