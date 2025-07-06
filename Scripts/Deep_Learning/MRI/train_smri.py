@@ -378,6 +378,9 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     
     # Store training history
     training_history = []
+    
+    # Initialize mixed precision training for memory efficiency
+    scaler = torch.cuda.amp.GradScaler()
 
     for epoch in range(1, epochs + 1):
         # --- Training phase ---
@@ -389,10 +392,15 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         for smri, labels in train_loader:
             smri, labels = smri.to(device), labels.to(device)
             optimizer.zero_grad()
-            logits = model(smri)              # [B, 2]
-            loss = criterion(logits, labels)
-            loss.backward()
-            optimizer.step()
+            
+            # Use mixed precision training
+            with torch.cuda.amp.autocast():
+                logits = model(smri)              # [B, 2]
+                loss = criterion(logits, labels)
+            
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
             running_loss += loss.item() * smri.size(0)
             preds = torch.argmax(logits, dim=1)
@@ -438,10 +446,10 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         class_metrics = {}
         for i, class_label in enumerate(sorted(set(val_labels))):
             class_metrics[f'class_{class_label}'] = {
-                'precision': precision[i],
-                'recall': recall[i],
-                'f1_score': f1[i],
-                'support': support[i]
+                'precision': float(precision[i]),
+                'recall': float(recall[i]),
+                'f1_score': float(f1[i]),
+                'support': int(support[i])
             }
 
         # Update learning rate based on validation AUC
@@ -452,18 +460,18 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         # Store epoch data
         val_mcc = matthews_corrcoef(val_labels, val_preds)
         epoch_data = {
-            'epoch': epoch,
-            'train_loss': epoch_loss,
-            'train_acc': epoch_acc,
-            'val_auc': val_auc,
-            'val_acc': val_acc,
-            'lr': new_lr,
-            'precision_macro': precision_macro,
-            'recall_macro': recall_macro,
-            'f1_macro': f1_macro,
+            'epoch': int(epoch),
+            'train_loss': float(epoch_loss),
+            'train_acc': float(epoch_acc),
+            'val_auc': float(val_auc),
+            'val_acc': float(val_acc),
+            'lr': float(new_lr),
+            'precision_macro': float(precision_macro),
+            'recall_macro': float(recall_macro),
+            'f1_macro': float(f1_macro),
             'class_metrics': class_metrics,
             'confusion_matrix': cm.tolist(),
-            'val_mcc': val_mcc
+            'val_mcc': float(val_mcc)
         }
         training_history.append(epoch_data)
         
@@ -690,13 +698,13 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             
             fold_results.append({
                 'fold': fold + 1,
-                'best_val_auc': best_val_auc,
-                'best_val_acc': best_val_acc,
-                'final_train_loss': final_train_loss,
-                'final_train_acc': final_train_acc,
-                'best_precision_macro': best_precision_macro,
-                'best_recall_macro': best_recall_macro,
-                'best_f1_macro': best_f1_macro,
+                'best_val_auc': float(best_val_auc),
+                'best_val_acc': float(best_val_acc),
+                'final_train_loss': float(final_train_loss),
+                'final_train_acc': float(final_train_acc),
+                'best_precision_macro': float(best_precision_macro),
+                'best_recall_macro': float(best_recall_macro),
+                'best_f1_macro': float(best_f1_macro),
                 'best_class_metrics': best_class_metrics,
                 'best_confusion_matrix': best_confusion_matrix.tolist() if best_confusion_matrix is not None else None
             })
@@ -717,18 +725,18 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             )
         
         # Save per-model results
-        avg_val_auc = np.mean([r['best_val_auc'] for r in fold_results])
-        avg_val_acc = np.mean([r['best_val_acc'] for r in fold_results])
-        avg_precision_macro = np.mean([r['best_precision_macro'] for r in fold_results])
-        avg_recall_macro = np.mean([r['best_recall_macro'] for r in fold_results])
-        avg_f1_macro = np.mean([r['best_f1_macro'] for r in fold_results])
+        avg_val_auc = float(np.mean([r['best_val_auc'] for r in fold_results]))
+        avg_val_acc = float(np.mean([r['best_val_acc'] for r in fold_results]))
+        avg_precision_macro = float(np.mean([r['best_precision_macro'] for r in fold_results]))
+        avg_recall_macro = float(np.mean([r['best_recall_macro'] for r in fold_results]))
+        avg_f1_macro = float(np.mean([r['best_f1_macro'] for r in fold_results]))
         
         evaluation_dir = os.path.join(model_dir, "evaluation_plots")
         create_training_plots(folds_data, evaluation_dir, model_name)
         folds_data_filename = f"{model_name}_folds_data.json"
         folds_data_path = os.path.join(model_dir, folds_data_filename)
         with open(folds_data_path, "w") as f:
-            json.dump(folds_data, f)
+            json.dump(folds_data, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
         run_summary = {
             'timestamp': timestamp,
             'run_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -759,14 +767,14 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         summary_filename = f"{model_name}_run_summary.json"
         summary_path = os.path.join(model_dir, summary_filename)
         with open(summary_path, "w") as f:
-            json.dump(run_summary, f, indent=2)
+            json.dump(run_summary, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
         all_model_results.append({
             'model_name': model_name,
-            'avg_val_auc': avg_val_auc,
-            'avg_val_acc': avg_val_acc,
-            'avg_precision_macro': avg_precision_macro,
-            'avg_recall_macro': avg_recall_macro,
-            'avg_f1_macro': avg_f1_macro,
+            'avg_val_auc': float(avg_val_auc),
+            'avg_val_acc': float(avg_val_acc),
+            'avg_precision_macro': float(avg_precision_macro),
+            'avg_recall_macro': float(avg_recall_macro),
+            'avg_f1_macro': float(avg_f1_macro),
             'fold_results': fold_results
         })
         print(f"\n{model_name} results saved to: {model_dir}")
@@ -862,7 +870,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     }
     comparison_summary_path = os.path.join(run_dir, f'model_comparison_summary_{get_label_description(args.labels).replace(" vs ", "_vs_")}.json')
     with open(comparison_summary_path, "w") as f:
-        json.dump(comparison_summary, f, indent=2)
+        json.dump(comparison_summary, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
     print(f"Model comparison summary saved to: {comparison_summary_path}")
     
     print(f"\n{'='*60}\nALL MODEL TRAINING COMPLETED\n{'='*60}")
@@ -886,8 +894,11 @@ Available models:
   EfficientNetB0_3D  - 3D EfficientNet-B0 (requires efficientnet_pytorch_3d)
 
 Examples:
-  # Run all models (default)
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1
+  # Run all models (default) - Memory optimized for 24GB GPU
+  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --batch_size 8
+
+  # Run with smaller batch size if out of memory
+  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --batch_size 4
 
   # Run single model
   python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --model EfficientNetB0_3D
@@ -904,7 +915,8 @@ Examples:
     parser.add_argument("--data_root",   type=str, required=True,
                         help="Folder containing sMRI NIfTIs, e.g. data/preprocessed/sMRI")
     parser.add_argument("--epochs",      type=int, default=30)
-    parser.add_argument("--batch_size",  type=int, default=4)
+    parser.add_argument("--batch_size",  type=int, default=8,
+                        help="Batch size (reduce to 4-6 if out of memory)")
     parser.add_argument("--num_workers", type=int, default=16)
     parser.add_argument("--base_channels", type=int, default=32,
                         help="Number of base channels for CNN models (default: 32)")
@@ -935,7 +947,7 @@ Examples:
 
     # Define available models
     available_models = ["Simple3DCNN", "ResNet18_3D", "DenseNet121_3D", "EfficientNetB0_3D",
-                       "VisionTransformer3D", "SwinUNETRClassifier", "SwinUNETRClassifier_GradCAM"]
+                       "VisionTransformer3D", "SwinUNETRClassifier"]
     
     # Determine which models to run
     if args.model:

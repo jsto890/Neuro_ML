@@ -135,7 +135,7 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16):
     """
     Returns a 3D CNN model instance by name.
     Supported: 'Simple3DCNN', 'ResNet18_3D', 'DenseNet121_3D', 'EfficientNetB0_3D',
-               'VisionTransformer3D', 'SwinUNETRClassifier', 'SwinUNETRClassifier_GradCAM'
+               'VisionTransformer3D', 'SwinUNETRClassifier'
     """
     model_name = model_name.lower()
     if model_name == "simple3dcnn":
@@ -168,7 +168,7 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16):
         
         return model
     # Transformer models
-    elif model_name in ["visiontransformer3d", "swinunetrclassifier", "swinunetrclassifier_gradcam"]:
+    elif model_name in ["visiontransformer3d", "swinunetrclassifier"]:
         if get_transformer_model is None:
             raise ImportError("Transformer models are not available. Install required dependencies.")
         return get_transformer_model(model_name, num_classes=num_classes, in_channels=in_channels, base_channels=base_channels)

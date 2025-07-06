@@ -34,9 +34,9 @@ class VisionTransformer3D(nn.Module):
                  patch_size: int = 16,
                  in_channels: int = 1,
                  num_classes: int = 2,
-                 embed_dim: int = 1024,
-                 depth: int = 16,
-                 num_heads: int = 16,
+                 embed_dim: int = 768,
+                 depth: int = 12,
+                 num_heads: int = 12,
                  mlp_ratio: float = 4.0,
                  qkv_bias: bool = True,
                  drop_rate: float = 0.0,
@@ -257,7 +257,7 @@ class SwinUNETRClassifier(nn.Module):
     def __init__(self, 
                  in_channels: int = 1,
                  num_classes: int = 2,
-                 feature_size: int = 48,
+                 feature_size: int = 36,
                  drop_rate: float = 0.0,
                  attn_drop_rate: float = 0.0,
                  dropout_path_rate: float = 0.0,
@@ -392,12 +392,6 @@ def get_transformer_model(model_name, num_classes=2, in_channels=1, **kwargs):
         )
     elif model_name == "swinunetrclassifier":
         return SwinUNETRClassifier(
-            num_classes=num_classes,
-            in_channels=in_channels,
-            **kwargs
-        )
-    elif model_name == "swinunetrclassifier_gradcam":
-        return SwinUNETRClassifierGradCAM(
             num_classes=num_classes,
             in_channels=in_channels,
             **kwargs
