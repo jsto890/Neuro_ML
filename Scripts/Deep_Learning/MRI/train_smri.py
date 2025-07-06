@@ -702,7 +702,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             )
             
             # Initialize model for this fold
-            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels)
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
             
             # Train the model using training fold and validate on validation fold
             model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix = train_sMRI_model(
@@ -808,12 +808,12 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             actual_input_size = classifier_weight.shape[1]
             
             # Create model with correct classifier size
-            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels)
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
             model.classifier[0] = nn.Linear(actual_input_size, 256)
             model._initialized = True
         else:
             # For other models, create normally
-            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels)
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
         
         model.load_state_dict(state_dict)
         model.to(args.device)
@@ -930,8 +930,11 @@ Examples:
   # Run with smaller batch size if out of memory
   python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --batch_size 4
 
-  # Run single model
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --model EfficientNetB0_3D
+  # Run with pretrained models (recommended for better performance)
+  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --use_pretrained
+
+  # Run single model with pretrained weights
+  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --model EfficientNetB0_3D --use_pretrained
 
   # Run specific models
   python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --models Simple3DCNN EfficientNetB0_3D
@@ -950,6 +953,8 @@ Examples:
     parser.add_argument("--num_workers", type=int, default=16)
     parser.add_argument("--base_channels", type=int, default=32,
                         help="Number of base channels for CNN models (default: 32)")
+    parser.add_argument("--use_pretrained", action='store_true',
+                        help="Use pretrained weights for ResNet, DenseNet, and EfficientNet models")
     parser.add_argument("--checkpoint_dir", type=str, default="~/reseng202500013-ndd-ml/data/checkpoints_ad_cn")
     parser.add_argument("--device",      type=str, default="cuda")
     parser.add_argument("--learning_rate", type=float, default=1e-4)
@@ -976,7 +981,7 @@ Examples:
     args = parser.parse_args()
 
     # Define available models
-    available_models = ["Simple3DCNN", "ResNet18_3D", "DenseNet121_3D", "EfficientNetB0_3D",
+    available_models = ["Simple3DCNN", "ResNet18_3D", "ResNet50_3D", "DenseNet121_3D", "EfficientNetB0_3D",
                        "VisionTransformer3D", "SwinUNETRClassifier"]
     
     # Determine which models to run
