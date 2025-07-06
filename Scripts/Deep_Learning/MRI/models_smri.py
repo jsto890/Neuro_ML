@@ -162,7 +162,7 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
         
         if use_pretrained:
             print("Loading pretrained ResNet18_3D...")
-            model = resnet18(pretrained=True, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes, feed_forward=False)
+            model = resnet18(pretrained=True, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes, feed_forward=False, shortcut_type='A', bias_downsample=True)
         else:
             print("Creating ResNet18_3D from scratch...")
             model = resnet18(pretrained=False, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes)
@@ -174,7 +174,7 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
         
         if use_pretrained:
             print("Loading pretrained ResNet50_3D...")
-            model = resnet50(pretrained=True, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes, feed_forward=False)
+            model = resnet50(pretrained=True, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes, feed_forward=False, shortcut_type='A', bias_downsample=True)
         else:
             print("Creating ResNet50_3D from scratch...")
             model = resnet50(pretrained=False, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes)
