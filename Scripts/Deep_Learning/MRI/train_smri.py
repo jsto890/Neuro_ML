@@ -835,6 +835,14 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
             model.classifier[0] = nn.Linear(actual_input_size, 256)
             model._initialized = True
+        elif model_name == "SwinUNETRClassifier":
+            # Extract the actual input size from the saved classifier weight
+            classifier_weight = state_dict['classifier.0.weight']
+            actual_input_size = classifier_weight.shape[1]
+            # Create model with correct classifier size
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            model.classifier[0] = nn.Linear(actual_input_size, 512)
+            model._initialized = True
         else:
             # For other models, create normally
             model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
