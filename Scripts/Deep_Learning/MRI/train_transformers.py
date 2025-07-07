@@ -327,6 +327,7 @@ Available transformer models:
   VisionTransformer3D        - 3D Vision Transformer
   SwinUNETRClassifier        - Swin UNETR for classification
   SwinUNETRClassifier_GradCAM - Swin UNETR with Grad-CAM support
+  FullSwinUNETRClassifier    - Full Swin UNETR (encoder + decoder) for classification
 
 Examples:
   # Train Vision Transformer with automatic splits
@@ -334,6 +335,9 @@ Examples:
 
   # Train Swin UNETR with custom split ratios
   python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI --labels 0 1 --model SwinUNETRClassifier --config config_hardware_optimized.yaml --val_ratio 0.2 --test_ratio 0.2
+
+  # Train Full Swin UNETR (encoder + decoder)
+  python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI --labels 0 1 --model FullSwinUNETRClassifier --config config_hardware_optimized.yaml --batch_size 1
 
   # Train with reproducible splits
   python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI --labels 0 1 --model SwinUNETRClassifier --config config_hardware_optimized.yaml --random_seed 42
@@ -506,7 +510,7 @@ Examples:
     )
     
     # Initialize model
-    if args.model.lower() in ["visiontransformer3d", "swinunetrclassifier", "swinunetrclassifier_gradcam"]:
+    if args.model.lower() in ["visiontransformer3d", "swinunetrclassifier", "swinunetrclassifier_gradcam", "fullswinunetrclassifier"]:
         model = get_transformer_model(
             args.model.lower(),
             num_classes=len(args.labels),

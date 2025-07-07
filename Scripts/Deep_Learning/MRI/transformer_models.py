@@ -390,11 +390,131 @@ class SwinUNETRClassifierGradCAM(SwinUNETRClassifier):
         return logits, deepest_features
 
 
+class FullSwinUNETRClassifier(nn.Module):
+    """
+    Full Swin UNETR adapted for classification tasks.
+    Uses the complete Swin UNETR architecture (encoder + decoder) with a classification head.
+    
+    Input:  [B, 1, D, H, W]  single-channel sMRI
+    Output: [B, num_classes] logits
+    """
+    
+    def __init__(self, 
+                 in_channels: int = 1,
+                 num_classes: int = 2,
+                 feature_size: int = 36,
+                 drop_rate: float = 0.0,
+                 attn_drop_rate: float = 0.0,
+                 dropout_path_rate: float = 0.0,
+                 use_checkpoint: bool = False,
+                 spatial_dims: int = 3):
+        
+        super().__init__()
+        
+        if SwinUNETR is None:
+            raise ImportError("MONAI is required for SwinUNETR. Install with 'pip install monai'.")
+        
+        # Create full Swin UNETR model
+        self.swin_unetr = SwinUNETR(
+            spatial_dims=spatial_dims,
+            in_channels=in_channels,
+            out_channels=feature_size * 8,  # Use all features from decoder
+            feature_size=feature_size,
+            drop_rate=drop_rate,
+            attn_drop_rate=attn_drop_rate,
+            dropout_path_rate=dropout_path_rate,
+            use_checkpoint=use_checkpoint
+        )
+        
+        # Global average pooling
+        self.global_pool = nn.AdaptiveAvgPool3d(1)
+        
+        # Classification head
+        self.classifier = nn.Sequential(
+            nn.Linear(feature_size * 8, 512),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(512, num_classes)
+        )
+        
+        self._initialized = False
+    
+    def _initialize_classifier(self, x):
+        """Initialize classifier with correct input size."""
+        with torch.no_grad():
+            # Get full output from Swin UNETR
+            full_output = self.swin_unetr(x)  # [B, C, D, H, W]
+            pooled = self.global_pool(full_output)  # [B, C, 1, 1, 1]
+            flattened = pooled.view(pooled.size(0), -1)  # [B, C]
+            n_features = flattened.size(1)
+        
+        # Update classifier input size
+        device = x.device
+        self.classifier[0] = nn.Linear(n_features, 512).to(device)
+        for layer in self.classifier:
+            layer.to(device)
+        
+        self._initialized = True
+    
+    def forward(self, x):
+        """
+        Forward pass.
+        Args:
+            x: Input tensor of shape [B, 1, D, H, W]
+        Returns:
+            logits: Classification logits of shape [B, num_classes]
+        """
+        if not self._initialized:
+            self._initialize_classifier(x)
+        
+        # Get full output from Swin UNETR
+        full_output = self.swin_unetr(x)  # [B, C, D, H, W]
+        
+        # Global average pooling
+        pooled = self.global_pool(full_output)  # [B, C, 1, 1, 1]
+        flattened = pooled.view(pooled.size(0), -1)  # [B, C]
+        
+        # Classification
+        logits = self.classifier(flattened)
+        
+        return logits
+
+
+class FullSwinUNETRClassifierGradCAM(FullSwinUNETRClassifier):
+    """
+    Full Swin UNETR Classifier with Grad-CAM support.
+    Returns both logits and feature maps for visualization.
+    """
+    
+    def forward(self, x):
+        """
+        Forward pass with feature map output for Grad-CAM.
+        Args:
+            x: Input tensor of shape [B, 1, D, H, W]
+        Returns:
+            tuple: (logits, feature_maps) where feature_maps is [B, C, D, H, W]
+        """
+        if not self._initialized:
+            self._initialize_classifier(x)
+        
+        # Get full output from Swin UNETR
+        full_output = self.swin_unetr(x)  # [B, C, D, H, W]
+        
+        # Global average pooling
+        pooled = self.global_pool(full_output)  # [B, C, 1, 1, 1]
+        flattened = pooled.view(pooled.size(0), -1)  # [B, C]
+        
+        # Classification
+        logits = self.classifier(flattened)
+        
+        return logits, full_output
+
+
 # Model factory function for transformer models
 def get_transformer_model(model_name, num_classes=2, in_channels=1, **kwargs):
     """
     Returns a transformer model instance by name.
-    Supported: 'VisionTransformer3D', 'SwinUNETRClassifier'
+    Supported: 'VisionTransformer3D', 'SwinUNETRClassifier', 'FullSwinUNETRClassifier'
     """
     model_name = model_name.lower()
     
@@ -406,6 +526,12 @@ def get_transformer_model(model_name, num_classes=2, in_channels=1, **kwargs):
         )
     elif model_name == "swinunetrclassifier":
         return SwinUNETRClassifier(
+            num_classes=num_classes,
+            in_channels=in_channels,
+            **kwargs
+        )
+    elif model_name == "fullswinunetrclassifier":
+        return FullSwinUNETRClassifier(
             num_classes=num_classes,
             in_channels=in_channels,
             **kwargs

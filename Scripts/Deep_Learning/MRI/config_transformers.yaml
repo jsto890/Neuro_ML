@@ -26,6 +26,17 @@ swin_unetr_classifier:
   use_checkpoint: false    # Use gradient checkpointing for memory efficiency
   spatial_dims: 3          # 3D spatial dimensions
 
+# Full Swin UNETR Configuration (Small - for memory efficiency)
+full_swin_unetr_classifier:
+  in_channels: 1           # Single channel for sMRI
+  num_classes: 2           # Binary classification
+  feature_size: 24         # Feature size for Swin Transformer (Small - for memory efficiency)
+  drop_rate: 0.1           # Dropout rate
+  attn_drop_rate: 0.0      # Attention dropout rate
+  dropout_path_rate: 0.1   # Stochastic depth rate
+  use_checkpoint: false    # Use gradient checkpointing for memory efficiency
+  spatial_dims: 3          # 3D spatial dimensions
+
 # Training Configuration for Transformer Models
 training:
   # Learning rate schedules

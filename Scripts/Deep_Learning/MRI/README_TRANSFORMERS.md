@@ -54,6 +54,33 @@ Input: [B, 1, D, H, W] → Swin Encoder → Global Pooling → Classification He
 - `feature_size`: Feature size for Swin Transformer (default: 96 - Large)
 - `drop_rate`: Dropout rate (default: 0.1)
 
+### 3. Full Swin UNETR Classifier (`FullSwinUNETRClassifier`)
+
+A complete Swin UNETR architecture (encoder + decoder) adapted for classification tasks.
+
+**Key Features:**
+- Full Swin UNETR architecture (encoder + decoder)
+- Skip connections for better gradient flow
+- Multi-scale feature fusion
+- Global average pooling
+- Classification head
+
+**Architecture:**
+```
+Input: [B, 1, D, H, W] → Full Swin UNETR (Encoder + Decoder) → Global Pooling → Classification Head → [B, num_classes]
+```
+
+**Parameters:**
+- `feature_size`: Feature size for Swin Transformer (default: 24 - Small for memory efficiency)
+- `drop_rate`: Dropout rate (default: 0.1)
+- `use_checkpoint`: Gradient checkpointing (default: false)
+
+**Advantages over SwinUNETRClassifier:**
+- Better feature learning through skip connections
+- Multi-scale representations from different depths
+- Improved gradient flow with residual connections
+- More robust training due to U-Net style architecture
+
 ## Installation
 
 ### Prerequisites
@@ -116,6 +143,18 @@ python train_transformers.py \
     --epochs 30 \
     --batch_size 4 \
     --num_workers 32
+
+# Train Full Swin UNETR (Hardware Optimized)
+python train_transformers.py \
+    --train_csv ~/reseng202500013-ndd-ml/data/train.csv \
+    --val_csv ~/reseng202500013-ndd-ml/data/val.csv \
+    --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI \
+    --labels 0 1 \
+    --model FullSwinUNETRClassifier \
+    --config config_hardware_optimized.yaml \
+    --epochs 30 \
+    --batch_size 1 \
+    --num_workers 32
 ```
 
 ### 2. Integration with Main Training Pipeline
@@ -137,7 +176,7 @@ python train_smri.py \
     --val_csv val.csv \
     --data_root /path/to/data \
     --labels 0 1 \
-    --models VisionTransformer3D SwinUNETRClassifier
+    --models VisionTransformer3D SwinUNETRClassifier FullSwinUNETRClassifier
 ```
 
 ### 3. Model Evaluation

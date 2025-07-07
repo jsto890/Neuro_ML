@@ -249,7 +249,7 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
         return model
     
     # Transformer models
-    elif model_name in ["visiontransformer3d", "swinunetrclassifier"]:
+    elif model_name in ["visiontransformer3d", "swinunetrclassifier", "fullswinunetrclassifier"]:
         if get_transformer_model is None:
             raise ImportError("Transformer models are not available. Install required dependencies.")
         return get_transformer_model(model_name, num_classes=num_classes, in_channels=in_channels)

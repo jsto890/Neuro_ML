@@ -678,7 +678,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     # Model variants to try
     if models_to_run is None:
         models_to_run = ["Simple3DCNN", "ResNet18_3D", "DenseNet121_3D", "EfficientNetB0_3D", 
-                        "VisionTransformer3D", "SwinUNETRClassifier"]
+                        "VisionTransformer3D", "SwinUNETRClassifier", "FullSwinUNETRClassifier"]
 
     all_model_results = []
 
@@ -836,6 +836,14 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             model.classifier[0] = nn.Linear(actual_input_size, 256)
             model._initialized = True
         elif model_name == "SwinUNETRClassifier":
+            # Extract the actual input size from the saved classifier weight
+            classifier_weight = state_dict['classifier.0.weight']
+            actual_input_size = classifier_weight.shape[1]
+            # Create model with correct classifier size
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            model.classifier[0] = nn.Linear(actual_input_size, 512)
+            model._initialized = True
+        elif model_name == "FullSwinUNETRClassifier":
             # Extract the actual input size from the saved classifier weight
             classifier_weight = state_dict['classifier.0.weight']
             actual_input_size = classifier_weight.shape[1]
@@ -1004,7 +1012,7 @@ Examples:
     
     # New arguments for model selection
     parser.add_argument("--model",       type=str, default=None,
-                        help="Single model to train (e.g., 'Simple3DCNN', 'ResNet18_3D', 'DenseNet121_3D', 'EfficientNetB0_3D', 'VisionTransformer3D', 'SwinUNETRClassifier')")
+                        help="Single model to train (e.g., 'Simple3DCNN', 'ResNet18_3D', 'DenseNet121_3D', 'EfficientNetB0_3D', 'VisionTransformer3D', 'SwinUNETRClassifier', 'FullSwinUNETRClassifier')")
     parser.add_argument("--models",      type=str, nargs='+', default=None,
                         help="Specific models to train (e.g., 'Simple3DCNN' 'EfficientNetB0_3D')")
     parser.add_argument("--run_all",     action='store_true',
@@ -1014,7 +1022,7 @@ Examples:
 
     # Define available models
     available_models = ["Simple3DCNN", "ResNet18_3D", "ResNet50_3D", "DenseNet121_3D", "EfficientNetB0_3D",
-                       "VisionTransformer3D", "SwinUNETRClassifier"]
+                       "VisionTransformer3D", "SwinUNETRClassifier", "FullSwinUNETRClassifier"]
     
     # Determine which models to run
     if args.model:
