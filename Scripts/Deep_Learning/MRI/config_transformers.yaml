@@ -19,7 +19,7 @@ vision_transformer_3d:
 swin_unetr_classifier:
   in_channels: 1           # Single channel for sMRI
   num_classes: 2           # Binary classification
-  feature_size: 24         # Feature size for Swin Transformer (Medium)
+  feature_size: 48         # Feature size for Swin Transformer (Medium)
   drop_rate: 0.1           # Dropout rate
   attn_drop_rate: 0.0      # Attention dropout rate
   dropout_path_rate: 0.1   # Stochastic depth rate
