@@ -115,30 +115,44 @@ class VisionTransformer3D(nn.Module):
             logits: Classification logits of shape [B, num_classes]
         """
         B = x.shape[0]
-        
+        # Crop or pad to [96, 112, 96] as needed
+        target_shape = (96, 112, 96)
+        current_shape = x.shape[-3:]
+        # Center-crop if any dimension is too large
+        slices = []
+        for curr, tgt in zip(current_shape, target_shape):
+            if curr > tgt:
+                start = (curr - tgt) // 2
+                end = start + tgt
+                slices.append(slice(start, end))
+            else:
+                slices.append(slice(0, curr))
+        x = x[..., slices[0], slices[1], slices[2]]
+        # Pad if any dimension is too small
+        new_shape = x.shape[-3:]
+        pad = []
+        for curr, tgt in zip(reversed(new_shape), reversed(target_shape)):
+            total = max(tgt - curr, 0)
+            pad.extend([total // 2, total - total // 2])
+        if any(pad):
+            x = F.pad(x, pad)
         # Patch embedding: [B, 1, D, H, W] -> [B, embed_dim, D//patch_size, H//patch_size, W//patch_size]
         x = self.patch_embed(x)
-        
         # Flatten spatial dimensions: [B, embed_dim, num_patches] -> [B, num_patches, embed_dim]
         x = x.flatten(2).transpose(1, 2)
-        
         # Add class token
         cls_tokens = self.cls_token.expand(B, -1, -1)
         x = torch.cat((cls_tokens, x), dim=1)
-        
         # Add position embedding
         x = x + self.pos_embed
         x = self.dropout(x)
-        
         # Apply transformer blocks
         for block in self.blocks:
             x = block(x)
-        
         # Classification
         x = self.norm(x)
         cls_token = x[:, 0]  # Take the class token
         logits = self.head(cls_token)
-        
         return logits
 
 
