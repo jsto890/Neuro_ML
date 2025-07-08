@@ -64,16 +64,22 @@ A complete Swin UNETR architecture (encoder + decoder) adapted for classificatio
 - Multi-scale feature fusion
 - Global average pooling
 - Classification head
+- **Automatic input preprocessing** to meet Swin UNETR requirements
 
 **Architecture:**
 ```
-Input: [B, 1, D, H, W] → Full Swin UNETR (Encoder + Decoder) → Global Pooling → Classification Head → [B, num_classes]
+Input: [B, 1, D, H, W] → Preprocess to [96, 128, 96] → Full Swin UNETR (Encoder + Decoder) → Global Pooling → Classification Head → [B, num_classes]
 ```
 
 **Parameters:**
 - `feature_size`: Feature size for Swin Transformer (default: 24 - Small for memory efficiency)
 - `drop_rate`: Dropout rate (default: 0.1)
 - `use_checkpoint`: Gradient checkpointing (default: false)
+
+**Input Preprocessing:**
+- Automatically crops/pads input to [96, 128, 96] to meet Swin UNETR's requirement that dimensions be divisible by 32
+- Crops 97→96 (center crop)
+- Pads 115→128 (zero padding)
 
 **Advantages over SwinUNETRClassifier:**
 - Better feature learning through skip connections

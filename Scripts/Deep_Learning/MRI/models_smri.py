@@ -232,19 +232,19 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
                     )
         else:
             print("Creating EfficientNetB0_3D from scratch...")
-            # Create EfficientNet3D with only num_classes in override_params
-            model = EfficientNet3D.from_name("efficientnet-b0", override_params={'num_classes': num_classes})
-            
-            # Modify the first conv layer to accept in_channels if different from default (3)
-            if in_channels != 3:
-                model._conv_stem = nn.Conv3d(
-                    in_channels, 
-                    model._conv_stem.out_channels, 
-                    kernel_size=model._conv_stem.kernel_size, 
-                    stride=model._conv_stem.stride, 
-                    padding=model._conv_stem.padding, 
-                    bias=False
-                )
+        # Create EfficientNet3D with only num_classes in override_params
+        model = EfficientNet3D.from_name("efficientnet-b0", override_params={'num_classes': num_classes})
+        
+        # Modify the first conv layer to accept in_channels if different from default (3)
+        if in_channels != 3:
+            model._conv_stem = nn.Conv3d(
+                in_channels, 
+                model._conv_stem.out_channels, 
+                kernel_size=model._conv_stem.kernel_size, 
+                stride=model._conv_stem.stride, 
+                padding=model._conv_stem.padding, 
+                bias=False
+            )
         
         return model
     

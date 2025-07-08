@@ -36,6 +36,7 @@ full_swin_unetr_classifier:
   dropout_path_rate: 0.1   # Stochastic depth rate
   use_checkpoint: false    # Use gradient checkpointing for memory efficiency
   spatial_dims: 3          # 3D spatial dimensions
+  # Note: Input will be automatically resized to [96, 128, 96] to meet Swin UNETR requirements
 
 # Training Configuration for Transformer Models
 training:

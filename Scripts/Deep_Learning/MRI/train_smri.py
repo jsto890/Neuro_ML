@@ -550,7 +550,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     print(f"STARTING NEW TRAINING RUN: {run_folder}")
     print(f"Output directory: {run_dir}")
     print("="*60)
-    
+
     # Clean up any existing temporary CSV files from previous runs
     data_dir = os.path.dirname(args.master_csv)
     temp_files_pattern = os.path.join(data_dir, "temp_*.csv")
@@ -592,7 +592,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     
     print(f"Master dataset: {len(master_df)} total subjects")
     print(f"After filtering for labels {args.labels}: {len(filtered_df)} subjects")
-    
+
     # Show label distribution
     label_counts = filtered_df['label'].value_counts().sort_index()
     for label, count in label_counts.items():
@@ -814,70 +814,61 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         
         # Test set evaluation (always available now)
         print(f"\nEvaluating {model_name} on the test set...")
-        
-        # Debug: Check if model file exists and has reasonable size
         best_model_path = os.path.join(model_dir, "best_smri_model.pth")
         if os.path.exists(best_model_path):
             file_size = os.path.getsize(best_model_path) / (1024*1024)  # MB
             print(f"Model file size: {file_size:.2f} MB")
+            state_dict = torch.load(best_model_path, map_location=args.device)
+            # For Simple3DCNN, we need to handle the classifier size mismatch
+            if model_name == "Simple3DCNN":
+                classifier_weight = state_dict['classifier.0.weight']
+                actual_input_size = classifier_weight.shape[1]
+                model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                model.classifier[0] = nn.Linear(actual_input_size, 256)
+                model._initialized = True
+                model.load_state_dict(state_dict)
+            elif model_name == "SwinUNETRClassifier":
+                classifier_weight = state_dict['classifier.0.weight']
+                actual_input_size = classifier_weight.shape[1]
+                model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                model.classifier[0] = nn.Linear(actual_input_size, 512)
+                model._initialized = True
+                model.load_state_dict(state_dict)
+            elif model_name == "FullSwinUNETRClassifier":
+                classifier_weight = state_dict['classifier.0.weight']
+                actual_input_size = classifier_weight.shape[1]
+                model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                model.classifier[0] = nn.Linear(actual_input_size, 512)
+                model._initialized = True
+                model.load_state_dict(state_dict)
+            else:
+                model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                model.load_state_dict(state_dict)
+            model.to(args.device)
+            model.eval()
+            # Evaluate
+            predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
+            metrics = calculate_metrics(predictions, probabilities, labels)
+            # Save metrics
+            test_metrics_path = os.path.join(model_dir, "test_metrics.json")
+            with open(test_metrics_path, "w") as f:
+                json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+            # Save plots
+            test_eval_dir = os.path.join(model_dir, "test_evaluation_plots")
+            create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
+            print(f"Test set evaluation for {model_name} saved to: {test_eval_dir}")
         else:
             print(f"ERROR: Model file not found: {best_model_path}")
             continue
-        state_dict = torch.load(best_model_path, map_location=args.device)
-        
-        # For Simple3DCNN, we need to handle the classifier size mismatch
-        if model_name == "Simple3DCNN":
-            # Extract the actual input size from the saved classifier weight
-            classifier_weight = state_dict['classifier.0.weight']
-            actual_input_size = classifier_weight.shape[1]
-            
-            # Create model with correct classifier size
-            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-            model.classifier[0] = nn.Linear(actual_input_size, 256)
-            model._initialized = True
-        elif model_name == "SwinUNETRClassifier":
-            # Extract the actual input size from the saved classifier weight
-            classifier_weight = state_dict['classifier.0.weight']
-            actual_input_size = classifier_weight.shape[1]
-            # Create model with correct classifier size
-            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-            model.classifier[0] = nn.Linear(actual_input_size, 512)
-            model._initialized = True
-        elif model_name == "FullSwinUNETRClassifier":
-            # Extract the actual input size from the saved classifier weight
-            classifier_weight = state_dict['classifier.0.weight']
-            actual_input_size = classifier_weight.shape[1]
-            # Create model with correct classifier size
-            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-            model.classifier[0] = nn.Linear(actual_input_size, 512)
-            model._initialized = True
-        else:
-            # For other models, create normally
-            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-        
-        model.load_state_dict(state_dict)
-        model.to(args.device)
-        model.eval()
-        # Evaluate
-        predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
-        metrics = calculate_metrics(predictions, probabilities, labels)
-        # Save metrics
-        test_metrics_path = os.path.join(model_dir, "test_metrics.json")
-        with open(test_metrics_path, "w") as f:
-            json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
-        # Save plots
-        test_eval_dir = os.path.join(model_dir, "test_evaluation_plots")
-        create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
-        print(f"Test set evaluation for {model_name} saved to: {test_eval_dir}")
-    
+
     # Clean up temporary files
     try:
         os.remove(temp_train_csv)
         os.remove(temp_val_csv)
         os.remove(temp_test_csv)
         print(f"Cleaned up temporary files from data directory")
-    except:
-        pass
+    except Exception as e:
+        print(f"Warning: Could not clean up temporary files: {e}")
     
     # --- Summary comparison plot ---
     print("\nGenerating summary comparison plot for all models...")

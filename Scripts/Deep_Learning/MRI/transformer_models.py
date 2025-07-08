@@ -442,8 +442,35 @@ class FullSwinUNETRClassifier(nn.Module):
     def _initialize_classifier(self, x):
         """Initialize classifier with correct input size."""
         with torch.no_grad():
+            # Preprocess input to meet Swin UNETR requirements (divisible by 32)
+            # Target size: [96, 128, 96] - crop 97->96, pad 115->128
+            target_shape = (96, 128, 96)
+            current_shape = x.shape[-3:]
+            
+            # Center-crop if any dimension is too large
+            slices = []
+            for curr, tgt in zip(current_shape, target_shape):
+                if curr > tgt:
+                    start = (curr - tgt) // 2
+                    end = start + tgt
+                    slices.append(slice(start, end))
+                else:
+                    slices.append(slice(0, curr))
+            
+            x_processed = x[..., slices[0], slices[1], slices[2]]
+            
+            # Pad if any dimension is too small
+            new_shape = x_processed.shape[-3:]
+            pad = []
+            for curr, tgt in zip(reversed(new_shape), reversed(target_shape)):
+                total = max(tgt - curr, 0)
+                pad.extend([total // 2, total - total // 2])
+            
+            if any(pad):
+                x_processed = F.pad(x_processed, pad)
+            
             # Get full output from Swin UNETR
-            full_output = self.swin_unetr(x)  # [B, C, D, H, W]
+            full_output = self.swin_unetr(x_processed)  # [B, C, D, H, W]
             pooled = self.global_pool(full_output)  # [B, C, 1, 1, 1]
             flattened = pooled.view(pooled.size(0), -1)  # [B, C]
             n_features = flattened.size(1)
@@ -466,6 +493,33 @@ class FullSwinUNETRClassifier(nn.Module):
         """
         if not self._initialized:
             self._initialize_classifier(x)
+        
+        # Preprocess input to meet Swin UNETR requirements (divisible by 32)
+        # Target size: [96, 128, 96] - crop 97->96, pad 115->128
+        target_shape = (96, 128, 96)
+        current_shape = x.shape[-3:]
+        
+        # Center-crop if any dimension is too large
+        slices = []
+        for curr, tgt in zip(current_shape, target_shape):
+            if curr > tgt:
+                start = (curr - tgt) // 2
+                end = start + tgt
+                slices.append(slice(start, end))
+            else:
+                slices.append(slice(0, curr))
+        
+        x = x[..., slices[0], slices[1], slices[2]]
+        
+        # Pad if any dimension is too small
+        new_shape = x.shape[-3:]
+        pad = []
+        for curr, tgt in zip(reversed(new_shape), reversed(target_shape)):
+            total = max(tgt - curr, 0)
+            pad.extend([total // 2, total - total // 2])
+        
+        if any(pad):
+            x = F.pad(x, pad)
         
         # Get full output from Swin UNETR
         full_output = self.swin_unetr(x)  # [B, C, D, H, W]
@@ -496,6 +550,33 @@ class FullSwinUNETRClassifierGradCAM(FullSwinUNETRClassifier):
         """
         if not self._initialized:
             self._initialize_classifier(x)
+        
+        # Preprocess input to meet Swin UNETR requirements (divisible by 32)
+        # Target size: [96, 128, 96] - crop 97->96, pad 115->128
+        target_shape = (96, 128, 96)
+        current_shape = x.shape[-3:]
+        
+        # Center-crop if any dimension is too large
+        slices = []
+        for curr, tgt in zip(current_shape, target_shape):
+            if curr > tgt:
+                start = (curr - tgt) // 2
+                end = start + tgt
+                slices.append(slice(start, end))
+            else:
+                slices.append(slice(0, curr))
+        
+        x = x[..., slices[0], slices[1], slices[2]]
+        
+        # Pad if any dimension is too small
+        new_shape = x.shape[-3:]
+        pad = []
+        for curr, tgt in zip(reversed(new_shape), reversed(target_shape)):
+            total = max(tgt - curr, 0)
+            pad.extend([total // 2, total - total // 2])
+        
+        if any(pad):
+            x = F.pad(x, pad)
         
         # Get full output from Swin UNETR
         full_output = self.swin_unetr(x)  # [B, C, D, H, W]

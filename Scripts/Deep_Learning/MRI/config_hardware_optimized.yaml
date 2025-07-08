@@ -37,6 +37,7 @@ full_swin_unetr_classifier:
   dropout_path_rate: 0.1   # Stochastic depth rate
   use_checkpoint: false    # No need for checkpointing with 24GB VRAM
   spatial_dims: 3          # 3D spatial dimensions
+  # Note: Input will be automatically resized to [96, 128, 96] to meet Swin UNETR requirements
 
 # Training Configuration (Optimized for Threadripper 3990X + RTX 6000)
 training:
