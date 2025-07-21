@@ -27,8 +27,8 @@ from pathlib import Path
 import yaml
 from torch.amp import GradScaler, autocast
 
-from dataset import SMRIDataset
-from models_smri import get_3d_model
+from dataset import PETDataset
+from models_pet import get_3d_model
 from transformer_models import get_transformer_model
 from evaluate_model import evaluate_model, calculate_metrics, create_evaluation_plots
 
@@ -210,13 +210,13 @@ def train_transformer_model(model, train_loader, val_loader, epochs, device, che
         total_samples = 0
         optimizer.zero_grad()
 
-        for batch_idx, (smri, labels) in enumerate(train_loader):
-            smri, labels = smri.to(device), labels.to(device)
+        for batch_idx, (pet, labels) in enumerate(train_loader):
+            pet, labels = pet.to(device), labels.to(device)
             
             # Mixed precision forward pass
             if scaler is not None:
                 with autocast('cuda'):
-                    logits = model(smri)
+                    logits = model(pet)
                     loss = criterion(logits, labels) / accumulation_steps
                 
                 # Backward pass with gradient scaling
@@ -231,7 +231,7 @@ def train_transformer_model(model, train_loader, val_loader, epochs, device, che
                     if scheduler is not None and global_step < warmup_steps:
                         scheduler.step()
             else:
-                logits = model(smri)
+                logits = model(pet)
                 loss = criterion(logits, labels) / accumulation_steps
                 loss.backward()
                 
@@ -243,10 +243,10 @@ def train_transformer_model(model, train_loader, val_loader, epochs, device, che
                     if scheduler is not None and global_step < warmup_steps:
                         scheduler.step()
 
-            running_loss += loss.item() * smri.size(0) * accumulation_steps
+            running_loss += loss.item() * pet.size(0) * accumulation_steps
             preds = torch.argmax(logits, dim=1)
             running_corrects += (preds == labels).sum().item()
-            total_samples += smri.size(0)
+            total_samples += pet.size(0)
             
             global_step += 1
 
@@ -263,13 +263,13 @@ def train_transformer_model(model, train_loader, val_loader, epochs, device, che
         val_labels = []
 
         with torch.no_grad():
-            for smri, labels in val_loader:
-                smri = smri.to(device)
+            for pet, labels in val_loader:
+                pet = pet.to(device)
                 if scaler is not None:
                     with autocast('cuda'):
-                        logits = model(smri)
+                        logits = model(pet)
                 else:
-                    logits = model(smri)
+                    logits = model(pet)
                 val_logits.append(logits.cpu().numpy())
                 val_labels.append(labels.numpy())
 
@@ -337,7 +337,7 @@ def train_transformer_model(model, train_loader, val_loader, epochs, device, che
             best_state = model.state_dict().copy()
             os.makedirs(checkpoint_dir, exist_ok=True)
             
-            model_filename = "best_smri_model.pth"
+            model_filename = "best_pet_transformer_model.pth"
             model_path = os.path.join(checkpoint_dir, model_filename)
             
             torch.save(best_state, model_path)
@@ -366,7 +366,7 @@ def train_transformer_model(model, train_loader, val_loader, epochs, device, che
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train transformer models on sMRI volumes",
+        description="Train transformer models on PET volumes",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Available transformer models:
@@ -377,24 +377,24 @@ Available transformer models:
 
 Examples:
   # Train Vision Transformer with automatic splits
-  python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI --labels 0 1 --model VisionTransformer3D --config config_transformers.yaml
+  python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/pet_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/PET --labels 0 1 --model VisionTransformer3D --config config_transformers.yaml
 
   # Train Swin UNETR with custom split ratios
-  python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI --labels 0 1 --model SwinUNETRClassifier --config config_hardware_optimized.yaml --val_ratio 0.2 --test_ratio 0.2
+  python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/pet_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/PET --labels 0 1 --model SwinUNETRClassifier --config config_hardware_optimized.yaml --val_ratio 0.2 --test_ratio 0.2
 
   # Train Full Swin UNETR (encoder + decoder)
-  python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI --labels 0 1 --model FullSwinUNETRClassifier --config config_hardware_optimized.yaml --batch_size 1
+  python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/pet_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/PET --labels 0 1 --model FullSwinUNETRClassifier --config config_hardware_optimized.yaml --batch_size 1
 
   # Train with reproducible splits
-  python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI --labels 0 1 --model SwinUNETRClassifier --config config_hardware_optimized.yaml --random_seed 42
+  python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/pet_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/PET --labels 0 1 --model SwinUNETRClassifier --config config_hardware_optimized.yaml --random_seed 42
         """
     )
     
     # Required arguments
-    parser.add_argument("--master_csv", type=str, default="~/reseng202500013-ndd-ml/data/mri_labels.csv",
+    parser.add_argument("--master_csv", type=str, default="~/reseng202500013-ndd-ml/data/pet_labels.csv",
                         help="Path to master labels CSV file")
     parser.add_argument("--data_root", type=str, required=True,
-                        help="Folder containing sMRI NIfTIs")
+                        help="Folder containing PET NIfTIs")
     parser.add_argument("--labels", type=int, nargs='+', required=True,
                         help="Labels to include in training (e.g., 0 1 for CN vs AD)")
     parser.add_argument("--model", type=str, required=True,
@@ -408,7 +408,7 @@ Examples:
                         help="Batch size (optimized for RTX 6000)")
     parser.add_argument("--num_workers", type=int, default=16,
                         help="Number of workers (optimized for 128-thread CPU)")
-    parser.add_argument("--checkpoint_dir", type=str, default="~/reseng202500013-ndd-ml/data/checkpoints_ad_cn")
+    parser.add_argument("--checkpoint_dir", type=str, default="~/reseng202500013-ndd-ml/data/checkpoints_pet_ad_cn")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--test_ratio", type=float, default=0.15,
                         help="Proportion of data for test set")
@@ -529,9 +529,9 @@ Examples:
     test_df.to_csv(temp_test_csv, index=False)
     
     # Create datasets with split data
-    train_dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root)
-    val_dataset = SMRIDataset(csv_path=temp_val_csv, data_root=args.data_root)
-    test_dataset = SMRIDataset(csv_path=temp_test_csv, data_root=args.data_root)
+    train_dataset = PETDataset(csv_path=temp_train_csv, data_root=args.data_root)
+    val_dataset = PETDataset(csv_path=temp_val_csv, data_root=args.data_root)
+    test_dataset = PETDataset(csv_path=temp_test_csv, data_root=args.data_root)
     
     # Print split information
     print(f"\nDataset splits:")

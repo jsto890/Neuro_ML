@@ -1,4 +1,4 @@
-# scripts/train_smri.py
+# scripts/train_pet.py
 
 import os
 import argparse
@@ -19,8 +19,8 @@ from pathlib import Path
 import shutil
 from sklearn.model_selection import train_test_split
 
-from dataset import SMRIDataset
-from models_smri import Simple3DCNN, get_3d_model
+from dataset import PETDataset
+from models_pet import Simple3DCNN, get_3d_model
 from evaluate_model import evaluate_model, calculate_metrics, create_evaluation_plots
 
 # Set style for plots
@@ -382,7 +382,7 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_
     
     return summary
 
-def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint_dir, args):
+def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_dir, args):
     """
     Trains model; saves best checkpoint by validation AUC into checkpoint_dir.
     Returns the model loaded with best weights and training history.
@@ -448,13 +448,13 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         running_corrects = 0
         total_samples = 0
 
-        for smri, labels in train_loader:
-            smri, labels = smri.to(device), labels.to(device)
+        for pet, labels in train_loader:
+            pet, labels = pet.to(device), labels.to(device)
             optimizer.zero_grad()
             
             # Use mixed precision training
             with torch.amp.autocast('cuda'):
-                logits = model(smri)              # [B, 2]
+                logits = model(pet)              # [B, 2]
                 loss = criterion(logits, labels)
             
             scaler.scale(loss).backward()
@@ -479,9 +479,9 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         val_labels = []
 
         with torch.no_grad():
-            for smri, labels in val_loader:
-                smri = smri.to(device)
-                logits = model(smri)          # [B, 2]
+            for pet, labels in val_loader:
+                pet = pet.to(device)
+                logits = model(pet)          # [B, 2]
                 val_logits.append(logits.cpu().numpy())
                 val_labels.append(labels.numpy())
 
@@ -552,7 +552,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             os.makedirs(checkpoint_dir, exist_ok=True)
             
             # Save model with simple filename since it's in a dated folder
-            model_filename = "best_smri_model.pth"
+            model_filename = "best_pet_model.pth"
             model_path = os.path.join(checkpoint_dir, model_filename)
             
             torch.save(best_state, model_path)
@@ -686,9 +686,9 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     test.to_csv(temp_test_csv, index=False)
 
     # Create datasets with split data
-    train_dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root)
-    val_dataset = SMRIDataset(csv_path=temp_val_csv, data_root=args.data_root)
-    test_dataset = SMRIDataset(csv_path=temp_test_csv, data_root=args.data_root)
+    train_dataset = PETDataset(csv_path=temp_train_csv, data_root=args.data_root)
+    val_dataset = PETDataset(csv_path=temp_val_csv, data_root=args.data_root)
+    test_dataset = PETDataset(csv_path=temp_test_csv, data_root=args.data_root)
 
     # Print split information
     print(f"\nDataset splits:")
@@ -779,7 +779,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
             
             # Train the model using training fold and validate on validation fold
-            model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix = train_sMRI_model(
+            model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix = train_PET_model(
                 model, train_loader, val_fold_loader, args.epochs, args.device, model_dir, args
             )
             
@@ -871,7 +871,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         
         # Test set evaluation (always available now)
         print(f"\nEvaluating {model_name} on the test set...")
-        best_model_path = os.path.join(model_dir, "best_smri_model.pth")
+        best_model_path = os.path.join(model_dir, "best_pet_model.pth")
         if os.path.exists(best_model_path):
             file_size = os.path.getsize(best_model_path) / (1024*1024)  # MB
             print(f"Model file size: {file_size:.2f} MB")
@@ -1002,7 +1002,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train a 3D‐CNN on sMRI volumes",
+        description="Train a 3D‐CNN on PET volumes",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Available models:
@@ -1013,31 +1013,31 @@ Available models:
 
 Examples:
   # Run all models (default) - Memory optimized for 24GB GPU
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --batch_size 8
+  python train_pet.py --master_csv ~/reseng202500013-ndd-ml/data/pet_labels.csv --data_root /path/to/data --labels 0 1 --batch_size 8
 
   # Run with smaller batch size if out of memory
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --batch_size 4
+  python train_pet.py --master_csv ~/reseng202500013-ndd-ml/data/pet_labels.csv --data_root /path/to/data --labels 0 1 --batch_size 4
 
   # Run with pretrained models (recommended for better performance)
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --use_pretrained
+  python train_pet.py --master_csv ~/reseng202500013-ndd-ml/data/pet_labels.csv --data_root /path/to/data --labels 0 1 --use_pretrained
 
   # Run single model with pretrained weights
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --model EfficientNetB0_3D --use_pretrained
+  python train_pet.py --master_csv ~/reseng202500013-ndd-ml/data/pet_labels.csv --data_root /path/to/data --labels 0 1 --model EfficientNetB0_3D --use_pretrained
 
   # Run specific models
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --models Simple3DCNN EfficientNetB0_3D
+  python train_pet.py --master_csv ~/reseng202500013-ndd-ml/data/pet_labels.csv --data_root /path/to/data --labels 0 1 --models Simple3DCNN EfficientNetB0_3D
 
   # Run with balanced dataset (reduce majority classes)
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --balance_dataset
+  python train_pet.py --master_csv ~/reseng202500013-ndd-ml/data/pet_labels.csv --data_root /path/to/data --labels 0 1 --balance_dataset
 
   # Explicitly run all models
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --run_all
+  python train_pet.py --master_csv ~/reseng202500013-ndd-ml/data/pet_labels.csv --data_root /path/to/data --labels 0 1 --run_all
         """
     )
-    parser.add_argument("--master_csv", type=str, default="~/reseng202500013-ndd-ml/data/mri_labels.csv",
+    parser.add_argument("--master_csv", type=str, default="~/reseng202500013-ndd-ml/data/pet_labels.csv",
                         help="Path to master labels CSV file")
     parser.add_argument("--data_root",   type=str, required=True,
-                        help="Folder containing sMRI NIfTIs, e.g. data/preprocessed/sMRI")
+                        help="Folder containing PET NIfTIs, e.g. data/preprocessed/PET")
     parser.add_argument("--epochs",      type=int, default=30)
     parser.add_argument("--batch_size",  type=int, default=8,
                         help="Batch size (reduce to 4-6 if out of memory)")
@@ -1046,7 +1046,7 @@ Examples:
                         help="Number of base channels for CNN models (default: 32)")
     parser.add_argument("--use_pretrained", action='store_true',
                         help="Use pretrained weights for ResNet, DenseNet, and EfficientNet models")
-    parser.add_argument("--checkpoint_dir", type=str, default="~/reseng202500013-ndd-ml/data/checkpoints_ad_cn")
+    parser.add_argument("--checkpoint_dir", type=str, default="~/reseng202500013-ndd-ml/data/checkpoints_pet_ad_cn")
     parser.add_argument("--device",      type=str, default="cuda")
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-5)

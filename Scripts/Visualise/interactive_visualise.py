@@ -1,7 +1,8 @@
 from nibabel import load
 from nibabel.viewers import OrthoSlicer3D
 
-nii_file = "/Volumes/reseng202500013-ndd-ml/data/preprocessed/MRI/smriprep/sub-CLB00202/anat/sub-CLB00202_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w_brain_zscore.nii.gz"
+nii_file = "/Volumes/reseng202500013-ndd-ml/data/preprocessed/PET/PPMI/PD/sub-I10261856_PPMI_PET_PD/sub-I10261852_PPMI_PET_PD_SUVR.nii.gz"
+#nii_file = "/Users/josephstorey/P4P/Templates/PET/FDG_PET.nii.gz"
 
 img = load(nii_file)
 OrthoSlicer3D(img.dataobj).show()
