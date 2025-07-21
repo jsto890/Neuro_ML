@@ -4,7 +4,7 @@
 raw_data:
   smri: ~/reseng202500013-ndd-ml/data/raw/MRI
   pet: ~/reseng202500013-ndd-ml/data/raw/PET
-  spect: ~/reseng202500013-ndd-ml/data/raw/SPECT
+  spect: /Volumes/reseng202500013-ndd-ml/data/raw/SPECT
 
 preprocessed_data:
   smri_p: ~/reseng202500013-ndd-ml/data/preprocessed/MRI/smriprep

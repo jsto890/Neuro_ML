@@ -47,15 +47,32 @@ def reorient_to_RAS(nifti_path, output_path):
     data = img.get_fdata()
     affine = img.affine
 
-    current_ornt = io_orientation(affine)
-    ras_ornt = axcodes2ornt(('R', 'A', 'S'))
-    transform = ornt_transform(current_ornt, ras_ornt)
+    print("\n--- Reorientation Debug ---")
+    print(f"Processing file: {nifti_path}")
+    print("Original affine:")
+    print(affine)
+    print("Original shape:", data.shape)
+    orig_ornt_codes = nib.orientations.aff2axcodes(affine)
+    print("Original orientation codes:", orig_ornt_codes)
+    target_ornt_codes = ('R', 'A', 'S')
+    print("Target orientation codes:", target_ornt_codes)
 
-    reoriented_data = nib.orientations.apply_orientation(data, transform)
-    new_affine = affine.copy()
-    new_affine[:3, :3] = new_affine[:3, :3] @ nib.orientations.inv_ornt_aff(transform, img.shape).T[:3, :3]
+    if orig_ornt_codes != target_ornt_codes:
+        print("Reorienting to RAS...")
+        current_ornt = io_orientation(affine)
+        target_ornt = axcodes2ornt(target_ornt_codes)
+        transform = ornt_transform(current_ornt, target_ornt)
+        data = nib.orientations.apply_orientation(data, transform)
+        print("New data shape after reorient:", data.shape)
+        # affine is unchanged here!
+    else:
+        print("Image is already RAS. No reorientation needed.")
 
-    reoriented_img = nib.Nifti1Image(reoriented_data, new_affine)
+    # Always print final orientation codes
+    print("Final data shape:", data.shape)
+    print("--- End Debug ---\n")
+
+    reoriented_img = nib.Nifti1Image(data, affine)
     nib.save(reoriented_img, output_path)
 
     # Copy matching JSON file if it exists

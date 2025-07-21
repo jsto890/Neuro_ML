@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from ipywidgets import interact, IntSlider
 
 # Load the NIfTI file
-nii_file = "/Volumes/reseng202500013-ndd-ml/data/preprocessed/PET/ADNI/AD/sub-I10241161_ADNI_PET_AD/pet_static.nii.gz"
+nii_file = "/Volumes/reseng202500013-ndd-ml/data/preprocessed/SPECT/normalised/CN/sub-I246577_PPMI_SPECT_CN/sub-I246577_PPMI_SPECT_CN_RAS.nii.gz"
 
 img = nib.load(nii_file)
 data = img.get_fdata()
