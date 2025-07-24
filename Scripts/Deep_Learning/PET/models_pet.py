@@ -1,4 +1,4 @@
-# scripts/models_smri.py
+# scripts/models_pet.py
 
 import torch
 import torch.nn as nn
@@ -30,7 +30,7 @@ except ImportError:
 class Simple3DCNN(nn.Module):
     """
     A straightforward 3DxCNN for binary classification (e.g. AD vs PD vs CN).
-    Input:  [B, 1, D, H, W]  single‐channel sMRI
+    Input:  [B, 1, D, H, W]  single‐channel PET
     Output: [B, num_classes] logits
     """
     def __init__(self, num_classes=2, base_channels=16):  # Reduced base channels
@@ -94,10 +94,10 @@ class Simple3DCNN(nn.Module):
         return logits
 
 
-class SMRI_GradCAM_3DCNN(nn.Module):
+class PET_GradCAM_3DCNN(nn.Module):
     """
     3D CNN architecture with the final conv block exposed for Grad-CAM.
-    Input:  [B, 1, D, H, W]  single‐channel sMRI
+    Input:  [B, 1, D, H, W]  single‐channel PET
     Output: (logits, fmap) where fmap is [B, C, d, h, w] from the last conv block.
     """
     def __init__(self, in_channels=1, base_channels=16, num_classes=3):
@@ -147,7 +147,7 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
     Args:
         model_name: Name of the model to create
         num_classes: Number of output classes
-        in_channels: Number of input channels (1 for sMRI)
+        in_channels: Number of input channels (1 for PET)
         base_channels: Base number of channels for Simple3DCNN
         use_pretrained: Whether to use pretrained weights (for ResNet, DenseNet, EfficientNet)
     """

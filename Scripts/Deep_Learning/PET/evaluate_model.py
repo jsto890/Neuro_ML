@@ -24,8 +24,8 @@ import json
 from pathlib import Path
 import pandas as pd
 
-from dataset import SMRIDataset
-from models_smri import Simple3DCNN
+from dataset import PETDataset
+from models_pet import Simple3DCNN
 
 # Set style for plots
 plt.style.use('default')
@@ -60,9 +60,9 @@ def evaluate_model(model, test_loader, device='cpu'):
     all_labels = []
     
     with torch.no_grad():
-        for smri, labels in test_loader:
-            smri = smri.to(device)
-            logits = model(smri)
+        for pet, labels in test_loader:
+            pet = pet.to(device)
+            logits = model(pet)
             probabilities = nn.Softmax(dim=1)(logits)
             predictions = torch.argmax(logits, dim=1)
             
@@ -112,7 +112,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     
     # Create comprehensive plot
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    fig.suptitle('Model Evaluation Results - AD vs CN Classification', fontsize=16, fontweight='bold')
+    fig.suptitle('Model Evaluation Results - AD vs CN Classification (PET)', fontsize=16, fontweight='bold')
     
     # 1. ROC Curve
     ax1 = axes[0, 0]
@@ -270,7 +270,7 @@ def main():
     
     # Create test dataset
     print(f"Loading test data from: {args.test_csv}")
-    test_dataset = SMRIDataset(csv_path=args.test_csv, data_root=args.data_root)
+    test_dataset = PETDataset(csv_path=args.test_csv, data_root=args.data_root)
     test_loader = DataLoader(
         test_dataset,
         batch_size=args.batch_size,

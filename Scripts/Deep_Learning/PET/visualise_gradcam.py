@@ -7,8 +7,8 @@ import torch
 import matplotlib.pyplot as plt
 import nibabel as nib
 
-from dataset import SMRIDataset
-from models_smri import SMRI_GradCAM_3DCNN
+from dataset import PETDataset
+from models_pet import PET_GradCAM_3DCNN
 from gradcam import compute_gradcam_3d, compute_gradcam_simple3d
 
 def overlay_heatmap_on_slice(mri_slice, cam_slice, cmap="hot", alpha=0.4):
@@ -38,7 +38,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     # 1) Load dataset
-    val_dataset = SMRIDataset(csv_path=args.val_csv, data_root=args.data_root)
+    val_dataset = PETDataset(csv_path=args.val_csv, data_root=args.data_root)
     # We use batch_size=1 so we get one volume at a time and can run Grad-CAM on it
     val_loader = torch.utils.data.DataLoader(val_dataset,
                                              batch_size=args.batch_size,
@@ -48,7 +48,7 @@ def main():
     # 2) Instantiate and load model
     # Try to load as Simple3DCNN first (which is what was trained)
     try:
-        from models_smri import Simple3DCNN
+        from Scripts.Deep_Learning.PET.models_pet import Simple3DCNN
         model = Simple3DCNN(num_classes=2)  # Binary classification
         
         # Load the state dict
@@ -90,7 +90,7 @@ def main():
         print("Trying SMRI_GradCAM_3DCNN...")
         
         # Fallback to original GradCAM model
-        model = SMRI_GradCAM_3DCNN(in_channels=1, base_channels=16, num_classes=2)
+        model = PET_GradCAM_3DCNN(in_channels=1, base_channels=16, num_classes=2)
         checkpoint = torch.load(args.checkpoint, map_location=args.device)
         model.load_state_dict(checkpoint)
     
@@ -98,12 +98,12 @@ def main():
     model.eval()
 
     # 3) Loop through a few validation subjects
-    for i, (smri, label) in enumerate(val_loader):
+    for i, (pet, label) in enumerate(val_loader):
         """
-        smri shape: [1, 1, D, H, W]
+        pet shape: [1, 1, D, H, W]
         label: tensor([0]) or tensor([1])
         """
-        smri = smri.to(args.device)
+        pet = pet.to(args.device)
         true_label = label.item()
         
         print(f"\nProcessing subject {i+1}: {val_dataset.subjects[i]} (True label: {true_label})")
@@ -112,18 +112,18 @@ def main():
         # Check if we're using the wrapped model
         if hasattr(model, 'model'):  # Wrapped model
             # Use a modified GradCAM function for Simple3DCNN
-            cam_3d = compute_gradcam_simple3d(model, smri, target_class=1, device=args.device)
+            cam_3d = compute_gradcam_simple3d(model, pet, target_class=1, device=args.device)
         else:  # Original GradCAM model
-            cam_3d = compute_gradcam_3d(model, smri, target_class=1, device=args.device)
+            cam_3d = compute_gradcam_3d(model, pet, target_class=1, device=args.device)
         # cam_3d: numpy array [D, H, W], normalized [0,1]
 
-        # 5) Extract original sMRI volume for overlay
-        smri_np = smri.detach().squeeze().cpu().numpy()  # [D, H, W]
+        # 5) Extract original PET volume for overlay
+        pet_np = pet.detach().squeeze().cpu().numpy()  # [D, H, W]
 
         # 6) Choose a slice to visualize (e.g., mid‐axial)
-        D, H, W = smri_np.shape
+        D, H, W = pet_np.shape
         mid_ax = D // 2
-        anat_slice = smri_np[mid_ax]    # [H, W]
+        anat_slice = pet_np[mid_ax]    # [H, W]
         cam_slice  = cam_3d[mid_ax]     # [H, W]
 
         # 7) Plot and save to disk
@@ -139,10 +139,10 @@ def main():
         # Use the same path construction as the dataset
         nifti_path = os.path.join(
             args.data_root,
-            "smriprep",
+            "petprep",
             val_dataset.subjects[i],
-            "anat",
-            f"{val_dataset.subjects[i]}_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w_brain_zscore.nii.gz"
+            "pet",
+            f"{val_dataset.subjects[i]}_space-MNI152NLin2009cAsym_res-2_desc-preproc_FDG_brain_zscore.nii.gz"
         )
         try:
             orig_nii = nib.load(nifti_path)

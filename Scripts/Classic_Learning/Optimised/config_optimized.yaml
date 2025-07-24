@@ -76,6 +76,8 @@ svm_optimization:
     kernel: ["linear", "rbf", "poly"]
     degree: [2, 3]  # for poly kernel
     class_weight: ["balanced", null]
+    max_iter: [80000, 90000, 100000]  # Increased max iterations to 80k-100k
+    tol: [1e-5, 1e-4, 1e-3]  # Reduced tolerance values
   
   # Cross-validation
   cv_folds: 5
