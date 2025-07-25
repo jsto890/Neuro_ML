@@ -192,21 +192,24 @@ class SMRIPrepRunner:
         logger.info(f"Running command: {' '.join(cmd)}")
         
         try:
-            # Run smriprep
-            result = subprocess.run(
+            # Run smriprep in background (don't wait for completion)
+            logger.info("Starting smriprep process...")
+            process = subprocess.Popen(
                 cmd,
-                check=True,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 env=dict(os.environ, OMP_NUM_THREADS=str(self.omp_nthreads))
             )
             
-            logger.info("smriprep completed successfully!")
-            logger.info(f"stdout: {result.stdout}")
+            logger.info(f"smriprep process started with PID: {process.pid}")
+            logger.info("smriprep will continue running in the background")
             
-        except subprocess.CalledProcessError as e:
-            logger.error(f"smriprep failed with exit code {e.returncode}")
-            logger.error(f"stderr: {e.stderr}")
+            # Don't wait for completion - let it run in background
+            return process
+            
+        except Exception as e:
+            logger.error(f"Failed to start smriprep: {e}")
             raise
     
     def verify_processing(self):
@@ -295,25 +298,26 @@ class SMRIPrepRunner:
                 # Process this dataset
                 logger.info(f"Processing {len(incomplete_subjects)} subjects from {dataset['name']}")
                 
-                # Run smriprep for this dataset
-                self.run_smriprep(subject_list=incomplete_subjects)
+                # Run smriprep for this dataset (starts process in background)
+                process = self.run_smriprep(subject_list=incomplete_subjects)
                 
-                # Verify completion for this dataset
-                complete, incomplete = self.verify_processing()
-                total_processed += len(complete)
+                logger.info(f"Started smriprep for {dataset['name']} with PID: {process.pid}")
+                logger.info(f"Dataset {dataset['name']} processing initiated - will continue in background")
                 
-                logger.info(f"Dataset {dataset['name']} completed:")
-                logger.info(f"  Successfully processed: {len(complete)}")
-                logger.info(f"  Still incomplete: {len(incomplete)}")
+                # Note: We don't wait for completion here since smriprep runs for hours
+                # The process will continue running in the background
+                total_processed += len(incomplete_subjects)  # Count as "initiated"
                 
             except Exception as e:
                 logger.error(f"Error processing dataset {dataset['name']}: {e}")
                 continue
         
         logger.info(f"\n{'='*60}")
-        logger.info(f"ALL DATASETS COMPLETED")
+        logger.info(f"ALL DATASETS INITIATED")
         logger.info(f"{'='*60}")
-        logger.info(f"Total subjects processed: {total_processed}")
+        logger.info(f"Total subjects initiated for processing: {total_processed}")
+        logger.info("Note: smriprep processes are running in the background")
+        logger.info("Use 'ps aux | grep smriprep' to monitor progress")
         
         return total_processed
 
@@ -362,7 +366,7 @@ def main():
             # Process all datasets automatically
             logger.info("Starting automatic processing of all datasets...")
             total_processed = runner.process_all_datasets()
-            logger.info(f"🎉 All datasets completed! Total subjects processed: {total_processed}")
+            logger.info(f"🎉 All datasets initiated! Total subjects queued for processing: {total_processed}")
             
         elif args.check_only:
             # Only check completion status
