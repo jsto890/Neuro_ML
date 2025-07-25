@@ -40,7 +40,7 @@ class SMRIPrepRunner:
     """Manages sMRI preprocessing with smriprep."""
     
     def __init__(self, 
-                 raw_data_dir="/home/jsto890/reseng202500013-ndd-ml/data/raw/MRI",
+                 raw_data_dir="/home/jsto890/reseng202500013-ndd-ml/data/raw/MRI/ADNI/CN",
                  output_dir="/home/jsto890/reseng202500013-ndd-ml/data/preprocessed/MRI",
                  work_dir="/home/jsto890/reseng202500013-ndd-ml/data/intermediate/smri",
                  fs_license=None,
@@ -237,7 +237,7 @@ def main():
     """Main function to run the sMRI preprocessing pipeline."""
     parser = argparse.ArgumentParser(description="Run sMRI preprocessing with smriprep")
     parser.add_argument("--raw-dir", 
-                       default="/home/jsto890/reseng202500013-ndd-ml/data/raw/MRI",
+                       default="/home/jsto890/reseng202500013-ndd-ml/data/raw/MRI/ADNI/CN",
                        help="Raw data directory")
     parser.add_argument("--output-dir",
                        default="/home/jsto890/reseng202500013-ndd-ml/data/preprocessed/MRI",
