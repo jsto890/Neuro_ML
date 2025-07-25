@@ -169,6 +169,8 @@ class SMRIPrepRunner:
         
         logger.info(f"Processing {len(subjects_to_process)} subjects with smriprep")
         
+        logger.info("Building smriprep command...")
+        
         # Build smriprep command
         cmd = [
             "smriprep",
@@ -185,9 +187,16 @@ class SMRIPrepRunner:
             "-w", str(self.work_dir)
         ]
         
+        logger.info("Command built successfully")
+        
         # Add participant filter if specific subjects
+        logger.info("Checking if participant filter needed...")
         if len(subjects_to_process) < len(self.get_subject_list()):
+            logger.info("Adding participant filter...")
             cmd.extend(["--participant-label"] + [sub.replace("sub-", "") for sub in subjects_to_process])
+            logger.info("Participant filter added")
+        else:
+            logger.info("No participant filter needed")
         
         logger.info(f"Running command: {' '.join(cmd)}")
         
