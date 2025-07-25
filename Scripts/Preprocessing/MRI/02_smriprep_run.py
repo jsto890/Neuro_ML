@@ -180,7 +180,6 @@ class SMRIPrepRunner:
             "--omp-nthreads", str(self.omp_nthreads),
             "--mem-gb", str(self.mem_gb),
             "--output-spaces", "MNI152NLin2009cAsym:res-2",
-            "--write-graph",
             "--resource-monitor",
             "--fs-no-reconall",
             "-w", str(self.work_dir)
