@@ -272,6 +272,8 @@ class SMRIPrepRunner:
                     logger.error(f"Dataset directory not found: {self.raw_data_dir}")
                     continue
                 
+                logger.info(f"Updated raw data directory to: {self.raw_data_dir}")
+                
                 # Get subjects for this dataset
                 all_subjects = self.get_subject_list()
                 incomplete_subjects = self.get_incomplete_subjects()
