@@ -485,10 +485,23 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
     labels = []
     for _, label in train_loader:
         labels.extend(label.numpy())
-    class_counts = np.bincount(labels)
-    class_weights = 1.0 / class_counts
-    class_weights = class_weights / class_weights.sum()
-    class_weights = torch.FloatTensor(class_weights).to(device)
+    
+    # Get unique labels and their counts
+    unique_labels = sorted(np.unique(labels))
+    class_counts = np.zeros(max(unique_labels) + 1)
+    for label in labels:
+        class_counts[label] += 1
+    
+    # Handle case where some classes might have zero count
+    if len(class_counts) > 0 and np.all(class_counts > 0):
+        class_weights = 1.0 / class_counts
+        class_weights = class_weights / class_weights.sum()
+        class_weights = torch.FloatTensor(class_weights).to(device)
+        print(f"[INFO] Class weights for labels {unique_labels}: {class_weights.cpu().numpy()}")
+    else:
+        # Fallback to equal weights if there are issues
+        print("[WARNING] Using equal class weights due to class count issues")
+        class_weights = torch.ones(max(unique_labels) + 1).to(device) / (max(unique_labels) + 1)
     
     class FocalLoss(nn.Module):
         def __init__(self, alpha=0.25, gamma=2):
@@ -869,7 +882,11 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             )
             
             # Initialize model for this fold
-            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            # Use the actual number of unique labels in the dataset, not just len(args.labels)
+            unique_labels = sorted(train_dataset.df['label'].unique())
+            num_classes = len(unique_labels)
+            print(f"[INFO] Model initialized with {num_classes} classes for labels: {unique_labels}")
+            model = get_3d_model(model_name, num_classes=num_classes, in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
             
             # Train the model using training fold and validate on validation fold
             model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix = train_PET_model(

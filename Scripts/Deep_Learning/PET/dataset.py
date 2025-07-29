@@ -38,6 +38,10 @@ class PETDataset(Dataset):
 
         # Convert label column to integer type
         df['label'] = df['label'].astype(int)
+        
+        # Keep original labels (0, 2) but ensure they're valid
+        unique_labels = sorted(df['label'].unique())
+        print(f"[INFO] Original labels in dataset: {unique_labels}")
 
         self.df = df
         self.subjects = df['subject_id'].tolist()
