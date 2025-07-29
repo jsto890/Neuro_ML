@@ -26,8 +26,8 @@ def main():
         existing_subjects = set(df_existing['subject_id'].tolist())
         print(f"[INFO] Found {len(existing_subjects)} existing subjects")
     
-    # Find all PET files in the preprocessed directory
-    # Structure: PET/(site)/(disease)/((sub-id)_ADNI_PET_CN)/(sub-id)_PPMI_PET_PD_SUVR.nii.gz
+    # Find all PET SUVR files in the preprocessed directory
+    # Structure: PET/(site)/(disease)/((sub-id)_SITE_PET_DISEASE)/(sub-id)_SITE_PET_DISEASE_SUVR.nii.gz
     pet_files = []
     subject_ids = set()
     
@@ -56,18 +56,29 @@ def main():
                     parts = subject_dir_name.split('_')
                     if len(parts) >= 2:
                         subject_id = parts[0]  # This will be "sub-001"
-                        subject_ids.add(subject_id)
                         
-                        # Look for the PET file
-                        pet_file = subject_dir / f"{subject_id}_PPMI_PET_PD_SUVR.nii.gz"
-                        if pet_file.exists():
-                            pet_files.append(pet_file)
-                            print(f"[INFO] Found PET file: {pet_file}")
-                        else:
-                            print(f"[WARNING] PET file not found for {subject_id} in {subject_dir}")
+                        # Look for SUVR files with dynamic naming
+                        sites = ['ADNI', 'PPMI']
+                        diseases = ['CN', 'PD', 'AD']
+                        
+                        suvr_found = False
+                        for site in sites:
+                            for disease in diseases:
+                                suvr_file = subject_dir / f"{subject_id}_{site}_PET_{disease}_SUVR.nii.gz"
+                                if suvr_file.exists():
+                                    pet_files.append(suvr_file)
+                                    subject_ids.add(subject_id)
+                                    suvr_found = True
+                                    print(f"[INFO] Found PET SUVR file: {suvr_file}")
+                                    break
+                            if suvr_found:
+                                break
+                        
+                        if not suvr_found:
+                            print(f"[WARNING] No SUVR file found for {subject_id} in {subject_dir}")
     
-    print(f"[INFO] Found {len(subject_ids)} unique subjects with PET files")
-    print(f"[INFO] Found {len(pet_files)} PET files")
+    print(f"[INFO] Found {len(subject_ids)} unique subjects with PET SUVR files")
+    print(f"[INFO] Found {len(pet_files)} PET SUVR files")
     
     if not subject_ids:
         raise ValueError("No PET files found in preprocessed directory")
