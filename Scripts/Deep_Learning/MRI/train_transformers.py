@@ -26,6 +26,7 @@ import json
 from pathlib import Path
 import yaml
 from torch.amp import GradScaler, autocast
+from sklearn.model_selection import train_test_split
 
 from dataset import SMRIDataset
 from models_smri import get_3d_model
@@ -77,6 +78,100 @@ def balance_dataset(df, random_state=None):
         print(f"  Label {label}: {count} subjects")
     
     return balanced_df
+
+def balance_and_split_dataset(df, val_ratio=0.2, test_ratio=0.1, random_state=None):
+    """
+    New data balancing strategy:
+    1. Undersample to balance classes (keeping track of removed subjects)
+    2. Split balanced dataset into 70/20/10 (train/val/test)
+    3. Add removed subjects to test set
+    
+    Args:
+        df: DataFrame with 'subject_id' and 'label' columns
+        val_ratio: Proportion of balanced data for validation (default: 0.2)
+        test_ratio: Proportion of balanced data for test (default: 0.1)
+        random_state: Random seed for reproducibility
+    
+    Returns:
+        tuple: (train_df, val_df, test_df, removed_subjects_df)
+    """
+    if random_state is not None:
+        np.random.seed(random_state)
+    
+    # Get class counts
+    class_counts = df['label'].value_counts()
+    min_count = class_counts.min()
+    
+    print(f"Original class distribution:")
+    for label, count in class_counts.items():
+        print(f"  Label {label}: {count} subjects")
+    
+    balanced_dfs = []
+    removed_subjects_dfs = []
+    
+    for label in df['label'].unique():
+        class_df = df[df['label'] == label].copy()
+        class_count = len(class_df)
+        
+        # Reduce to minimum count (undersample majority classes)
+        if class_count > min_count:
+            # Sample the subjects to keep
+            kept_subjects = class_df.sample(n=min_count, random_state=random_state)
+            # Get the removed subjects
+            removed_subjects = class_df.drop(kept_subjects.index)
+            
+            balanced_dfs.append(kept_subjects)
+            removed_subjects_dfs.append(removed_subjects)
+        else:
+            # No undersampling needed for this class
+            balanced_dfs.append(class_df)
+    
+    balanced_df = pd.concat(balanced_dfs, ignore_index=True)
+    removed_subjects_df = pd.concat(removed_subjects_dfs, ignore_index=True) if removed_subjects_dfs else pd.DataFrame(columns=df.columns)
+    
+    # Shuffle the balanced dataset
+    balanced_df = balanced_df.sample(frac=1, random_state=random_state).reset_index(drop=True)
+    
+    print(f"\nBalanced class distribution (undersampled):")
+    balanced_counts = balanced_df['label'].value_counts()
+    for label, count in balanced_counts.items():
+        print(f"  Label {label}: {count} subjects")
+    
+    print(f"Removed subjects: {len(removed_subjects_df)} subjects")
+    if len(removed_subjects_df) > 0:
+        removed_counts = removed_subjects_df['label'].value_counts()
+        for label, count in removed_counts.items():
+            print(f"  Label {label}: {count} subjects")
+    
+    # Split balanced dataset into train/val/test (70/20/10)
+    print(f"\nSplitting balanced dataset (train: {1-val_ratio-test_ratio:.1%}, val: {val_ratio:.1%}, test: {test_ratio:.1%})")
+    
+    # First split: train+val vs test
+    train_val, test_balanced = train_test_split(
+        balanced_df, 
+        test_size=test_ratio, 
+        stratify=balanced_df['label'], 
+        random_state=random_state
+    )
+    
+    # Second split: train vs val
+    val_relative_size = val_ratio / (1 - test_ratio)
+    train, val = train_test_split(
+        train_val, 
+        test_size=val_relative_size, 
+        stratify=train_val['label'], 
+        random_state=random_state
+    )
+    
+    # Add removed subjects to test set
+    test_final = pd.concat([test_balanced, removed_subjects_df], ignore_index=True)
+    
+    print(f"\nFinal dataset splits:")
+    print(f"Training set: {len(train)} subjects")
+    print(f"Validation set: {len(val)} subjects")
+    print(f"Test set: {len(test_final)} subjects (balanced: {len(test_balanced)}, added: {len(removed_subjects_df)})")
+    
+    return train, val, test_final, removed_subjects_df
 
 # Set style for plots
 plt.style.use('default')
@@ -380,7 +475,7 @@ Examples:
   python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI --labels 0 1 --model VisionTransformer3D --config config_transformers.yaml
 
   # Train Swin UNETR with custom split ratios
-  python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI --labels 0 1 --model SwinUNETRClassifier --config config_hardware_optimized.yaml --val_ratio 0.2 --test_ratio 0.2
+  python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI --labels 0 1 --model SwinUNETRClassifier --config config_hardware_optimized.yaml --val_ratio 0.2 --test_ratio 0.1
 
   # Train Full Swin UNETR (encoder + decoder)
   python train_transformers.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root ~/reseng202500013-ndd-ml/data/preprocessed/MRI --labels 0 1 --model FullSwinUNETRClassifier --config config_hardware_optimized.yaml --batch_size 1
@@ -410,14 +505,14 @@ Examples:
                         help="Number of workers (optimized for 128-thread CPU)")
     parser.add_argument("--checkpoint_dir", type=str, default="~/reseng202500013-ndd-ml/data/checkpoints_ad_cn")
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--test_ratio", type=float, default=0.15,
-                        help="Proportion of data for test set")
-    parser.add_argument("--val_ratio", type=float, default=0.15,
-                        help="Proportion of data for validation set")
+    parser.add_argument("--test_ratio", type=float, default=0.1,
+                        help="Proportion of balanced data for test set (default: 0.1 for 70/20/10 split)")
+    parser.add_argument("--val_ratio", type=float, default=0.2,
+                        help="Proportion of balanced data for validation set (default: 0.2 for 70/20/10 split)")
     parser.add_argument("--random_seed", type=int, default=None,
                         help="Random seed for reproducible splits (None for random)")
     parser.add_argument("--balance_dataset", action='store_true',
-                        help="Balance dataset by reducing majority classes to match minority class count")
+                        help="Use new balancing strategy: undersample -> split 70/20/10 -> add remaining subjects to test set")
     
     args = parser.parse_args()
     
@@ -475,14 +570,9 @@ Examples:
         
         # Balance dataset if requested
         if args.balance_dataset:
-            print(f"\nBalancing dataset by reducing majority classes...")
-            filtered_df = balance_dataset(filtered_df, random_state=args.random_seed)
-            print(f"After balancing: {len(filtered_df)} subjects")
-            
-            # Show balanced label distribution
-            balanced_counts = filtered_df['label'].value_counts().sort_index()
-            for label, count in balanced_counts.items():
-                print(f"  Label {label}: {count} subjects ({count/len(filtered_df)*100:.1f}%)")
+            print(f"\nUsing new balancing strategy: undersample -> split 70/20/10 -> add remaining to test")
+            # Note: The actual balancing and splitting will be done in the main function
+            # This function just returns the filtered dataset
         
         return filtered_df
     
@@ -513,10 +603,16 @@ Examples:
     # Load and filter master dataset
     master_df = load_and_filter_master_dataset(args.master_csv, args.labels)
     
-    # Create splits
-    train_df, val_df, test_df = create_stratified_splits(
-        master_df, args.val_ratio, args.test_ratio, args.labels
-    )
+    # Create splits using new balancing strategy if requested
+    if args.balance_dataset:
+        train_df, val_df, test_df, removed_subjects = balance_and_split_dataset(
+            master_df, args.val_ratio, args.test_ratio, args.random_seed
+        )
+    else:
+        # Create splits using original method
+        train_df, val_df, test_df = create_stratified_splits(
+            master_df, args.val_ratio, args.test_ratio, args.labels
+        )
     
     # Save splits to data directory
     data_dir = os.path.dirname(args.master_csv)
