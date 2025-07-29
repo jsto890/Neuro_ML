@@ -137,31 +137,25 @@ def main():
         # 8) Optionally save the entire 3D heatmap as a NIfTI (use the same affine as input)
         #    We need the original affine → load from nibabel:
         # Use the same path construction as the dataset
-        # Structure: preprocessed/PET/(site)/(disease)/((sub-id)_ADNI_PET_CN)/(sub-id)_PPMI_PET_PD_SUVR.nii.gz
-        # Try different combinations of site and disease
+        # Structure: preprocessed/PET/(site)/(disease)/((sub-id)_SITE_PET_DISEASE)/(sub-id)_SITE_PET_DISEASE_SUVR.nii.gz
+        # The file naming is dynamic: sub-{ID}_{SITE}_PET_{DISEASE}_SUVR.nii.gz
         possible_paths = []
         
-        # Try ADNI site with different diseases
-        for disease in ['CN', 'PD', 'AD']:
-            possible_paths.append(os.path.join(
-                args.data_root,
-                "PET",
-                "ADNI",
-                disease,
-                f"{val_dataset.subjects[i]}_ADNI_PET_CN",
-                f"{val_dataset.subjects[i]}_PPMI_PET_PD_SUVR.nii.gz"
-            ))
+        # Try different combinations of site and disease
+        sites = ['ADNI', 'PPMI']
+        diseases = ['CN', 'PD', 'AD']
         
-        # Try PPMI site with different diseases
-        for disease in ['CN', 'PD', 'AD']:
-            possible_paths.append(os.path.join(
-                args.data_root,
-                "PET",
-                "PPMI",
-                disease,
-                f"{val_dataset.subjects[i]}_ADNI_PET_CN",
-                f"{val_dataset.subjects[i]}_PPMI_PET_PD_SUVR.nii.gz"
-            ))
+        for site in sites:
+            for disease in diseases:
+                # Try the dynamic naming pattern
+                possible_paths.append(os.path.join(
+                    args.data_root,
+                    "PET",
+                    site,
+                    disease,
+                    f"{val_dataset.subjects[i]}_{site}_PET_{disease}",
+                    f"{val_dataset.subjects[i]}_{site}_PET_{disease}_SUVR.nii.gz"
+                ))
         
         # Try to find the file
         nifti_path = None
@@ -171,13 +165,7 @@ def main():
                 break
         
         if nifti_path is None:
-            # If not found, try the original structure as fallback
-            nifti_path = os.path.join(
-                args.data_root,
-                "PET",
-                f"{val_dataset.subjects[i]}_ADNI_PET_CN",
-                f"{val_dataset.subjects[i]}_PPMI_PET_PD_SUVR.nii.gz"
-            )
+            raise FileNotFoundError(f"PET file not found for subject {val_dataset.subjects[i]}. Tried paths: {possible_paths}")
         try:
             orig_nii = nib.load(nifti_path)
             heatmap_nii = nib.Nifti1Image(cam_3d, affine=orig_nii.affine)
