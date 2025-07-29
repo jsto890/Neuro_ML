@@ -137,13 +137,47 @@ def main():
         # 8) Optionally save the entire 3D heatmap as a NIfTI (use the same affine as input)
         #    We need the original affine → load from nibabel:
         # Use the same path construction as the dataset
-        nifti_path = os.path.join(
-            args.data_root,
-            "petprep",
-            val_dataset.subjects[i],
-            "pet",
-            f"{val_dataset.subjects[i]}_space-MNI152NLin2009cAsym_res-2_desc-preproc_FDG_brain_zscore.nii.gz"
-        )
+        # Structure: preprocessed/PET/(site)/(disease)/((sub-id)_ADNI_PET_CN)/(sub-id)_PPMI_PET_PD_SUVR.nii.gz
+        # Try different combinations of site and disease
+        possible_paths = []
+        
+        # Try ADNI site with different diseases
+        for disease in ['CN', 'PD', 'AD']:
+            possible_paths.append(os.path.join(
+                args.data_root,
+                "PET",
+                "ADNI",
+                disease,
+                f"{val_dataset.subjects[i]}_ADNI_PET_CN",
+                f"{val_dataset.subjects[i]}_PPMI_PET_PD_SUVR.nii.gz"
+            ))
+        
+        # Try PPMI site with different diseases
+        for disease in ['CN', 'PD', 'AD']:
+            possible_paths.append(os.path.join(
+                args.data_root,
+                "PET",
+                "PPMI",
+                disease,
+                f"{val_dataset.subjects[i]}_ADNI_PET_CN",
+                f"{val_dataset.subjects[i]}_PPMI_PET_PD_SUVR.nii.gz"
+            ))
+        
+        # Try to find the file
+        nifti_path = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                nifti_path = path
+                break
+        
+        if nifti_path is None:
+            # If not found, try the original structure as fallback
+            nifti_path = os.path.join(
+                args.data_root,
+                "PET",
+                f"{val_dataset.subjects[i]}_ADNI_PET_CN",
+                f"{val_dataset.subjects[i]}_PPMI_PET_PD_SUVR.nii.gz"
+            )
         try:
             orig_nii = nib.load(nifti_path)
             heatmap_nii = nib.Nifti1Image(cam_3d, affine=orig_nii.affine)
