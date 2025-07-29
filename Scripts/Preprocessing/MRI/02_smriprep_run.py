@@ -244,6 +244,86 @@ class SMRIPrepRunner:
         
         return complete_subjects, incomplete_subjects
 
+    def check_all_datasets_completion(self):
+        """Check completion status for all datasets without running smriprep."""
+        datasets = [
+            {
+                'name': 'ADNI_AD',
+                'raw_dir': '/home/jsto890/reseng202500013-ndd-ml/data/raw/MRI/ADNI/AD'
+            },
+            {
+                'name': 'ADNI_CN', 
+                'raw_dir': '/home/jsto890/reseng202500013-ndd-ml/data/raw/MRI/ADNI/CN'
+            },
+            {
+                'name': 'PPMI_CN',
+                'raw_dir': '/home/jsto890/reseng202500013-ndd-ml/data/raw/MRI/PPMI/CN'
+            },
+            {
+                'name': 'PPMI_PD',
+                'raw_dir': '/home/jsto890/reseng202500013-ndd-ml/data/raw/MRI/PPMI/PD'
+            }
+        ]
+        
+        total_complete = 0
+        total_incomplete = 0
+        
+        for dataset in datasets:
+            logger.info(f"\n{'='*60}")
+            logger.info(f"Checking dataset: {dataset['name']}")
+            logger.info(f"{'='*60}")
+            
+            try:
+                # Update raw data directory for this dataset
+                original_raw_dir = self.raw_data_dir
+                self.raw_data_dir = Path(dataset['raw_dir'])
+                
+                if not self.raw_data_dir.exists():
+                    logger.error(f"Dataset directory not found: {self.raw_data_dir}")
+                    continue
+                
+                logger.info(f"Raw data directory: {self.raw_data_dir}")
+                
+                # Get subjects for this dataset
+                all_subjects = self.get_subject_list()
+                complete_subjects = []
+                incomplete_subjects = []
+                
+                for subject_id in all_subjects:
+                    if self.check_subject_completion(subject_id):
+                        complete_subjects.append(subject_id)
+                    else:
+                        incomplete_subjects.append(subject_id)
+                
+                logger.info(f"Dataset {dataset['name']}:")
+                logger.info(f"  Total subjects: {len(all_subjects)}")
+                logger.info(f"  Complete subjects: {len(complete_subjects)}")
+                logger.info(f"  Incomplete subjects: {len(incomplete_subjects)}")
+                
+                if incomplete_subjects:
+                    logger.info(f"  Incomplete subjects: {incomplete_subjects[:10]}{'...' if len(incomplete_subjects) > 10 else ''}")
+                
+                total_complete += len(complete_subjects)
+                total_incomplete += len(incomplete_subjects)
+                
+                # Restore original raw data directory
+                self.raw_data_dir = original_raw_dir
+                
+            except Exception as e:
+                logger.error(f"Error checking dataset {dataset['name']}: {e}")
+                # Restore original raw data directory
+                self.raw_data_dir = original_raw_dir
+                continue
+        
+        logger.info(f"\n{'='*60}")
+        logger.info(f"SUMMARY FOR ALL DATASETS")
+        logger.info(f"{'='*60}")
+        logger.info(f"Total complete subjects: {total_complete}")
+        logger.info(f"Total incomplete subjects: {total_incomplete}")
+        logger.info(f"Total subjects: {total_complete + total_incomplete}")
+        
+        return total_complete, total_incomplete
+
     def process_all_datasets(self):
         """Process all specified datasets with their subject limits."""
         datasets = [
@@ -352,6 +432,8 @@ def main():
                        help="Memory limit in GB")
     parser.add_argument("--check-only", action="store_true",
                        help="Only check completion status, don't run smriprep")
+    parser.add_argument("--check-all-datasets", action="store_true",
+                       help="Check completion status for all datasets (ADNI/AD, ADNI/CN, PPMI/CN, PPMI/PD)")
     parser.add_argument("--subjects", nargs="+",
                        help="Specific subjects to process")
     parser.add_argument("--all-datasets", action="store_true",
@@ -376,6 +458,11 @@ def main():
             logger.info("Starting automatic processing of all datasets...")
             total_processed = runner.process_all_datasets()
             logger.info(f"🎉 All datasets initiated! Total subjects queued for processing: {total_processed}")
+            
+        elif args.check_all_datasets:
+            # Check completion status for all datasets
+            logger.info("Checking completion status for all datasets...")
+            runner.check_all_datasets_completion()
             
         elif args.check_only:
             # Only check completion status
