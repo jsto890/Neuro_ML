@@ -173,6 +173,96 @@ def balance_and_split_dataset(df, val_ratio=0.2, test_ratio=0.1, random_state=No
     
     return train, val, test_final, removed_subjects_df
 
+
+def balance_and_split_dataset_90_10(df, test_ratio=0.1, random_state=None):
+    """
+    Balance dataset using undersampling and split into 90/10 train/test.
+    No separate validation set - k-fold will be used on training set.
+    
+    Args:
+        df: DataFrame with 'subject_id' and 'label' columns
+        test_ratio: Proportion for test set (default: 0.1 for 90/10 split)
+        random_state: Random seed for reproducibility
+    
+    Returns:
+        train_df, test_df, removed_subjects
+    """
+    print("Original class distribution:")
+    for label in sorted(df['label'].unique()):
+        count = len(df[df['label'] == label])
+        print(f"  Label {label}: {count} subjects")
+    
+    # Find the minority class
+    label_counts = df['label'].value_counts()
+    minority_class = label_counts.idxmin()
+    minority_count = label_counts.min()
+    
+    print(f"\nMinority class: {minority_class} with {minority_count} subjects")
+    
+    # Undersample majority classes to match minority class
+    balanced_dfs = []
+    removed_subjects = []
+    
+    for label in sorted(df['label'].unique()):
+        class_df = df[df['label'] == label]
+        if label == minority_class:
+            # Keep all minority class samples
+            balanced_dfs.append(class_df)
+        else:
+            # Undersample majority classes
+            if len(class_df) > minority_count:
+                # Randomly sample minority_count samples
+                sampled_df = class_df.sample(n=minority_count, random_state=random_state)
+                balanced_dfs.append(sampled_df)
+                
+                # Store removed subjects
+                removed_df = class_df.drop(sampled_df.index)
+                removed_subjects.append(removed_df)
+            else:
+                # If already balanced, keep as is
+                balanced_dfs.append(class_df)
+    
+    # Combine balanced data
+    balanced_df = pd.concat(balanced_dfs, ignore_index=True)
+    
+    print(f"\nBalanced class distribution (undersampled):")
+    for label in sorted(balanced_df['label'].unique()):
+        count = len(balanced_df[balanced_df['label'] == label])
+        print(f"  Label {label}: {count} subjects")
+    
+    # Combine all removed subjects
+    if removed_subjects:
+        all_removed = pd.concat(removed_subjects, ignore_index=True)
+        print(f"\nRemoved subjects: {len(all_removed)} subjects")
+        for label in sorted(all_removed['label'].unique()):
+            count = len(all_removed[all_removed['label'] == label])
+            print(f"  Label {label}: {count} subjects")
+    else:
+        all_removed = pd.DataFrame(columns=df.columns)
+        print(f"\nRemoved subjects: 0 subjects")
+    
+    # Split balanced data into train/test (90/10)
+    print(f"\nSplitting balanced dataset (train: 90.0%, test: 10.0%)")
+    
+    train_df, test_df = train_test_split(
+        balanced_df,
+        test_size=test_ratio,
+        stratify=balanced_df['label'],
+        random_state=random_state
+    )
+    
+    # Add removed subjects to test set
+    if len(all_removed) > 0:
+        test_df = pd.concat([test_df, all_removed], ignore_index=True)
+        print(f"Added {len(all_removed)} removed subjects to test set")
+    
+    print(f"\nFinal dataset splits:")
+    print(f"Training set: {len(train_df)} subjects")
+    print(f"Test set: {len(test_df)} subjects (balanced: {len(test_df) - len(all_removed)}, added: {len(all_removed)})")
+    
+    return train_df, test_df, all_removed
+
+
 def get_label_description(labels):
     """Convert numeric labels to descriptive names."""
     label_map = {0: 'CN', 1: 'AD', 2: 'PD'}
@@ -740,47 +830,37 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
 
     # Balance dataset and create splits using new strategy
     if args.balance_dataset:
-        print(f"\nUsing new balancing strategy: undersample -> split 70/20/10 -> add remaining to test")
-        train, val, test, removed_subjects = balance_and_split_dataset(
+        print(f"\nUsing new balancing strategy: undersample -> split 90/10 -> add remaining to test")
+        # For 90/10 split, we use 0.1 for test_ratio and no val_ratio
+        train, test, removed_subjects = balance_and_split_dataset_90_10(
             filtered_df, 
-            val_ratio=args.val_ratio, 
-            test_ratio=args.test_ratio, 
+            test_ratio=0.1, 
             random_state=args.random_seed
         )
+        val = None  # No separate validation set
     else:
-        # Create stratified train/val/test splits (original method)
-        print(f"\nCreating stratified splits (train: {1-args.val_ratio-args.test_ratio:.1%}, val: {args.val_ratio:.1%}, test: {args.test_ratio:.1%})")
+        # Create stratified train/test splits (90/10)
+        print(f"\nCreating stratified splits (train: 90%, test: 10%)")
         
-        # First split: train+val vs test
-        train_val, test = train_test_split(
+        # Split: train vs test (90/10)
+        train, test = train_test_split(
             filtered_df, 
-            test_size=args.test_ratio, 
+            test_size=0.1, 
             stratify=filtered_df['label'], 
             random_state=args.random_seed
         )
-        
-        # Second split: train vs val
-        val_relative_size = args.val_ratio / (1 - args.test_ratio)
-        train, val = train_test_split(
-            train_val, 
-            test_size=val_relative_size, 
-            stratify=train_val['label'], 
-            random_state=args.random_seed
-        )
+        val = None  # No separate validation set
 
     # Save splits to data directory
     data_dir = os.path.dirname(args.master_csv)
     temp_train_csv = os.path.join(data_dir, f'temp_train_{run_folder}.csv')
-    temp_val_csv = os.path.join(data_dir, f'temp_val_{run_folder}.csv')
     temp_test_csv = os.path.join(data_dir, f'temp_test_{run_folder}.csv')
     
     train.to_csv(temp_train_csv, index=False)
-    val.to_csv(temp_val_csv, index=False)
     test.to_csv(temp_test_csv, index=False)
 
     # Create datasets with split data
     train_dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root)
-    val_dataset = SMRIDataset(csv_path=temp_val_csv, data_root=args.data_root)
     test_dataset = SMRIDataset(csv_path=temp_test_csv, data_root=args.data_root)
 
     # Print split information
@@ -791,26 +871,13 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     for label, count in train_counts.items():
         print(f"  Label {label}: {count} subjects ({count/len(train_labels)*100:.1f}%)")
     
-    print(f"Validation set: {len(val_dataset)} subjects ({len(val_dataset)/len(filtered_df)*100:.1f}%)")
-    val_labels = [val_dataset.labels[i] for i in range(len(val_dataset))]
-    val_counts = pd.Series(val_labels).value_counts().sort_index()
-    for label, count in val_counts.items():
-        print(f"  Label {label}: {count} subjects ({count/len(val_labels)*100:.1f}%)")
-    
     print(f"Test set: {len(test_dataset)} subjects ({len(test_dataset)/len(filtered_df)*100:.1f}%)")
     test_labels = [test_dataset.labels[i] for i in range(len(test_dataset))]
     test_counts = pd.Series(test_labels).value_counts().sort_index()
     for label, count in test_counts.items():
         print(f"  Label {label}: {count} subjects ({count/len(test_labels)*100:.1f}%)")
 
-    # Create fixed validation and test loaders
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers
-    )
-
+    # Create test loader
     test_loader = DataLoader(
         test_dataset,
         batch_size=args.batch_size,
@@ -818,10 +885,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         num_workers=args.num_workers
     )
 
-    # Get labels for stratification
-    train_labels = [train_dataset.labels[i] for i in range(len(train_dataset))]
-
-    # Initialize stratified k-fold to ensure balanced class distribution
+    # Initialize stratified k-fold on training set
     skfold = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=args.random_seed)
     splits = list(skfold.split(range(len(train_dataset)), train_labels))
 
@@ -1014,7 +1078,6 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     # Clean up temporary files
     try:
         os.remove(temp_train_csv)
-        os.remove(temp_val_csv)
         os.remove(temp_test_csv)
         print(f"Cleaned up temporary files from data directory")
     except Exception as e:
