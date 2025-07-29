@@ -18,13 +18,11 @@ def main():
     if not PREPROCESSED_PET_DIR.exists():
         raise FileNotFoundError(f"Preprocessed PET directory not found: {PREPROCESSED_PET_DIR}")
     
-    # Load existing labels if file exists
-    existing_subjects = set()
+    # Check if output file exists and warn about overwriting
     if OUTPUT_LABELS_PATH.exists():
-        print(f"[INFO] Loading existing labels from: {OUTPUT_LABELS_PATH}")
-        df_existing = pd.read_csv(OUTPUT_LABELS_PATH)
-        existing_subjects = set(df_existing['subject_id'].tolist())
-        print(f"[INFO] Found {len(existing_subjects)} existing subjects")
+        print(f"[WARNING] Output file already exists: {OUTPUT_LABELS_PATH}")
+        print(f"[WARNING] This will create a new file with only subjects that have PET SUVR files")
+        print(f"[WARNING] Existing subjects without PET SUVR files will be removed")
     
     # Find all PET SUVR files in the preprocessed directory
     # Structure: PET/(site)/(disease)/((sub-id)_SITE_PET_DISEASE)/(sub-id)_SITE_PET_DISEASE_SUVR.nii.gz
@@ -87,28 +85,21 @@ def main():
     print(f"[INFO] Loading imaging records from: {IMAGING_RECORDS_PATH}")
     df_records = pd.read_csv(IMAGING_RECORDS_PATH)
     
-    # Create labels list (start with existing data if available)
+    # Create labels list (only for subjects with PET SUVR files)
     labels_data = []
-    if OUTPUT_LABELS_PATH.exists():
-        labels_data = df_existing.to_dict('records')
-        print(f"[INFO] Loaded {len(labels_data)} existing labels")
-    
     new_subjects_count = 0
+    skipped_subjects = 0
     
     for subject_id in subject_ids:
         # Extract the numeric part (e.g., "sub-001" -> "001")
         subject_numeric = subject_id[4:]  # Remove 'sub-' prefix
-        
-        # Skip if subject already exists in labels
-        if subject_id in existing_subjects:
-            print(f"[INFO] Skipping existing subject: {subject_id}")
-            continue
         
         # Find this subject in the imaging records
         subject_record = df_records[df_records['SubjectID'] == subject_numeric]
         
         if subject_record.empty:
             print(f"[WARNING] Subject {subject_numeric} not found in imaging records, skipping")
+            skipped_subjects += 1
             continue
         
         # Get the disease label
@@ -116,6 +107,7 @@ def main():
         
         if disease not in label_map:
             print(f"[WARNING] Unknown disease '{disease}' for subject {subject_numeric}, skipping")
+            skipped_subjects += 1
             continue
         
         label = label_map[disease]
@@ -126,6 +118,9 @@ def main():
         
         new_subjects_count += 1
         print(f"[INFO] Added: {subject_id} -> {disease} (label {label})")
+    
+    print(f"[INFO] Added {new_subjects_count} subjects with PET SUVR files")
+    print(f"[INFO] Skipped {skipped_subjects} subjects without PET SUVR files or invalid records")
     
     # Create DataFrame and save
     if labels_data:
