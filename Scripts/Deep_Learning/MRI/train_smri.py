@@ -566,6 +566,76 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_
     
     return summary
 
+def create_threshold_optimization_plot(threshold_results, output_dir, model_name="Model", fold_num=1):
+    """
+    Create plots showing threshold optimization results.
+    
+    Args:
+        threshold_results: list of threshold results from optimize_threshold
+        output_dir: directory to save plots
+        model_name: name of the model
+        fold_num: fold number
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    thresholds = [r['threshold'] for r in threshold_results]
+    accuracies = [r['accuracy'] for r in threshold_results]
+    
+    # Find best threshold
+    best_idx = np.argmax(accuracies)
+    best_threshold = thresholds[best_idx]
+    best_accuracy = accuracies[best_idx]
+    
+    # Create plot
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # Plot 1: Accuracy vs Threshold
+    ax1.plot(thresholds, accuracies, 'b-', linewidth=2, alpha=0.7)
+    ax1.axvline(x=0.5, color='red', linestyle='--', alpha=0.7, label='Default (0.5)')
+    ax1.axvline(x=best_threshold, color='green', linestyle='--', alpha=0.7, label=f'Optimal ({best_threshold:.3f})')
+    ax1.scatter(best_threshold, best_accuracy, color='green', s=100, zorder=5, label=f'Best: {best_accuracy:.4f}')
+    ax1.scatter(0.5, accuracies[thresholds.index(0.5)], color='red', s=100, zorder=5, label=f'Default: {accuracies[thresholds.index(0.5)]:.4f}')
+    
+    ax1.set_xlabel('Threshold')
+    ax1.set_ylabel('Accuracy')
+    ax1.set_title(f'{model_name} - Threshold Optimization (Fold {fold_num})')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    ax1.set_xlim(0.1, 0.9)
+    
+    # Plot 2: Accuracy improvement distribution
+    default_acc = accuracies[thresholds.index(0.5)]
+    improvements = [acc - default_acc for acc in accuracies]
+    
+    ax2.plot(thresholds, improvements, 'orange', linewidth=2, alpha=0.7)
+    ax2.axhline(y=0, color='red', linestyle='--', alpha=0.7, label='No improvement')
+    ax2.axvline(x=0.5, color='red', linestyle='--', alpha=0.7, label='Default (0.5)')
+    ax2.axvline(x=best_threshold, color='green', linestyle='--', alpha=0.7, label=f'Optimal ({best_threshold:.3f})')
+    ax2.scatter(best_threshold, max(improvements), color='green', s=100, zorder=5, label=f'Max improvement: {max(improvements):.4f}')
+    
+    ax2.set_xlabel('Threshold')
+    ax2.set_ylabel('Accuracy Improvement')
+    ax2.set_title(f'{model_name} - Accuracy Improvement vs Threshold (Fold {fold_num})')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    ax2.set_xlim(0.1, 0.9)
+    
+    plt.tight_layout()
+    plot_path = output_path / f'{model_name}_threshold_optimization_fold_{fold_num}.png'
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Threshold optimization plot saved to: {plot_path}")
+    
+    return {
+        'best_threshold': best_threshold,
+        'best_accuracy': best_accuracy,
+        'default_accuracy': default_acc,
+        'improvement': max(improvements),
+        'plot_path': str(plot_path)
+    }
+
 def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint_dir, args):
     """
     Trains model; saves best checkpoint by validation AUC into checkpoint_dir.
@@ -657,33 +727,22 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             final_train_loss = epoch_loss
             final_train_acc = epoch_acc
 
-        # --- Validation phase ---
-        model.eval()
-        val_logits = []
-        val_labels = []
-
-        with torch.no_grad():
-            for smri, labels in val_loader:
-                smri = smri.to(device)
-                logits = model(smri)          # [B, 2]
-                val_logits.append(logits.cpu().numpy())
-                val_labels.append(labels.numpy())
-
-        val_logits = np.concatenate(val_logits, axis=0)  # [N_val, 2]
-        val_labels = np.concatenate(val_labels, axis=0)  # [N_val]
-
-        # Convert logits → probabilities for binary classification
-        probs = nn.Softmax(dim=1)(torch.from_numpy(val_logits)).numpy()[:, 1]  # Take probability of positive class
-        val_auc = roc_auc_score(val_labels, probs)  # Binary classification
-        val_preds = np.argmax(val_logits, axis=1)
-        val_acc = accuracy_score(val_labels, val_preds)
+        # --- Validation phase with threshold optimization ---
+        val_results = evaluate_model_with_threshold_optimization(model, val_loader, device, optimize_threshold_flag=args.optimize_threshold)
         
-        # Calculate additional metrics
-        precision, recall, f1, support = precision_recall_fscore_support(val_labels, val_preds, average=None, zero_division=0)
-        cm = confusion_matrix(val_labels, val_preds)
+        val_auc = val_results['default_auc']
+        val_acc = val_results['optimal_accuracy']  # Use optimized accuracy
+        probs = val_results['probabilities']
+        val_labels = val_results['labels']
+        optimal_threshold = val_results['optimal_threshold']
+        
+        # Calculate additional metrics using optimal threshold
+        optimal_preds = (probs >= optimal_threshold).astype(int)
+        precision, recall, f1, support = precision_recall_fscore_support(val_labels, optimal_preds, average=None, zero_division=0)
+        cm = confusion_matrix(val_labels, optimal_preds)
         
         # Calculate macro averages for multi-class
-        precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(val_labels, val_preds, average='macro', zero_division=0)
+        precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(val_labels, optimal_preds, average='macro', zero_division=0)
         
         # Store per-class metrics
         class_metrics = {}
@@ -701,13 +760,15 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         new_lr = optimizer.param_groups[0]['lr']
         
         # Store epoch data
-        val_mcc = matthews_corrcoef(val_labels, val_preds)
+        val_mcc = matthews_corrcoef(val_labels, optimal_preds)
         epoch_data = {
             'epoch': int(epoch),
             'train_loss': float(epoch_loss),
             'train_acc': float(epoch_acc),
             'val_auc': float(val_auc),
             'val_acc': float(val_acc),
+            'optimal_threshold': float(optimal_threshold),
+            'accuracy_improvement': float(val_results.get('accuracy_improvement', 0.0)),
             'lr': float(new_lr),
             'precision_macro': float(precision_macro),
             'recall_macro': float(recall_macro),
@@ -749,6 +810,8 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             best_f1_macro = f1_macro
             best_class_metrics = class_metrics
             best_confusion_matrix = cm
+            best_threshold = optimal_threshold
+            best_threshold_results = val_results.get('threshold_results', [])
         else:
             no_improvement_count += 1
             
@@ -761,7 +824,115 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     if best_state is not None:
         model.load_state_dict(best_state)
     
-    return model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix
+    return model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix, best_threshold, best_threshold_results
+
+def optimize_threshold(y_probs, y_true, thresholds=None):
+    """
+    Find the optimal threshold that maximizes accuracy.
+    
+    Args:
+        y_probs: predicted probabilities (numpy array)
+        y_true: ground truth labels (numpy array)
+        thresholds: array of thresholds to test (default: 0.1 to 0.9)
+    
+    Returns:
+        best_threshold: optimal threshold for accuracy
+        best_accuracy: accuracy at optimal threshold
+        threshold_results: dict with all threshold results
+    """
+    if thresholds is None:
+        thresholds = np.linspace(0.1, 0.9, 81)
+    
+    best_acc = 0
+    best_thresh = 0.5
+    threshold_results = []
+    
+    for t in thresholds:
+        preds = (y_probs >= t).astype(int)
+        acc = accuracy_score(y_true, preds)
+        threshold_results.append({
+            'threshold': t,
+            'accuracy': acc,
+            'predictions': preds
+        })
+        
+        if acc > best_acc:
+            best_acc = acc
+            best_thresh = t
+    
+    return best_thresh, best_acc, threshold_results
+
+def evaluate_model_with_threshold_optimization(model, val_loader, device, optimize_threshold_flag=True):
+    """
+    Evaluate model and optionally optimize threshold for accuracy.
+    
+    Args:
+        model: trained model
+        val_loader: validation data loader
+        device: device to run inference on
+        optimize_threshold_flag: whether to optimize threshold
+    
+    Returns:
+        dict with evaluation results including optimal threshold
+    """
+    model.eval()
+    val_logits = []
+    val_labels = []
+    
+    with torch.no_grad():
+        for smri, labels in val_loader:
+            smri = smri.to(device)
+            logits = model(smri)
+            val_logits.append(logits.cpu().numpy())
+            val_labels.append(labels.numpy())
+    
+    val_logits = np.concatenate(val_logits, axis=0)
+    val_labels = np.concatenate(val_labels, axis=0)
+    
+    # Convert logits to probabilities
+    probs = nn.Softmax(dim=1)(torch.from_numpy(val_logits)).numpy()[:, 1]  # Positive class probability
+    
+    # Calculate metrics with default threshold (0.5)
+    default_preds = (probs >= 0.5).astype(int)
+    default_acc = accuracy_score(val_labels, default_preds)
+    default_auc = roc_auc_score(val_labels, probs)
+    
+    results = {
+        'probabilities': probs,
+        'labels': val_labels,
+        'default_threshold': 0.5,
+        'default_accuracy': default_acc,
+        'default_auc': default_auc,
+        'optimal_threshold': 0.5,
+        'optimal_accuracy': default_acc,
+        'threshold_optimized': False
+    }
+    
+    if optimize_threshold_flag:
+        # Optimize threshold for accuracy
+        best_thresh, best_acc, threshold_results = optimize_threshold(probs, val_labels)
+        
+        # Calculate metrics with optimal threshold
+        optimal_preds = (probs >= best_thresh).astype(int)
+        precision, recall, f1, support = precision_recall_fscore_support(val_labels, optimal_preds, average='macro', zero_division=0)
+        mcc = matthews_corrcoef(val_labels, optimal_preds)
+        
+        results.update({
+            'optimal_threshold': best_thresh,
+            'optimal_accuracy': best_acc,
+            'threshold_optimized': True,
+            'accuracy_improvement': best_acc - default_acc,
+            'optimal_precision': precision,
+            'optimal_recall': recall,
+            'optimal_f1': f1,
+            'optimal_mcc': mcc,
+            'threshold_results': threshold_results
+        })
+        
+        print(f"Threshold optimization: {default_acc:.4f} -> {best_acc:.4f} (improvement: {best_acc - default_acc:.4f})")
+        print(f"Optimal threshold: {best_thresh:.3f} (default: 0.5)")
+    
+    return results
 
 def k_fold_training(args, k_folds=5, models_to_run=None):
     """
@@ -936,9 +1107,18 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
             
             # Train the model using training fold and validate on validation fold
-            model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix = train_sMRI_model(
+            model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix, best_threshold, best_threshold_results = train_sMRI_model(
                 model, train_loader, val_fold_loader, args.epochs, args.device, model_dir, args
             )
+            
+            # Create threshold optimization plot for this fold
+            if best_threshold_results:
+                threshold_plot_dir = os.path.join(model_dir, "threshold_optimization_plots")
+                threshold_plot_info = create_threshold_optimization_plot(
+                    best_threshold_results, threshold_plot_dir, model_name, fold + 1
+                )
+            else:
+                threshold_plot_info = None
             
             fold_results.append({
                 'fold': fold + 1,
@@ -950,7 +1130,9 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 'best_recall_macro': float(best_recall_macro),
                 'best_f1_macro': float(best_f1_macro),
                 'best_class_metrics': best_class_metrics,
-                'best_confusion_matrix': best_confusion_matrix.tolist() if best_confusion_matrix is not None else None
+                'best_confusion_matrix': best_confusion_matrix.tolist() if best_confusion_matrix is not None else None,
+                'best_threshold': float(best_threshold),
+                'threshold_optimization': threshold_plot_info
             })
             folds_data.append({
                 'fold': fold + 1,
@@ -975,6 +1157,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         avg_recall_macro = float(np.mean([r['best_recall_macro'] for r in fold_results]))
         avg_f1_macro = float(np.mean([r['best_f1_macro'] for r in fold_results]))
         avg_mcc = float(np.mean([r.get('best_mcc', 0.0) for r in fold_results]))
+        avg_threshold = float(np.mean([r.get('best_threshold', 0.5) for r in fold_results]))
+        avg_accuracy_improvement = float(np.mean([r.get('threshold_optimization', {}).get('improvement', 0.0) for r in fold_results]))
         
         evaluation_dir = os.path.join(model_dir, "evaluation_plots")
         create_training_plots(folds_data, evaluation_dir, model_name)
@@ -995,6 +1179,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'average_recall_macro': avg_recall_macro,
             'average_f1_macro': avg_f1_macro,
             'average_mcc': avg_mcc,
+            'average_threshold': avg_threshold,
+            'average_accuracy_improvement': avg_accuracy_improvement,
             'total_folds': len(fold_results),
             'training_params': {
                 'epochs': args.epochs,
@@ -1006,7 +1192,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 'labels': args.labels,
                 'val_ratio': args.val_ratio,
                 'test_ratio': args.test_ratio,
-                'random_seed': args.random_seed
+                'random_seed': args.random_seed,
+                'optimize_threshold': args.optimize_threshold
             },
             'fold_results': fold_results
         }
@@ -1025,6 +1212,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'fold_results': fold_results
         })
         print(f"\n{model_name} results saved to: {model_dir}")
+        print(f"Average optimal threshold: {avg_threshold:.3f} (default: 0.5)")
+        print(f"Average accuracy improvement: {avg_accuracy_improvement:.4f}")
         
         # Test set evaluation (always available now)
         print(f"\nEvaluating {model_name} on the test set...")
@@ -1218,6 +1407,8 @@ Examples:
                         help="Random seed for reproducible splits (None for random)")
     parser.add_argument("--balance_dataset", action='store_true',
                         help="Use new balancing strategy: undersample -> split 70/20/10 -> add remaining subjects to test set")
+    parser.add_argument("--optimize_threshold", action='store_true', default=True,
+                        help="Optimize decision threshold for accuracy (default: True)")
     
     # New arguments for model selection
     parser.add_argument("--model",       type=str, default=None,
