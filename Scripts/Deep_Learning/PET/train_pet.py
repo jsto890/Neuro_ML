@@ -566,7 +566,7 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_
     
     return summary
 
-def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_dir, args):
+def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_dir, args, fold_num=None):
     """
     Trains model; saves best checkpoint by validation AUC into checkpoint_dir.
     Returns the model loaded with best weights and training history.
@@ -636,7 +636,10 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
     training_history = []
     
     # Initialize mixed precision training for memory efficiency
-    scaler = torch.amp.GradScaler('cuda')
+    if device.startswith('cuda'):
+        scaler = torch.amp.GradScaler()
+    else:
+        scaler = None
 
     for epoch in range(1, epochs + 1):
         # --- Training phase ---
@@ -649,19 +652,27 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
             pet, labels = pet.to(device), labels.to(device)
             optimizer.zero_grad()
             
-            # Use mixed precision training
-            with torch.amp.autocast('cuda'):
+            # Use mixed precision training if available
+            if scaler is not None:
+                with torch.amp.autocast(device_type='cuda'):
+                    logits = model(pet)              # [B, 2]
+                    loss = criterion(logits, labels)
+                
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                # Standard training for CPU
                 logits = model(pet)              # [B, 2]
                 loss = criterion(logits, labels)
-            
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+                
+                loss.backward()
+                optimizer.step()
 
-            running_loss += loss.item() * smri.size(0)
+            running_loss += loss.item() * pet.size(0)
             preds = torch.argmax(logits, dim=1)
             running_corrects += (preds == labels).sum().item()
-            total_samples += smri.size(0)
+            total_samples += pet.size(0)
 
         epoch_loss = running_loss / total_samples
         epoch_acc  = running_corrects / total_samples
@@ -670,33 +681,22 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
             final_train_loss = epoch_loss
             final_train_acc = epoch_acc
 
-        # --- Validation phase ---
-        model.eval()
-        val_logits = []
-        val_labels = []
-
-        with torch.no_grad():
-            for pet, labels in val_loader:
-                pet = pet.to(device)
-                logits = model(pet)          # [B, 2]
-                val_logits.append(logits.cpu().numpy())
-                val_labels.append(labels.numpy())
-
-        val_logits = np.concatenate(val_logits, axis=0)  # [N_val, 2]
-        val_labels = np.concatenate(val_labels, axis=0)  # [N_val]
-
-        # Convert logits → probabilities for binary classification
-        probs = nn.Softmax(dim=1)(torch.from_numpy(val_logits)).numpy()[:, 1]  # Take probability of positive class
-        val_auc = roc_auc_score(val_labels, probs)  # Binary classification
-        val_preds = np.argmax(val_logits, axis=1)
-        val_acc = accuracy_score(val_labels, val_preds)
+        # --- Validation phase with threshold optimization ---
+        val_results = evaluate_model_with_threshold_optimization(model, val_loader, device, optimize_threshold_flag=args.optimize_threshold)
         
-        # Calculate additional metrics
-        precision, recall, f1, support = precision_recall_fscore_support(val_labels, val_preds, average=None, zero_division=0)
-        cm = confusion_matrix(val_labels, val_preds)
+        val_auc = val_results['default_auc']
+        val_acc = val_results['optimal_accuracy']  # Use optimized accuracy
+        probs = val_results['probabilities']
+        val_labels = val_results['labels']
+        optimal_threshold = val_results['optimal_threshold']
+        
+        # Calculate additional metrics using optimal threshold
+        optimal_preds = (probs >= optimal_threshold).astype(int)
+        precision, recall, f1, support = precision_recall_fscore_support(val_labels, optimal_preds, average=None, zero_division=0)
+        cm = confusion_matrix(val_labels, optimal_preds)
         
         # Calculate macro averages for multi-class
-        precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(val_labels, val_preds, average='macro', zero_division=0)
+        precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(val_labels, optimal_preds, average='macro', zero_division=0)
         
         # Store per-class metrics
         class_metrics = {}
@@ -714,13 +714,15 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
         new_lr = optimizer.param_groups[0]['lr']
         
         # Store epoch data
-        val_mcc = matthews_corrcoef(val_labels, val_preds)
+        val_mcc = matthews_corrcoef(val_labels, optimal_preds)
         epoch_data = {
             'epoch': int(epoch),
             'train_loss': float(epoch_loss),
             'train_acc': float(epoch_acc),
             'val_auc': float(val_auc),
             'val_acc': float(val_acc),
+            'optimal_threshold': float(optimal_threshold),
+            'accuracy_improvement': float(val_results.get('accuracy_improvement', 0.0)),
             'lr': float(new_lr),
             'precision_macro': float(precision_macro),
             'recall_macro': float(recall_macro),
@@ -748,12 +750,19 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
             best_state = model.state_dict().copy()
             os.makedirs(checkpoint_dir, exist_ok=True)
             
-            # Save model with simple filename since it's in a dated folder
-            model_filename = "best_pet_model.pth"
+            # Save model with fold-specific filename
+            if fold_num is not None:
+                model_filename = f"best_pet_model_fold_{fold_num}.pth"
+            else:
+                model_filename = "best_pet_model.pth"
             model_path = os.path.join(checkpoint_dir, model_filename)
             
             torch.save(best_state, model_path)
             print(f"  [Checkpoint] Saved new best model (AUC={val_auc:.4f}) -> {model_filename}")
+            
+            # Also save with general filename for backward compatibility
+            general_model_path = os.path.join(checkpoint_dir, "best_pet_model.pth")
+            torch.save(best_state, general_model_path)
             no_improvement_count = 0
             
             # Update best metrics
@@ -762,6 +771,8 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
             best_f1_macro = f1_macro
             best_class_metrics = class_metrics
             best_confusion_matrix = cm
+            best_threshold = optimal_threshold
+            best_threshold_results = val_results.get('threshold_results', [])
         else:
             no_improvement_count += 1
             
@@ -774,7 +785,337 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
     if best_state is not None:
         model.load_state_dict(best_state)
     
-    return model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix
+    return model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix, best_threshold, best_threshold_results
+
+def optimize_threshold(y_probs, y_true, thresholds=None):
+    """
+    Find the optimal threshold that maximizes accuracy.
+    
+    Args:
+        y_probs: predicted probabilities (numpy array)
+        y_true: ground truth labels (numpy array)
+        thresholds: array of thresholds to test (default: 0.1 to 0.9)
+    
+    Returns:
+        best_threshold: optimal threshold for accuracy
+        best_accuracy: accuracy at optimal threshold
+        threshold_results: dict with all threshold results
+    """
+    if thresholds is None:
+        thresholds = np.linspace(0.1, 0.9, 81)
+    
+    best_acc = 0
+    best_thresh = 0.5
+    threshold_results = []
+    
+    for t in thresholds:
+        preds = (y_probs >= t).astype(int)
+        acc = accuracy_score(y_true, preds)
+        threshold_results.append({
+            'threshold': t,
+            'accuracy': acc,
+            'predictions': preds
+        })
+        
+        if acc > best_acc:
+            best_acc = acc
+            best_thresh = t
+    
+    return best_thresh, best_acc, threshold_results
+
+def evaluate_model_with_threshold_optimization(model, val_loader, device, optimize_threshold_flag=True):
+    """
+    Evaluate model and optionally optimize threshold for accuracy.
+    
+    Args:
+        model: trained model
+        val_loader: validation data loader
+        device: device to run inference on
+        optimize_threshold_flag: whether to optimize threshold
+    
+    Returns:
+        dict with evaluation results including optimal threshold
+    """
+    model.eval()
+    val_logits = []
+    val_labels = []
+    
+    with torch.no_grad():
+        for pet, labels in val_loader:
+            pet = pet.to(device)
+            logits = model(pet)
+            val_logits.append(logits.cpu().numpy())
+            val_labels.append(labels.numpy())
+    
+    val_logits = np.concatenate(val_logits, axis=0)
+    val_labels = np.concatenate(val_labels, axis=0)
+    
+    # Convert logits to probabilities
+    probs_softmax = nn.Softmax(dim=1)(torch.from_numpy(val_logits)).numpy()
+    
+    # Handle both binary and multiclass
+    if probs_softmax.shape[1] == 2:
+        # Binary classification: use positive class probability
+        probs = probs_softmax[:, 1]
+    else:
+        # Multiclass: use max probability for threshold optimization
+        probs = np.max(probs_softmax, axis=1)
+    
+    # Calculate metrics with default threshold (0.5)
+    if probs_softmax.shape[1] == 2:
+        # Binary classification
+        default_preds = (probs >= 0.5).astype(int)
+        default_acc = accuracy_score(val_labels, default_preds)
+        default_auc = roc_auc_score(val_labels, probs)
+    else:
+        # Multiclass: use argmax for predictions
+        default_preds = np.argmax(probs_softmax, axis=1)
+        default_acc = accuracy_score(val_labels, default_preds)
+        # For multiclass, calculate AUC using one-vs-rest
+        default_auc = roc_auc_score(val_labels, probs_softmax, multi_class='ovr', average='macro')
+    
+    results = {
+        'probabilities': probs,
+        'labels': val_labels,
+        'default_threshold': 0.5,
+        'default_accuracy': default_acc,
+        'default_auc': default_auc,
+        'optimal_threshold': 0.5,
+        'optimal_accuracy': default_acc,
+        'threshold_optimized': False
+    }
+    
+    if optimize_threshold_flag:
+        # Optimize threshold for accuracy
+        best_thresh, best_acc, threshold_results = optimize_threshold(probs, val_labels)
+        
+        # Calculate metrics with optimal threshold
+        optimal_preds = (probs >= best_thresh).astype(int)
+        precision, recall, f1, support = precision_recall_fscore_support(val_labels, optimal_preds, average='macro', zero_division=0)
+        mcc = matthews_corrcoef(val_labels, optimal_preds)
+        
+        results.update({
+            'optimal_threshold': best_thresh,
+            'optimal_accuracy': best_acc,
+            'threshold_optimized': True,
+            'accuracy_improvement': best_acc - default_acc,
+            'optimal_precision': precision,
+            'optimal_recall': recall,
+            'optimal_f1': f1,
+            'optimal_mcc': mcc,
+            'threshold_results': threshold_results
+        })
+        
+        print(f"Threshold optimization: {default_acc:.4f} -> {best_acc:.4f} (improvement: {best_acc - default_acc:.4f})")
+        print(f"Optimal threshold: {best_thresh:.3f} (default: 0.5)")
+    
+    return results
+
+def create_threshold_optimization_plot(threshold_results, output_dir, model_name="Model", fold_num=1):
+    """
+    Create plots showing threshold optimization results.
+    
+    Args:
+        threshold_results: list of threshold results from optimize_threshold
+        output_dir: directory to save plots
+        model_name: name of the model
+        fold_num: fold number
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    thresholds = [r['threshold'] for r in threshold_results]
+    accuracies = [r['accuracy'] for r in threshold_results]
+    
+    # Find best threshold
+    best_idx = np.argmax(accuracies)
+    best_threshold = thresholds[best_idx]
+    best_accuracy = accuracies[best_idx]
+    
+    # Create plot
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # Plot 1: Accuracy vs Threshold
+    ax1.plot(thresholds, accuracies, 'b-', linewidth=2, alpha=0.7)
+    ax1.axvline(x=0.5, color='red', linestyle='--', alpha=0.7, label='Default (0.5)')
+    ax1.axvline(x=best_threshold, color='green', linestyle='--', alpha=0.7, label=f'Optimal ({best_threshold:.3f})')
+    ax1.scatter(best_threshold, best_accuracy, color='green', s=100, zorder=5, label=f'Best: {best_accuracy:.4f}')
+    ax1.scatter(0.5, accuracies[thresholds.index(0.5)], color='red', s=100, zorder=5, label=f'Default: {accuracies[thresholds.index(0.5)]:.4f}')
+    
+    ax1.set_xlabel('Threshold')
+    ax1.set_ylabel('Accuracy')
+    ax1.set_title(f'{model_name} - Threshold Optimization (Fold {fold_num})')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    ax1.set_xlim(0.1, 0.9)
+    
+    # Plot 2: Accuracy improvement distribution
+    default_acc = accuracies[thresholds.index(0.5)]
+    improvements = [acc - default_acc for acc in accuracies]
+    
+    ax2.plot(thresholds, improvements, 'orange', linewidth=2, alpha=0.7)
+    ax2.axhline(y=0, color='red', linestyle='--', alpha=0.7, label='No improvement')
+    ax2.axvline(x=0.5, color='red', linestyle='--', alpha=0.7, label='Default (0.5)')
+    ax2.axvline(x=best_threshold, color='green', linestyle='--', alpha=0.7, label=f'Optimal ({best_threshold:.3f})')
+    ax2.scatter(best_threshold, max(improvements), color='green', s=100, zorder=5, label=f'Max improvement: {max(improvements):.4f}')
+    
+    ax2.set_xlabel('Threshold')
+    ax2.set_ylabel('Accuracy Improvement')
+    ax2.set_title(f'{model_name} - Accuracy Improvement vs Threshold (Fold {fold_num})')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    ax2.set_xlim(0.1, 0.9)
+    
+    plt.tight_layout()
+    plot_path = output_path / f'{model_name}_threshold_optimization_fold_{fold_num}.png'
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Threshold optimization plot saved to: {plot_path}")
+    
+    return {
+        'best_threshold': best_threshold,
+        'best_accuracy': best_accuracy,
+        'default_accuracy': default_acc,
+        'improvement': max(improvements),
+        'plot_path': str(plot_path)
+    }
+
+def ensemble_evaluate_models(model_name, model_dir, test_loader, device, args, fold_results):
+    """
+    Evaluate ensemble of all fold models on test set.
+    
+    Args:
+        model_name: name of the model architecture
+        model_dir: directory containing fold models
+        test_loader: test data loader
+        device: device to run inference on
+        args: training arguments
+        fold_results: results from all folds
+    
+    Returns:
+        ensemble_predictions, ensemble_probabilities, test_labels, ensemble_metrics
+    """
+    print(f"Loading ensemble of {len(fold_results)} fold models...")
+    
+    models = []
+    fold_aucs = []
+    
+    # Load all fold models
+    for fold_result in fold_results:
+        fold_num = fold_result['fold']
+        fold_auc = fold_result['best_val_auc']
+        fold_aucs.append(fold_auc)
+        
+        model_path = os.path.join(model_dir, f"best_pet_model_fold_{fold_num}.pth")
+        
+        if not os.path.exists(model_path):
+            print(f"Warning: Model for fold {fold_num} not found: {model_path}")
+            continue
+            
+        # Load model
+        state_dict = torch.load(model_path, map_location=device)
+        
+        # Initialize model with correct architecture
+        if model_name == "Simple3DCNN":
+            classifier_weight = state_dict['classifier.0.weight']
+            actual_input_size = classifier_weight.shape[1]
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            model.classifier[0] = nn.Linear(actual_input_size, 256)
+            model._initialized = True
+            model.load_state_dict(state_dict)
+        elif model_name == "SwinUNETRClassifier":
+            classifier_weight = state_dict['classifier.0.weight']
+            actual_input_size = classifier_weight.shape[1]
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            model.classifier[0] = nn.Linear(actual_input_size, 512)
+            model._initialized = True
+            model.load_state_dict(state_dict)
+        elif model_name == "FullSwinUNETRClassifier":
+            classifier_weight = state_dict['classifier.0.weight']
+            actual_input_size = classifier_weight.shape[1]
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            model.classifier[0] = nn.Linear(actual_input_size, 512)
+            model._initialized = True
+            model.load_state_dict(state_dict)
+        else:
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            model.load_state_dict(state_dict)
+        
+        model.to(device)
+        model.eval()
+        models.append(model)
+        
+        print(f"  Fold {fold_num}: AUC = {fold_auc:.4f}")
+    
+    if not models:
+        raise ValueError("No models could be loaded for ensemble evaluation")
+    
+    print(f"Successfully loaded {len(models)} models for ensemble")
+    
+    # Get ensemble predictions
+    all_probabilities = []
+    test_labels = []
+    
+    with torch.no_grad():
+        for batch_idx, (pet, labels) in enumerate(test_loader):
+            try:
+                pet = pet.to(device)
+                batch_probabilities = []
+                
+                # Get predictions from each model (with error handling)
+                for i, model in enumerate(models):
+                    try:
+                        logits = model(pet)
+                        probs = torch.softmax(logits, dim=1)
+                        batch_probabilities.append(probs.cpu().numpy())
+                    except Exception as e:
+                        print(f"Warning: Error in model {i+1}: {e}")
+                        # Use zero probabilities as fallback
+                        batch_probabilities.append(np.zeros_like(probs.cpu().numpy()))
+                
+                if batch_probabilities:
+                    # Average probabilities across models
+                    ensemble_probs = np.mean(batch_probabilities, axis=0)
+                    all_probabilities.append(ensemble_probs)
+                    test_labels.append(labels.numpy())
+                else:
+                    print(f"Warning: No valid predictions for batch {batch_idx}")
+                    
+            except Exception as e:
+                print(f"Error processing batch {batch_idx}: {e}")
+                continue
+    
+    # Concatenate all batches
+    if not all_probabilities or not test_labels:
+        raise ValueError("No valid predictions generated during ensemble evaluation")
+    
+    ensemble_probabilities = np.concatenate(all_probabilities, axis=0)
+    test_labels = np.concatenate(test_labels, axis=0)
+    
+    # Get predictions (argmax of averaged probabilities)
+    ensemble_predictions = np.argmax(ensemble_probabilities, axis=1)
+    
+    # Calculate metrics
+    ensemble_metrics = calculate_metrics(ensemble_predictions, ensemble_probabilities, test_labels)
+    
+    # Add ensemble-specific information
+    ensemble_metrics['ensemble_info'] = {
+        'num_models': len(models),
+        'fold_aucs': fold_aucs,
+        'average_fold_auc': np.mean(fold_aucs),
+        'std_fold_auc': np.std(fold_aucs),
+        'min_fold_auc': np.min(fold_aucs),
+        'max_fold_auc': np.max(fold_aucs)
+    }
+    
+    print(f"Ensemble evaluation completed:")
+    print(f"  Models used: {len(models)}")
+    print(f"  Average fold AUC: {np.mean(fold_aucs):.4f} ± {np.std(fold_aucs):.4f}")
+    print(f"  Ensemble accuracy: {ensemble_metrics['accuracy']:.4f}")
+    print(f"  Ensemble AUC: {ensemble_metrics['auc']:.4f}")
+    
+    return ensemble_predictions, ensemble_probabilities, test_labels, ensemble_metrics
 
 def k_fold_training(args, k_folds=5, models_to_run=None):
     """
@@ -953,9 +1294,18 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             model = get_3d_model(model_name, num_classes=num_classes, in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
             
             # Train the model using training fold and validate on validation fold
-            model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix = train_PET_model(
-                model, train_loader, val_fold_loader, args.epochs, args.device, model_dir, args
+            model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix, best_threshold, best_threshold_results = train_PET_model(
+                model, train_loader, val_fold_loader, args.epochs, args.device, model_dir, args, fold_num=fold + 1
             )
+            
+            # Create threshold optimization plot for this fold
+            if best_threshold_results:
+                threshold_plot_dir = os.path.join(model_dir, "threshold_optimization_plots")
+                threshold_plot_info = create_threshold_optimization_plot(
+                    best_threshold_results, threshold_plot_dir, model_name, fold + 1
+                )
+            else:
+                threshold_plot_info = None
             
             fold_results.append({
                 'fold': fold + 1,
@@ -967,7 +1317,9 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 'best_recall_macro': float(best_recall_macro),
                 'best_f1_macro': float(best_f1_macro),
                 'best_class_metrics': best_class_metrics,
-                'best_confusion_matrix': best_confusion_matrix.tolist() if best_confusion_matrix is not None else None
+                'best_confusion_matrix': best_confusion_matrix.tolist() if best_confusion_matrix is not None else None,
+                'best_threshold': float(best_threshold),
+                'threshold_optimization': threshold_plot_info
             })
             folds_data.append({
                 'fold': fold + 1,
@@ -992,6 +1344,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         avg_recall_macro = float(np.mean([r['best_recall_macro'] for r in fold_results]))
         avg_f1_macro = float(np.mean([r['best_f1_macro'] for r in fold_results]))
         avg_mcc = float(np.mean([r.get('best_mcc', 0.0) for r in fold_results]))
+        avg_threshold = float(np.mean([r.get('best_threshold', 0.5) for r in fold_results]))
+        avg_accuracy_improvement = float(np.mean([r.get('threshold_optimization', {}).get('improvement', 0.0) for r in fold_results]))
         
         evaluation_dir = os.path.join(model_dir, "evaluation_plots")
         create_training_plots(folds_data, evaluation_dir, model_name)
@@ -1012,6 +1366,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'average_recall_macro': avg_recall_macro,
             'average_f1_macro': avg_f1_macro,
             'average_mcc': avg_mcc,
+            'average_threshold': avg_threshold,
+            'average_accuracy_improvement': avg_accuracy_improvement,
             'total_folds': len(fold_results),
             'training_params': {
                 'epochs': args.epochs,
@@ -1023,7 +1379,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 'labels': args.labels,
                 'val_ratio': args.val_ratio,
                 'test_ratio': args.test_ratio,
-                'random_seed': args.random_seed
+                'random_seed': args.random_seed,
+                'optimize_threshold': args.optimize_threshold
             },
             'fold_results': fold_results
         }
@@ -1042,55 +1399,164 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'fold_results': fold_results
         })
         print(f"\n{model_name} results saved to: {model_dir}")
+        print(f"Average optimal threshold: {avg_threshold:.3f} (default: 0.5)")
+        print(f"Average accuracy improvement: {avg_accuracy_improvement:.4f}")
         
         # Test set evaluation (always available now)
         print(f"\nEvaluating {model_name} on the test set...")
-        best_model_path = os.path.join(model_dir, "best_pet_model.pth")
-        if os.path.exists(best_model_path):
-            file_size = os.path.getsize(best_model_path) / (1024*1024)  # MB
-            print(f"Model file size: {file_size:.2f} MB")
-            state_dict = torch.load(best_model_path, map_location=args.device)
-            # For Simple3DCNN, we need to handle the classifier size mismatch
-            if model_name == "Simple3DCNN":
-                classifier_weight = state_dict['classifier.0.weight']
-                actual_input_size = classifier_weight.shape[1]
-                model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                model.classifier[0] = nn.Linear(actual_input_size, 256)
-                model._initialized = True
-                model.load_state_dict(state_dict)
-            elif model_name == "SwinUNETRClassifier":
-                classifier_weight = state_dict['classifier.0.weight']
-                actual_input_size = classifier_weight.shape[1]
-                model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                model.classifier[0] = nn.Linear(actual_input_size, 512)
-                model._initialized = True
-                model.load_state_dict(state_dict)
-            elif model_name == "FullSwinUNETRClassifier":
-                classifier_weight = state_dict['classifier.0.weight']
-                actual_input_size = classifier_weight.shape[1]
-                model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                model.classifier[0] = nn.Linear(actual_input_size, 512)
-                model._initialized = True
-                model.load_state_dict(state_dict)
+        
+        if args.test_strategy == "best_fold":
+            # Find the best fold based on validation AUC
+            best_fold_idx = np.argmax([r['best_val_auc'] for r in fold_results])
+            best_fold = fold_results[best_fold_idx]['fold']
+            best_fold_auc = fold_results[best_fold_idx]['best_val_auc']
+            
+            print(f"Using best fold: {best_fold} (AUC: {best_fold_auc:.4f})")
+            
+            # Load the best model from the best fold
+            best_model_path = os.path.join(model_dir, f"best_pet_model_fold_{best_fold}.pth")
+            
+            # If fold-specific model doesn't exist, fall back to the general one
+            if not os.path.exists(best_model_path):
+                best_model_path = os.path.join(model_dir, "best_pet_model.pth")
+                print(f"Warning: Fold-specific model not found, using general model")
+            
+            if os.path.exists(best_model_path):
+                file_size = os.path.getsize(best_model_path) / (1024*1024)  # MB
+                print(f"Model file size: {file_size:.2f} MB")
+                state_dict = torch.load(best_model_path, map_location=args.device)
+                # For Simple3DCNN, we need to handle the classifier size mismatch
+                if model_name == "Simple3DCNN":
+                    classifier_weight = state_dict['classifier.0.weight']
+                    actual_input_size = classifier_weight.shape[1]
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.classifier[0] = nn.Linear(actual_input_size, 256)
+                    model._initialized = True
+                    model.load_state_dict(state_dict)
+                elif model_name == "SwinUNETRClassifier":
+                    classifier_weight = state_dict['classifier.0.weight']
+                    actual_input_size = classifier_weight.shape[1]
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.classifier[0] = nn.Linear(actual_input_size, 512)
+                    model._initialized = True
+                    model.load_state_dict(state_dict)
+                elif model_name == "FullSwinUNETRClassifier":
+                    classifier_weight = state_dict['classifier.0.weight']
+                    actual_input_size = classifier_weight.shape[1]
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.classifier[0] = nn.Linear(actual_input_size, 512)
+                    model._initialized = True
+                    model.load_state_dict(state_dict)
+                else:
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.load_state_dict(state_dict)
+                model.to(args.device)
+                model.eval()
+                # Evaluate
+                predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
+                metrics = calculate_metrics(predictions, probabilities, labels)
+                # Save metrics
+                test_metrics_path = os.path.join(model_dir, "test_metrics.json")
+                with open(test_metrics_path, "w") as f:
+                    json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+                # Save plots
+                test_eval_dir = os.path.join(model_dir, "test_evaluation_plots")
+                create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
+                print(f"Test set evaluation for {model_name} saved to: {test_eval_dir}")
             else:
-                model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                model.load_state_dict(state_dict)
-            model.to(args.device)
-            model.eval()
-            # Evaluate
-            predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
-            metrics = calculate_metrics(predictions, probabilities, labels)
-            # Save metrics
-            test_metrics_path = os.path.join(model_dir, "test_metrics.json")
-            with open(test_metrics_path, "w") as f:
-                json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
-            # Save plots
-            test_eval_dir = os.path.join(model_dir, "test_evaluation_plots")
-            create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
-            print(f"Test set evaluation for {model_name} saved to: {test_eval_dir}")
-        else:
-            print(f"ERROR: Model file not found: {best_model_path}")
-            continue
+                print(f"ERROR: Model file not found: {best_model_path}")
+                continue
+                
+        elif args.test_strategy == "last_fold":
+            # Use the last fold's model (original behavior)
+            best_model_path = os.path.join(model_dir, "best_pet_model.pth")
+            if os.path.exists(best_model_path):
+                file_size = os.path.getsize(best_model_path) / (1024*1024)  # MB
+                print(f"Model file size: {file_size:.2f} MB")
+                state_dict = torch.load(best_model_path, map_location=args.device)
+                # For Simple3DCNN, we need to handle the classifier size mismatch
+                if model_name == "Simple3DCNN":
+                    classifier_weight = state_dict['classifier.0.weight']
+                    actual_input_size = classifier_weight.shape[1]
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.classifier[0] = nn.Linear(actual_input_size, 256)
+                    model._initialized = True
+                    model.load_state_dict(state_dict)
+                elif model_name == "SwinUNETRClassifier":
+                    classifier_weight = state_dict['classifier.0.weight']
+                    actual_input_size = classifier_weight.shape[1]
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.classifier[0] = nn.Linear(actual_input_size, 512)
+                    model._initialized = True
+                    model.load_state_dict(state_dict)
+                elif model_name == "FullSwinUNETRClassifier":
+                    classifier_weight = state_dict['classifier.0.weight']
+                    actual_input_size = classifier_weight.shape[1]
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.classifier[0] = nn.Linear(actual_input_size, 512)
+                    model._initialized = True
+                    model.load_state_dict(state_dict)
+                else:
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.load_state_dict(state_dict)
+                model.to(args.device)
+                model.eval()
+                # Evaluate
+                predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
+                metrics = calculate_metrics(predictions, probabilities, labels)
+                # Save metrics
+                test_metrics_path = os.path.join(model_dir, "test_metrics.json")
+                with open(test_metrics_path, "w") as f:
+                    json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+                # Save plots
+                test_eval_dir = os.path.join(model_dir, "test_evaluation_plots")
+                create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
+                print(f"Test set evaluation for {model_name} saved to: {test_eval_dir}")
+            else:
+                print(f"ERROR: Model file not found: {best_model_path}")
+                continue
+                
+        elif args.test_strategy == "ensemble":
+            print(f"\nEvaluating {model_name} ensemble on the test set...")
+            try:
+                # Use ensemble evaluation
+                ensemble_predictions, ensemble_probabilities, test_labels, ensemble_metrics = ensemble_evaluate_models(
+                    model_name, model_dir, test_loader, args.device, args, fold_results
+                )
+                
+                # Save ensemble metrics
+                test_metrics_path = os.path.join(model_dir, "ensemble_test_metrics.json")
+                with open(test_metrics_path, "w") as f:
+                    json.dump(ensemble_metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+                
+                # Save ensemble plots
+                test_eval_dir = os.path.join(model_dir, "ensemble_test_evaluation_plots")
+                create_evaluation_plots(ensemble_predictions, ensemble_probabilities, test_labels, ensemble_metrics, test_eval_dir)
+                print(f"Ensemble test evaluation for {model_name} saved to: {test_eval_dir}")
+                
+            except Exception as e:
+                print(f"Error in ensemble evaluation: {e}")
+                print("Falling back to best fold evaluation...")
+                # Fall back to best fold evaluation
+                best_fold_idx = np.argmax([r['best_val_auc'] for r in fold_results])
+                best_fold = fold_results[best_fold_idx]['fold']
+                best_model_path = os.path.join(model_dir, f"best_pet_model_fold_{best_fold}.pth")
+                
+                if os.path.exists(best_model_path):
+                    state_dict = torch.load(best_model_path, map_location=args.device)
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.load_state_dict(state_dict)
+                    model.to(args.device)
+                    model.eval()
+                    predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
+                    metrics = calculate_metrics(predictions, probabilities, labels)
+                    test_metrics_path = os.path.join(model_dir, "fallback_test_metrics.json")
+                    with open(test_metrics_path, "w") as f:
+                        json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+                    print(f"Fallback test evaluation saved to: {test_metrics_path}")
+                else:
+                    print(f"ERROR: Could not perform ensemble or fallback evaluation")
+                    continue
 
     # Clean up temporary files
     try:
@@ -1235,6 +1701,10 @@ Examples:
                         help="Random seed for reproducible splits (None for random)")
     parser.add_argument("--balance_dataset", action='store_true',
                         help="Use new balancing strategy: undersample -> split 70/20/10 -> add remaining subjects to test set")
+    parser.add_argument("--optimize_threshold", action='store_true', default=True,
+                        help="Optimize decision threshold for accuracy (default: True)")
+    parser.add_argument("--test_strategy", type=str, default="best_fold", choices=["best_fold", "ensemble", "last_fold"],
+                        help="Strategy for test evaluation: best_fold (default), ensemble, or last_fold")
     
     # New arguments for model selection
     parser.add_argument("--model",       type=str, default=None,
