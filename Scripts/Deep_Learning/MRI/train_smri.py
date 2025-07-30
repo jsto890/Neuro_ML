@@ -636,7 +636,7 @@ def create_threshold_optimization_plot(threshold_results, output_dir, model_name
         'plot_path': str(plot_path)
     }
 
-def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint_dir, args):
+def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint_dir, args, fold_num=None):
     """
     Trains model; saves best checkpoint by validation AUC into checkpoint_dir.
     Returns the model loaded with best weights and training history.
@@ -693,7 +693,10 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     training_history = []
     
     # Initialize mixed precision training for memory efficiency
-    scaler = torch.amp.GradScaler('cuda')
+    if device.startswith('cuda'):
+        scaler = torch.amp.GradScaler()
+    else:
+        scaler = None
 
     for epoch in range(1, epochs + 1):
         # --- Training phase ---
@@ -706,14 +709,22 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             smri, labels = smri.to(device), labels.to(device)
             optimizer.zero_grad()
             
-            # Use mixed precision training
-            with torch.amp.autocast('cuda'):
+            # Use mixed precision training if available
+            if scaler is not None:
+                with torch.amp.autocast(device_type='cuda'):
+                    logits = model(smri)              # [B, 2]
+                    loss = criterion(logits, labels)
+                
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                # Standard training for CPU
                 logits = model(smri)              # [B, 2]
                 loss = criterion(logits, labels)
-            
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+                
+                loss.backward()
+                optimizer.step()
 
             running_loss += loss.item() * smri.size(0)
             preds = torch.argmax(logits, dim=1)
@@ -796,12 +807,19 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             best_state = model.state_dict().copy()
             os.makedirs(checkpoint_dir, exist_ok=True)
             
-            # Save model with simple filename since it's in a dated folder
-            model_filename = "best_smri_model.pth"
+            # Save model with fold-specific filename
+            if fold_num is not None:
+                model_filename = f"best_smri_model_fold_{fold_num}.pth"
+            else:
+                model_filename = "best_smri_model.pth"
             model_path = os.path.join(checkpoint_dir, model_filename)
             
             torch.save(best_state, model_path)
             print(f"  [Checkpoint] Saved new best model (AUC={val_auc:.4f}) -> {model_filename}")
+            
+            # Also save with general filename for backward compatibility
+            general_model_path = os.path.join(checkpoint_dir, "best_smri_model.pth")
+            torch.save(best_state, general_model_path)
             no_improvement_count = 0
             
             # Update best metrics
@@ -890,12 +908,28 @@ def evaluate_model_with_threshold_optimization(model, val_loader, device, optimi
     val_labels = np.concatenate(val_labels, axis=0)
     
     # Convert logits to probabilities
-    probs = nn.Softmax(dim=1)(torch.from_numpy(val_logits)).numpy()[:, 1]  # Positive class probability
+    probs_softmax = nn.Softmax(dim=1)(torch.from_numpy(val_logits)).numpy()
+    
+    # Handle both binary and multiclass
+    if probs_softmax.shape[1] == 2:
+        # Binary classification: use positive class probability
+        probs = probs_softmax[:, 1]
+    else:
+        # Multiclass: use max probability for threshold optimization
+        probs = np.max(probs_softmax, axis=1)
     
     # Calculate metrics with default threshold (0.5)
-    default_preds = (probs >= 0.5).astype(int)
-    default_acc = accuracy_score(val_labels, default_preds)
-    default_auc = roc_auc_score(val_labels, probs)
+    if probs_softmax.shape[1] == 2:
+        # Binary classification
+        default_preds = (probs >= 0.5).astype(int)
+        default_acc = accuracy_score(val_labels, default_preds)
+        default_auc = roc_auc_score(val_labels, probs)
+    else:
+        # Multiclass: use argmax for predictions
+        default_preds = np.argmax(probs_softmax, axis=1)
+        default_acc = accuracy_score(val_labels, default_preds)
+        # For multiclass, calculate AUC using one-vs-rest
+        default_auc = roc_auc_score(val_labels, probs_softmax, multi_class='ovr', average='macro')
     
     results = {
         'probabilities': probs,
@@ -1108,7 +1142,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             
             # Train the model using training fold and validate on validation fold
             model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix, best_threshold, best_threshold_results = train_sMRI_model(
-                model, train_loader, val_fold_loader, args.epochs, args.device, model_dir, args
+                model, train_loader, val_fold_loader, args.epochs, args.device, model_dir, args, fold_num=fold + 1
             )
             
             # Create threshold optimization plot for this fold
@@ -1217,52 +1251,159 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         
         # Test set evaluation (always available now)
         print(f"\nEvaluating {model_name} on the test set...")
-        best_model_path = os.path.join(model_dir, "best_smri_model.pth")
-        if os.path.exists(best_model_path):
-            file_size = os.path.getsize(best_model_path) / (1024*1024)  # MB
-            print(f"Model file size: {file_size:.2f} MB")
-            state_dict = torch.load(best_model_path, map_location=args.device)
-            # For Simple3DCNN, we need to handle the classifier size mismatch
-            if model_name == "Simple3DCNN":
-                classifier_weight = state_dict['classifier.0.weight']
-                actual_input_size = classifier_weight.shape[1]
-                model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                model.classifier[0] = nn.Linear(actual_input_size, 256)
-                model._initialized = True
-                model.load_state_dict(state_dict)
-            elif model_name == "SwinUNETRClassifier":
-                classifier_weight = state_dict['classifier.0.weight']
-                actual_input_size = classifier_weight.shape[1]
-                model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                model.classifier[0] = nn.Linear(actual_input_size, 512)
-                model._initialized = True
-                model.load_state_dict(state_dict)
-            elif model_name == "FullSwinUNETRClassifier":
-                classifier_weight = state_dict['classifier.0.weight']
-                actual_input_size = classifier_weight.shape[1]
-                model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                model.classifier[0] = nn.Linear(actual_input_size, 512)
-                model._initialized = True
-                model.load_state_dict(state_dict)
+        
+        if args.test_strategy == "best_fold":
+            # Find the best fold based on validation AUC
+            best_fold_idx = np.argmax([r['best_val_auc'] for r in fold_results])
+            best_fold = fold_results[best_fold_idx]['fold']
+            best_fold_auc = fold_results[best_fold_idx]['best_val_auc']
+            
+            print(f"Using best fold: {best_fold} (AUC: {best_fold_auc:.4f})")
+            
+            # Load the best model from the best fold
+            best_model_path = os.path.join(model_dir, f"best_smri_model_fold_{best_fold}.pth")
+            
+            # If fold-specific model doesn't exist, fall back to the general one
+            if not os.path.exists(best_model_path):
+                best_model_path = os.path.join(model_dir, "best_smri_model.pth")
+                print(f"Warning: Fold-specific model not found, using general model")
+            
+            if os.path.exists(best_model_path):
+                file_size = os.path.getsize(best_model_path) / (1024*1024)  # MB
+                print(f"Model file size: {file_size:.2f} MB")
+                state_dict = torch.load(best_model_path, map_location=args.device)
+                # For Simple3DCNN, we need to handle the classifier size mismatch
+                if model_name == "Simple3DCNN":
+                    classifier_weight = state_dict['classifier.0.weight']
+                    actual_input_size = classifier_weight.shape[1]
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.classifier[0] = nn.Linear(actual_input_size, 256)
+                    model._initialized = True
+                    model.load_state_dict(state_dict)
+                elif model_name == "SwinUNETRClassifier":
+                    classifier_weight = state_dict['classifier.0.weight']
+                    actual_input_size = classifier_weight.shape[1]
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.classifier[0] = nn.Linear(actual_input_size, 512)
+                    model._initialized = True
+                    model.load_state_dict(state_dict)
+                elif model_name == "FullSwinUNETRClassifier":
+                    classifier_weight = state_dict['classifier.0.weight']
+                    actual_input_size = classifier_weight.shape[1]
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.classifier[0] = nn.Linear(actual_input_size, 512)
+                    model._initialized = True
+                    model.load_state_dict(state_dict)
+                else:
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.load_state_dict(state_dict)
+                model.to(args.device)
+                model.eval()
+                # Evaluate
+                predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
+                metrics = calculate_metrics(predictions, probabilities, labels)
+                # Save metrics
+                test_metrics_path = os.path.join(model_dir, "test_metrics.json")
+                with open(test_metrics_path, "w") as f:
+                    json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+                # Save plots
+                test_eval_dir = os.path.join(model_dir, "test_evaluation_plots")
+                create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
+                print(f"Test set evaluation for {model_name} saved to: {test_eval_dir}")
             else:
-                model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                model.load_state_dict(state_dict)
-            model.to(args.device)
-            model.eval()
-            # Evaluate
-            predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
-            metrics = calculate_metrics(predictions, probabilities, labels)
-            # Save metrics
-            test_metrics_path = os.path.join(model_dir, "test_metrics.json")
-            with open(test_metrics_path, "w") as f:
-                json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
-            # Save plots
-            test_eval_dir = os.path.join(model_dir, "test_evaluation_plots")
-            create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
-            print(f"Test set evaluation for {model_name} saved to: {test_eval_dir}")
-        else:
-            print(f"ERROR: Model file not found: {best_model_path}")
-            continue
+                print(f"ERROR: Model file not found: {best_model_path}")
+                continue
+                
+        elif args.test_strategy == "last_fold":
+            # Use the last fold's model (original behavior)
+            best_model_path = os.path.join(model_dir, "best_smri_model.pth")
+            if os.path.exists(best_model_path):
+                file_size = os.path.getsize(best_model_path) / (1024*1024)  # MB
+                print(f"Model file size: {file_size:.2f} MB")
+                state_dict = torch.load(best_model_path, map_location=args.device)
+                # For Simple3DCNN, we need to handle the classifier size mismatch
+                if model_name == "Simple3DCNN":
+                    classifier_weight = state_dict['classifier.0.weight']
+                    actual_input_size = classifier_weight.shape[1]
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.classifier[0] = nn.Linear(actual_input_size, 256)
+                    model._initialized = True
+                    model.load_state_dict(state_dict)
+                elif model_name == "SwinUNETRClassifier":
+                    classifier_weight = state_dict['classifier.0.weight']
+                    actual_input_size = classifier_weight.shape[1]
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.classifier[0] = nn.Linear(actual_input_size, 512)
+                    model._initialized = True
+                    model.load_state_dict(state_dict)
+                elif model_name == "FullSwinUNETRClassifier":
+                    classifier_weight = state_dict['classifier.0.weight']
+                    actual_input_size = classifier_weight.shape[1]
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.classifier[0] = nn.Linear(actual_input_size, 512)
+                    model._initialized = True
+                    model.load_state_dict(state_dict)
+                else:
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.load_state_dict(state_dict)
+                model.to(args.device)
+                model.eval()
+                # Evaluate
+                predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
+                metrics = calculate_metrics(predictions, probabilities, labels)
+                # Save metrics
+                test_metrics_path = os.path.join(model_dir, "test_metrics.json")
+                with open(test_metrics_path, "w") as f:
+                    json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+                # Save plots
+                test_eval_dir = os.path.join(model_dir, "test_evaluation_plots")
+                create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
+                print(f"Test set evaluation for {model_name} saved to: {test_eval_dir}")
+            else:
+                print(f"ERROR: Model file not found: {best_model_path}")
+                continue
+                
+        elif args.test_strategy == "ensemble":
+            print(f"\nEvaluating {model_name} ensemble on the test set...")
+            try:
+                # Use ensemble evaluation
+                ensemble_predictions, ensemble_probabilities, test_labels, ensemble_metrics = ensemble_evaluate_models(
+                    model_name, model_dir, test_loader, args.device, args, fold_results
+                )
+                
+                # Save ensemble metrics
+                test_metrics_path = os.path.join(model_dir, "ensemble_test_metrics.json")
+                with open(test_metrics_path, "w") as f:
+                    json.dump(ensemble_metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+                
+                # Save ensemble plots
+                test_eval_dir = os.path.join(model_dir, "ensemble_test_evaluation_plots")
+                create_evaluation_plots(ensemble_predictions, ensemble_probabilities, test_labels, ensemble_metrics, test_eval_dir)
+                print(f"Ensemble test evaluation for {model_name} saved to: {test_eval_dir}")
+                
+            except Exception as e:
+                print(f"Error in ensemble evaluation: {e}")
+                print("Falling back to best fold evaluation...")
+                # Fall back to best fold evaluation
+                best_fold_idx = np.argmax([r['best_val_auc'] for r in fold_results])
+                best_fold = fold_results[best_fold_idx]['fold']
+                best_model_path = os.path.join(model_dir, f"best_smri_model_fold_{best_fold}.pth")
+                
+                if os.path.exists(best_model_path):
+                    state_dict = torch.load(best_model_path, map_location=args.device)
+                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    model.load_state_dict(state_dict)
+                    model.to(args.device)
+                    model.eval()
+                    predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
+                    metrics = calculate_metrics(predictions, probabilities, labels)
+                    test_metrics_path = os.path.join(model_dir, "fallback_test_metrics.json")
+                    with open(test_metrics_path, "w") as f:
+                        json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+                    print(f"Fallback test evaluation saved to: {test_metrics_path}")
+                else:
+                    print(f"ERROR: Could not perform ensemble or fallback evaluation")
+                    continue
 
     # Clean up temporary files
     try:
@@ -1345,6 +1486,142 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     print(f"All outputs saved to: {run_dir}")
     return all_model_results
 
+def ensemble_evaluate_models(model_name, model_dir, test_loader, device, args, fold_results):
+    """
+    Evaluate ensemble of all fold models on test set.
+    
+    Args:
+        model_name: name of the model architecture
+        model_dir: directory containing fold models
+        test_loader: test data loader
+        device: device to run inference on
+        args: training arguments
+        fold_results: results from all folds
+    
+    Returns:
+        ensemble_predictions, ensemble_probabilities, test_labels, ensemble_metrics
+    """
+    print(f"Loading ensemble of {len(fold_results)} fold models...")
+    
+    models = []
+    fold_aucs = []
+    
+    # Load all fold models
+    for fold_result in fold_results:
+        fold_num = fold_result['fold']
+        fold_auc = fold_result['best_val_auc']
+        fold_aucs.append(fold_auc)
+        
+        model_path = os.path.join(model_dir, f"best_smri_model_fold_{fold_num}.pth")
+        
+        if not os.path.exists(model_path):
+            print(f"Warning: Model for fold {fold_num} not found: {model_path}")
+            continue
+            
+        # Load model
+        state_dict = torch.load(model_path, map_location=device)
+        
+        # Initialize model with correct architecture
+        if model_name == "Simple3DCNN":
+            classifier_weight = state_dict['classifier.0.weight']
+            actual_input_size = classifier_weight.shape[1]
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            model.classifier[0] = nn.Linear(actual_input_size, 256)
+            model._initialized = True
+            model.load_state_dict(state_dict)
+        elif model_name == "SwinUNETRClassifier":
+            classifier_weight = state_dict['classifier.0.weight']
+            actual_input_size = classifier_weight.shape[1]
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            model.classifier[0] = nn.Linear(actual_input_size, 512)
+            model._initialized = True
+            model.load_state_dict(state_dict)
+        elif model_name == "FullSwinUNETRClassifier":
+            classifier_weight = state_dict['classifier.0.weight']
+            actual_input_size = classifier_weight.shape[1]
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            model.classifier[0] = nn.Linear(actual_input_size, 512)
+            model._initialized = True
+            model.load_state_dict(state_dict)
+        else:
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            model.load_state_dict(state_dict)
+        
+        model.to(device)
+        model.eval()
+        models.append(model)
+        
+        print(f"  Fold {fold_num}: AUC = {fold_auc:.4f}")
+    
+    if not models:
+        raise ValueError("No models could be loaded for ensemble evaluation")
+    
+    print(f"Successfully loaded {len(models)} models for ensemble")
+    
+    # Get ensemble predictions
+    all_probabilities = []
+    test_labels = []
+    
+    with torch.no_grad():
+        for batch_idx, (smri, labels) in enumerate(test_loader):
+            try:
+                smri = smri.to(device)
+                batch_probabilities = []
+                
+                # Get predictions from each model (with error handling)
+                for i, model in enumerate(models):
+                    try:
+                        logits = model(smri)
+                        probs = torch.softmax(logits, dim=1)
+                        batch_probabilities.append(probs.cpu().numpy())
+                    except Exception as e:
+                        print(f"Warning: Error in model {i+1}: {e}")
+                        # Use zero probabilities as fallback
+                        batch_probabilities.append(np.zeros_like(probs.cpu().numpy()))
+                
+                if batch_probabilities:
+                    # Average probabilities across models
+                    ensemble_probs = np.mean(batch_probabilities, axis=0)
+                    all_probabilities.append(ensemble_probs)
+                    test_labels.append(labels.numpy())
+                else:
+                    print(f"Warning: No valid predictions for batch {batch_idx}")
+                    
+            except Exception as e:
+                print(f"Error processing batch {batch_idx}: {e}")
+                continue
+    
+    # Concatenate all batches
+    if not all_probabilities or not test_labels:
+        raise ValueError("No valid predictions generated during ensemble evaluation")
+    
+    ensemble_probabilities = np.concatenate(all_probabilities, axis=0)
+    test_labels = np.concatenate(test_labels, axis=0)
+    
+    # Get predictions (argmax of averaged probabilities)
+    ensemble_predictions = np.argmax(ensemble_probabilities, axis=1)
+    
+    # Calculate metrics
+    ensemble_metrics = calculate_metrics(ensemble_predictions, ensemble_probabilities, test_labels)
+    
+    # Add ensemble-specific information
+    ensemble_metrics['ensemble_info'] = {
+        'num_models': len(models),
+        'fold_aucs': fold_aucs,
+        'average_fold_auc': np.mean(fold_aucs),
+        'std_fold_auc': np.std(fold_aucs),
+        'min_fold_auc': np.min(fold_aucs),
+        'max_fold_auc': np.max(fold_aucs)
+    }
+    
+    print(f"Ensemble evaluation completed:")
+    print(f"  Models used: {len(models)}")
+    print(f"  Average fold AUC: {np.mean(fold_aucs):.4f} ± {np.std(fold_aucs):.4f}")
+    print(f"  Ensemble accuracy: {ensemble_metrics['accuracy']:.4f}")
+    print(f"  Ensemble AUC: {ensemble_metrics['auc']:.4f}")
+    
+    return ensemble_predictions, ensemble_probabilities, test_labels, ensemble_metrics
+
 def main():
     parser = argparse.ArgumentParser(
         description="Train a 3D‐CNN on sMRI volumes",
@@ -1409,6 +1686,8 @@ Examples:
                         help="Use new balancing strategy: undersample -> split 70/20/10 -> add remaining subjects to test set")
     parser.add_argument("--optimize_threshold", action='store_true', default=True,
                         help="Optimize decision threshold for accuracy (default: True)")
+    parser.add_argument("--test_strategy", type=str, default="best_fold", choices=["best_fold", "ensemble", "last_fold"],
+                        help="Strategy for test evaluation: best_fold (default), ensemble, or last_fold")
     
     # New arguments for model selection
     parser.add_argument("--model",       type=str, default=None,
