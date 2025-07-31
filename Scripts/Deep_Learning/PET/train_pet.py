@@ -652,7 +652,7 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
             pet, labels = pet.to(device), labels.to(device)
             optimizer.zero_grad()
             
-            # Use mixed precision training if available
+                        # Use mixed precision training if available
             if scaler is not None:
                 with torch.amp.autocast(device_type='cuda'):
                     logits = model(pet)              # [B, 2]
@@ -1556,7 +1556,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                     print(f"Fallback test evaluation saved to: {test_metrics_path}")
                 else:
                     print(f"ERROR: Could not perform ensemble or fallback evaluation")
-                    continue
+            continue
 
     # Clean up temporary files
     try:

@@ -1403,7 +1403,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                     print(f"Fallback test evaluation saved to: {test_metrics_path}")
                 else:
                     print(f"ERROR: Could not perform ensemble or fallback evaluation")
-                    continue
+            continue
 
     # Clean up temporary files
     try:
