@@ -11,6 +11,9 @@ OUTPUT_LABELS_PATH = DATA_DIR / "pet_labels.csv"
 # Disease label mapping
 label_map = {"AD": 0, "CN": 1, "PD": 2}
 
+# Required file pattern for PET subjects
+# Only subjects with this file will be included: {subject_id}_{site}_PET_{disease}_SUVR.nii.gz
+
 def main():
     print(f"[INFO] Scanning directory: {PREPROCESSED_PET_DIR}")
     
@@ -55,7 +58,7 @@ def main():
                     if len(parts) >= 2:
                         subject_id = parts[0]  # This will be "sub-001"
                         
-                        # Look for SUVR files with dynamic naming
+                        # Look for SUVR files with the exact pattern: {subject_id}_{site}_PET_{disease}_SUVR.nii.gz
                         sites = ['ADNI', 'PPMI']
                         diseases = ['CN', 'PD', 'AD']
                         
@@ -74,6 +77,11 @@ def main():
                         
                         if not suvr_found:
                             print(f"[WARNING] No SUVR file found for {subject_id} in {subject_dir}")
+                            print(f"[WARNING] Expected pattern: {subject_id}_<SITE>_PET_<DISEASE>_SUVR.nii.gz")
+                            print(f"[WARNING] Available files in {subject_dir}:")
+                            for file in subject_dir.iterdir():
+                                if file.is_file():
+                                    print(f"    {file.name}")
     
     print(f"[INFO] Found {len(subject_ids)} unique subjects with PET SUVR files")
     print(f"[INFO] Found {len(pet_files)} PET SUVR files")

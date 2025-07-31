@@ -11,6 +11,9 @@ OUTPUT_LABELS_PATH = DATA_DIR / "mri_labels.csv"
 # Disease label mapping
 label_map = {"AD": 0, "CN": 1, "PD": 2}
 
+# Required file pattern for MRI subjects
+# Only subjects with this file will be included: {subject_id}_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w_brain_zscore.nii.gz
+
 def main():
     print(f"[INFO] Scanning directory: {PREPROCESSED_MRI_DIR}")
     
@@ -26,18 +29,24 @@ def main():
         existing_subjects = set(df_existing['subject_id'].tolist())
         print(f"[INFO] Found {len(existing_subjects)} existing subjects")
     
-    # Find all subject folders in the preprocessed directory
+    # Find all subject folders with the required zscore file
     subject_folders = []
     for item in PREPROCESSED_MRI_DIR.iterdir():
         if item.is_dir() and item.name.startswith('sub-'):
-            # Extract the subject ID (remove 'sub-' prefix)
-            subject_id = item.name[4:]  # Remove 'sub-' prefix
-            subject_folders.append(subject_id)
+            # Check if the required zscore file exists
+            zscore_file = item / "anat" / f"{item.name}_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w_brain_zscore.nii.gz"
+            if zscore_file.exists():
+                # Extract the subject ID (remove 'sub-' prefix)
+                subject_id = item.name[4:]  # Remove 'sub-' prefix
+                subject_folders.append(subject_id)
+                print(f"[INFO] Found zscore file for subject: {item.name}")
+            else:
+                print(f"[WARNING] Missing zscore file for subject: {item.name}")
     
-    print(f"[INFO] Found {len(subject_folders)} subject folders")
+    print(f"[INFO] Found {len(subject_folders)} subjects with zscore files")
     
     if not subject_folders:
-        raise ValueError("No subject folders found in preprocessed directory")
+        raise ValueError("No subjects with zscore files found in preprocessed directory")
     
     # Load imaging records
     print(f"[INFO] Loading imaging records from: {IMAGING_RECORDS_PATH}")
