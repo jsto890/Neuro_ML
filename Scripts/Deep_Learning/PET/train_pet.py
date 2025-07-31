@@ -576,6 +576,11 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
     for _, label in train_loader:
         labels.extend(label.numpy())
     
+    # Apply label mapping if provided for class weight calculation
+    if label_mapping is not None:
+        mapped_labels = [label_mapping[label] for label in labels]
+        labels = mapped_labels
+    
     # Get unique labels and their counts
     unique_labels = sorted(np.unique(labels))
     class_counts = np.zeros(max(unique_labels) + 1)
