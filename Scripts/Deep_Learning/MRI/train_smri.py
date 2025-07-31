@@ -636,7 +636,7 @@ def create_threshold_optimization_plot(threshold_results, output_dir, model_name
         'plot_path': str(plot_path)
     }
 
-def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint_dir, args, fold_num=None):
+def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint_dir, args, fold_num=None, label_mapping=None):
     """
     Trains model; saves best checkpoint by validation AUC into checkpoint_dir.
     Returns the model loaded with best weights and training history.
@@ -707,6 +707,11 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
 
         for smri, labels in train_loader:
             smri, labels = smri.to(device), labels.to(device)
+            
+            # Apply label mapping if provided
+            if label_mapping is not None:
+                labels = torch.tensor([label_mapping[label.item()] for label in labels], device=device)
+            
             optimizer.zero_grad()
             
             # Use mixed precision training if available
@@ -739,7 +744,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             final_train_acc = epoch_acc
 
         # --- Validation phase with threshold optimization ---
-        val_results = evaluate_model_with_threshold_optimization(model, val_loader, device, optimize_threshold_flag=args.optimize_threshold)
+        val_results = evaluate_model_with_threshold_optimization(model, val_loader, device, optimize_threshold_flag=args.optimize_threshold, label_mapping=label_mapping)
         
         val_auc = val_results['default_auc']
         val_acc = val_results['optimal_accuracy']  # Use optimized accuracy
@@ -880,7 +885,7 @@ def optimize_threshold(y_probs, y_true, thresholds=None):
     
     return best_thresh, best_acc, threshold_results
 
-def evaluate_model_with_threshold_optimization(model, val_loader, device, optimize_threshold_flag=True):
+def evaluate_model_with_threshold_optimization(model, val_loader, device, optimize_threshold_flag=True, label_mapping=None):
     """
     Evaluate model and optionally optimize threshold for accuracy.
     
@@ -900,9 +905,14 @@ def evaluate_model_with_threshold_optimization(model, val_loader, device, optimi
     with torch.no_grad():
         for smri, labels in val_loader:
             smri = smri.to(device)
+            
+            # Apply label mapping if provided
+            if label_mapping is not None:
+                labels = torch.tensor([label_mapping[label.item()] for label in labels], device=device)
+            
             logits = model(smri)
             val_logits.append(logits.cpu().numpy())
-            val_labels.append(labels.numpy())
+            val_labels.append(labels.cpu().numpy())
     
     val_logits = np.concatenate(val_logits, axis=0)
     val_labels = np.concatenate(val_labels, axis=0)
@@ -1138,11 +1148,20 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             )
             
             # Initialize model for this fold
-            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            # Use the actual number of unique labels in the dataset, not just len(args.labels)
+            unique_labels = sorted(train_dataset.df['label'].unique())
+            num_classes = len(unique_labels)
+            print(f"[INFO] Model initialized with {num_classes} classes for labels: {unique_labels}")
+            
+            # Create label mapping to convert to zero-based indexing
+            label_mapping = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
+            print(f"[INFO] Label mapping: {label_mapping}")
+            
+            model = get_3d_model(model_name, num_classes=num_classes, in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
             
             # Train the model using training fold and validate on validation fold
             model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix, best_threshold, best_threshold_results = train_sMRI_model(
-                model, train_loader, val_fold_loader, args.epochs, args.device, model_dir, args, fold_num=fold + 1
+                model, train_loader, val_fold_loader, args.epochs, args.device, model_dir, args, fold_num=fold + 1, label_mapping=label_mapping
             )
             
             # Create threshold optimization plot for this fold
