@@ -21,11 +21,14 @@ def main():
     if not PREPROCESSED_PET_DIR.exists():
         raise FileNotFoundError(f"Preprocessed PET directory not found: {PREPROCESSED_PET_DIR}")
     
-    # Check if output file exists and warn about overwriting
+    # Check if output file exists and load existing data
+    existing_labels_data = []
     if OUTPUT_LABELS_PATH.exists():
-        print(f"[WARNING] Output file already exists: {OUTPUT_LABELS_PATH}")
-        print(f"[WARNING] This will create a new file with only subjects that have PET SUVR files")
-        print(f"[WARNING] Existing subjects without PET SUVR files will be removed")
+        print(f"[INFO] Loading existing labels from: {OUTPUT_LABELS_PATH}")
+        df_existing = pd.read_csv(OUTPUT_LABELS_PATH)
+        existing_labels_data = df_existing.to_dict('records')
+        print(f"[INFO] Found {len(existing_labels_data)} existing subjects")
+        print(f"[INFO] Will remove subjects without PET SUVR files")
     
     # Find all PET SUVR files in the preprocessed directory
     # Structure: PET/(site)/(disease)/((sub-id)_SITE_PET_DISEASE)/(sub-id)_SITE_PET_DISEASE_SUVR.nii.gz
@@ -96,7 +99,7 @@ def main():
     # Create labels list (only for subjects with PET SUVR files)
     labels_data = []
     new_subjects_count = 0
-    skipped_subjects = 0
+    removed_subjects_count = 0
     
     for subject_id in subject_ids:
         # Extract the numeric part (e.g., "sub-001" -> "001")
@@ -107,7 +110,6 @@ def main():
         
         if subject_record.empty:
             print(f"[WARNING] Subject {subject_numeric} not found in imaging records, skipping")
-            skipped_subjects += 1
             continue
         
         # Get the disease label
@@ -115,7 +117,6 @@ def main():
         
         if disease not in label_map:
             print(f"[WARNING] Unknown disease '{disease}' for subject {subject_numeric}, skipping")
-            skipped_subjects += 1
             continue
         
         label = label_map[disease]
@@ -127,8 +128,61 @@ def main():
         new_subjects_count += 1
         print(f"[INFO] Added: {subject_id} -> {disease} (label {label})")
     
+    # Remove subjects from existing data that don't have SUVR files
+    if OUTPUT_LABELS_PATH.exists():
+        subjects_to_remove = []
+        for i, label_entry in enumerate(existing_labels_data):
+            subject_name = label_entry['subject_id']
+            # Check if this subject has a SUVR file
+            subject_found = False
+            for site_dir in PREPROCESSED_PET_DIR.iterdir():
+                if not site_dir.is_dir():
+                    continue
+                for disease_dir in site_dir.iterdir():
+                    if not disease_dir.is_dir():
+                        continue
+                    for subject_dir in disease_dir.iterdir():
+                        if not subject_dir.is_dir():
+                            continue
+                        subject_dir_name = subject_dir.name
+                        if subject_dir_name.startswith('sub-'):
+                            parts = subject_dir_name.split('_')
+                            if len(parts) >= 2:
+                                subject_id_check = parts[0]
+                                if subject_id_check == subject_name:
+                                    # Check for SUVR files
+                                    sites = ['ADNI', 'PPMI']
+                                    diseases = ['CN', 'PD', 'AD']
+                                    for site in sites:
+                                        for disease in diseases:
+                                            suvr_file = subject_dir / f"{subject_id_check}_{site}_PET_{disease}_SUVR.nii.gz"
+                                            if suvr_file.exists():
+                                                subject_found = True
+                                                break
+                                        if subject_found:
+                                            break
+                                    if subject_found:
+                                        break
+                            if subject_found:
+                                break
+                        if subject_found:
+                            break
+                    if subject_found:
+                        break
+                if subject_found:
+                    break
+            
+            if not subject_found:
+                subjects_to_remove.append(i)
+                print(f"[INFO] Removing: {subject_name} (no SUVR file)")
+        
+        # Remove subjects in reverse order to maintain indices
+        for i in reversed(subjects_to_remove):
+            del existing_labels_data[i]
+            removed_subjects_count += 1
+    
     print(f"[INFO] Added {new_subjects_count} subjects with PET SUVR files")
-    print(f"[INFO] Skipped {skipped_subjects} subjects without PET SUVR files or invalid records")
+    print(f"[INFO] Removed {removed_subjects_count} subjects without PET SUVR files")
     
     # Create DataFrame and save
     if labels_data:
@@ -136,6 +190,7 @@ def main():
         df_labels.to_csv(OUTPUT_LABELS_PATH, index=False)
         print(f"[INFO] Written {len(labels_data)} total labels to: {OUTPUT_LABELS_PATH}")
         print(f"[INFO] Added {new_subjects_count} new subjects")
+        print(f"[INFO] Removed {removed_subjects_count} subjects without SUVR files")
         
         # Print summary
         label_counts = df_labels['label'].value_counts().sort_index()

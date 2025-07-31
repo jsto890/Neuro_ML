@@ -23,10 +23,12 @@ def main():
     
     # Load existing labels if file exists
     existing_subjects = set()
+    existing_labels_data = []
     if OUTPUT_LABELS_PATH.exists():
         print(f"[INFO] Loading existing labels from: {OUTPUT_LABELS_PATH}")
         df_existing = pd.read_csv(OUTPUT_LABELS_PATH)
         existing_subjects = set(df_existing['subject_id'].tolist())
+        existing_labels_data = df_existing.to_dict('records')
         print(f"[INFO] Found {len(existing_subjects)} existing subjects")
     
     # Find all subject folders with the required zscore file
@@ -55,10 +57,11 @@ def main():
     # Create labels list (start with existing data if available)
     labels_data = []
     if OUTPUT_LABELS_PATH.exists():
-        labels_data = df_existing.to_dict('records')
+        labels_data = existing_labels_data.copy()
         print(f"[INFO] Loaded {len(labels_data)} existing labels")
     
     new_subjects_count = 0
+    removed_subjects_count = 0
     
     for subject_id in subject_folders:
         subject_name = f'sub-{subject_id}'
@@ -91,12 +94,31 @@ def main():
         new_subjects_count += 1
         print(f"[INFO] Added: {subject_name} -> {disease} (label {label})")
     
+    # Remove subjects from existing data that don't have zscore files
+    if OUTPUT_LABELS_PATH.exists():
+        subjects_to_remove = []
+        for i, label_entry in enumerate(labels_data):
+            subject_name = label_entry['subject_id']
+            # Check if this subject has a zscore file
+            subject_dir = PREPROCESSED_MRI_DIR / subject_name
+            zscore_file = subject_dir / "anat" / f"{subject_name}_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w_brain_zscore.nii.gz"
+            
+            if not zscore_file.exists():
+                subjects_to_remove.append(i)
+                print(f"[INFO] Removing: {subject_name} (no zscore file)")
+        
+        # Remove subjects in reverse order to maintain indices
+        for i in reversed(subjects_to_remove):
+            del labels_data[i]
+            removed_subjects_count += 1
+    
     # Create DataFrame and save
     if labels_data:
         df_labels = pd.DataFrame(labels_data)
         df_labels.to_csv(OUTPUT_LABELS_PATH, index=False)
         print(f"[INFO] Written {len(labels_data)} total labels to: {OUTPUT_LABELS_PATH}")
         print(f"[INFO] Added {new_subjects_count} new subjects")
+        print(f"[INFO] Removed {removed_subjects_count} subjects without zscore files")
         
         # Print summary
         label_counts = df_labels['label'].value_counts().sort_index()
