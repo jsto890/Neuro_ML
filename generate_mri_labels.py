@@ -9,7 +9,7 @@ IMAGING_RECORDS_PATH = DATA_DIR / "imaging_records.csv"
 OUTPUT_LABELS_PATH = DATA_DIR / "mri_labels.csv"
 
 # Disease label mapping
-label_map = {"CN": 0, "AD": 1, "PD": 2}
+label_map = {"AD": 0, "CN": 1, "PD": 2}
 
 def main():
     print(f"[INFO] Scanning directory: {PREPROCESSED_MRI_DIR}")
