@@ -1675,7 +1675,7 @@ Examples:
     parser.add_argument("--k_folds",     type=int, default=5,
                         help="Number of folds for cross-validation")
     parser.add_argument("--labels",      type=int, nargs='+', required=True,
-                        help="Labels to include in training (e.g., 0 1 for CN vs AD)")
+                        help="Labels to include in training (e.g., 0 1 for AD vs CN)")
     parser.add_argument("--val_ratio", type=float, default=0.2,
                         help="Proportion of balanced data for validation set (default: 0.2 for 70/20/10 split)")
     parser.add_argument("--test_ratio", type=float, default=0.1,

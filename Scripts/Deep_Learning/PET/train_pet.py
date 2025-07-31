@@ -265,7 +265,7 @@ def balance_and_split_dataset_90_10(df, test_ratio=0.1, random_state=None):
 
 def get_label_description(labels):
     """Convert numeric labels to descriptive names."""
-    label_map = {0: 'CN', 1: 'AD', 2: 'PD'}
+    label_map = {0: 'AD', 1: 'CN', 2: 'PD'}
     return ' vs '.join([label_map[label] for label in sorted(labels)])
 
 def log_metrics(run_id, model_name, args, best_val_auc, best_val_acc, final_train_loss, final_train_acc, notes=""):
@@ -652,7 +652,7 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
             pet, labels = pet.to(device), labels.to(device)
             optimizer.zero_grad()
             
-                        # Use mixed precision training if available
+                                    # Use mixed precision training if available
             if scaler is not None:
                 with torch.amp.autocast(device_type='cuda'):
                     logits = model(pet)              # [B, 2]
@@ -1692,7 +1692,7 @@ Examples:
     parser.add_argument("--k_folds",     type=int, default=5,
                         help="Number of folds for cross-validation")
     parser.add_argument("--labels",      type=int, nargs='+', required=True,
-                        help="Labels to include in training (e.g., 0 1 for CN vs AD)")
+                        help="Labels to include in training (e.g., 0 1 for AD vs CN)")
     parser.add_argument("--val_ratio", type=float, default=0.2,
                         help="Proportion of balanced data for validation set (default: 0.2 for 70/20/10 split)")
     parser.add_argument("--test_ratio", type=float, default=0.1,

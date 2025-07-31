@@ -6,7 +6,7 @@ vision_transformer_3d:
   img_size: [97, 115, 97]  # Actual image dimensions
   patch_size: 16           # Patch size for embedding
   in_channels: 1           # Single channel for PET
-  num_classes: 2           # Binary classification (CN vs AD)
+  num_classes: 2           # Binary classification (AD vs CN)
   embed_dim: 1024          # Embedding dimension (Large)
   depth: 16                # Number of transformer blocks (Large)
   num_heads: 16            # Number of attention heads (Large)

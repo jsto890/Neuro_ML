@@ -491,7 +491,7 @@ Examples:
     parser.add_argument("--data_root", type=str, required=True,
                         help="Folder containing sMRI NIfTIs")
     parser.add_argument("--labels", type=int, nargs='+', required=True,
-                        help="Labels to include in training (e.g., 0 1 for CN vs AD)")
+                        help="Labels to include in training (e.g., 0 1 for AD vs CN)")
     parser.add_argument("--model", type=str, required=True,
                         help="Transformer model to train")
     parser.add_argument("--config", type=str, required=True,
