@@ -1416,11 +1416,16 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 
                 if os.path.exists(best_model_path):
                     state_dict = torch.load(best_model_path, map_location=args.device)
-                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    # Use the same model initialization as during training
+                    unique_labels = sorted(train_dataset.df['label'].unique())
+                    num_classes = len(unique_labels)
+                    label_mapping = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
+                    
+                    model = get_3d_model(model_name, num_classes=num_classes, in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
                     model.load_state_dict(state_dict)
                     model.to(args.device)
                     model.eval()
-                    predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
+                    predictions, probabilities, labels = evaluate_model(model, test_loader, args.device, label_mapping=label_mapping)
                     metrics = calculate_metrics(predictions, probabilities, labels)
                     test_metrics_path = os.path.join(model_dir, "fallback_test_metrics.json")
                     with open(test_metrics_path, "w") as f:

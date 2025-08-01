@@ -52,7 +52,7 @@ def load_model(model_path, num_classes=2, device='cpu'):
     model.eval()
     return model
 
-def evaluate_model(model, test_loader, device='cpu'):
+def evaluate_model(model, test_loader, device='cpu', label_mapping=None):
     """Evaluate model and return predictions and metrics."""
     model.eval()
     all_predictions = []
@@ -62,13 +62,18 @@ def evaluate_model(model, test_loader, device='cpu'):
     with torch.no_grad():
         for pet, labels in test_loader:
             pet = pet.to(device)
+            
+            # Apply label mapping if provided
+            if label_mapping is not None:
+                labels = torch.tensor([label_mapping[label.item()] for label in labels], device=device)
+            
             logits = model(pet)
             probabilities = nn.Softmax(dim=1)(logits)
             predictions = torch.argmax(logits, dim=1)
             
             all_predictions.extend(predictions.cpu().numpy())
             all_probabilities.extend(probabilities.cpu().numpy())
-            all_labels.extend(labels.numpy())
+            all_labels.extend(labels.cpu().numpy())
     
     return np.array(all_predictions), np.array(all_probabilities), np.array(all_labels)
 
