@@ -265,7 +265,7 @@ def balance_and_split_dataset_90_10(df, test_ratio=0.1, random_state=None):
 
 def get_label_description(labels):
     """Convert numeric labels to descriptive names."""
-    label_map = {0: 'AD', 1: 'CN', 2: 'PD'}
+    label_map = {0: 'CN', 1: 'AD', 2: 'PD'}
     return ' vs '.join([label_map[label] for label in sorted(labels)])
 
 def log_metrics(run_id, model_name, args, best_val_auc, best_val_acc, final_train_loss, final_train_acc, notes=""):
@@ -662,7 +662,7 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
             
             optimizer.zero_grad()
             
-                                    # Use mixed precision training if available
+            # Use mixed precision training if available
             if scaler is not None:
                 with torch.amp.autocast(device_type='cuda'):
                     logits = model(pet)              # [B, 2]
@@ -1436,7 +1436,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             # Load the best model from the best fold
             best_model_path = os.path.join(model_dir, f"best_pet_model_fold_{best_fold}.pth")
             
-            # If fold-specific model doesn't exist, fall back to the general one
+                        # If fold-specific model doesn't exist, fall back to the general one
             if not os.path.exists(best_model_path):
                 best_model_path = os.path.join(model_dir, "best_pet_model.pth")
                 print(f"Warning: Fold-specific model not found, using general model")

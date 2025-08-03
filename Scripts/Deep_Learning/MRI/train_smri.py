@@ -1288,7 +1288,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             # Load the best model from the best fold
             best_model_path = os.path.join(model_dir, f"best_smri_model_fold_{best_fold}.pth")
             
-            # If fold-specific model doesn't exist, fall back to the general one
+                        # If fold-specific model doesn't exist, fall back to the general one
             if not os.path.exists(best_model_path):
                 best_model_path = os.path.join(model_dir, "best_smri_model.pth")
                 print(f"Warning: Fold-specific model not found, using general model")
