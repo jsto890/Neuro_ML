@@ -79,25 +79,41 @@ def evaluate_model(model, test_loader, device='cpu', label_mapping=None):
 
 def calculate_metrics(predictions, probabilities, labels):
     """Calculate comprehensive evaluation metrics."""
+    # Ensure labels are in the correct format for binary classification
+    unique_labels = np.unique(labels)
+    if len(unique_labels) == 2 and probabilities.shape[1] == 2:
+        # For binary classification, ensure labels are in {0, 1} format
+        if not (0 in unique_labels and 1 in unique_labels):
+            # Map labels to {0, 1} if they're not already
+            label_mapping = {old_label: new_label for new_label, old_label in enumerate(sorted(unique_labels))}
+            mapped_labels = np.array([label_mapping[label] for label in labels])
+            mapped_predictions = np.array([label_mapping[pred] for pred in predictions])
+        else:
+            mapped_labels = labels
+            mapped_predictions = predictions
+    else:
+        mapped_labels = labels
+        mapped_predictions = predictions
+    
     # Basic metrics
-    accuracy = accuracy_score(labels, predictions)
-    precision = precision_score(labels, predictions, average='weighted', zero_division=0)
-    recall = recall_score(labels, predictions, average='weighted', zero_division=0)
-    f1 = f1_score(labels, predictions, average='weighted', zero_division=0)
+    accuracy = accuracy_score(mapped_labels, mapped_predictions)
+    precision = precision_score(mapped_labels, mapped_predictions, average='weighted', zero_division=0)
+    recall = recall_score(mapped_labels, mapped_predictions, average='weighted', zero_division=0)
+    f1 = f1_score(mapped_labels, mapped_predictions, average='weighted', zero_division=0)
     
     # AUC for binary classification
     if probabilities.shape[1] == 2:
-        auc = roc_auc_score(labels, probabilities[:, 1])
+        auc = roc_auc_score(mapped_labels, probabilities[:, 1])
     else:
-        auc = roc_auc_score(labels, probabilities, multi_class='ovr')
+        auc = roc_auc_score(mapped_labels, probabilities, multi_class='ovr')
     
     # Confusion matrix
-    cm = confusion_matrix(labels, predictions)
+    cm = confusion_matrix(mapped_labels, mapped_predictions)
     
     # Classification report
-    report = classification_report(labels, predictions, output_dict=True, zero_division=0)
+    report = classification_report(mapped_labels, mapped_predictions, output_dict=True, zero_division=0)
     
-    mcc = matthews_corrcoef(labels, predictions)
+    mcc = matthews_corrcoef(mapped_labels, mapped_predictions)
     
     return {
         'accuracy': accuracy,
@@ -122,7 +138,16 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     # 1. ROC Curve
     ax1 = axes[0, 0]
     if probabilities.shape[1] == 2:
-        fpr, tpr, _ = roc_curve(labels, probabilities[:, 1])
+        # Ensure labels are in {0, 1} format for ROC curve
+        unique_labels = np.unique(labels)
+        if len(unique_labels) == 2 and not (0 in unique_labels and 1 in unique_labels):
+            # Map labels to {0, 1} if they're not already
+            label_mapping = {old_label: new_label for new_label, old_label in enumerate(sorted(unique_labels))}
+            mapped_labels = np.array([label_mapping[label] for label in labels])
+        else:
+            mapped_labels = labels
+            
+        fpr, tpr, _ = roc_curve(mapped_labels, probabilities[:, 1])
         ax1.plot(fpr, tpr, color='blue', lw=2, label=f'ROC Curve (AUC = {metrics["auc"]:.3f})')
         ax1.plot([0, 1], [0, 1], color='red', lw=1, linestyle='--', alpha=0.8)
         ax1.set_xlabel('False Positive Rate')
@@ -138,7 +163,8 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     # 2. Precision-Recall Curve
     ax2 = axes[0, 1]
     if probabilities.shape[1] == 2:
-        precision_curve, recall_curve, _ = precision_recall_curve(labels, probabilities[:, 1])
+        # Use the same mapped labels for consistency
+        precision_curve, recall_curve, _ = precision_recall_curve(mapped_labels, probabilities[:, 1])
         ax2.plot(recall_curve, precision_curve, color='green', lw=2)
         ax2.set_xlabel('Recall')
         ax2.set_ylabel('Precision')

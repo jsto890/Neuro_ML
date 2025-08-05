@@ -1036,8 +1036,10 @@ def ensemble_evaluate_models(model_name, model_dir, test_loader, device, args, f
             classifier_weight = state_dict['classifier.0.weight']
             actual_input_size = classifier_weight.shape[1]
             model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            # Fix the classifier to match the saved state dict
             model.classifier[0] = nn.Linear(actual_input_size, 256)
             model._initialized = True
+            # Load state dict after fixing the classifier
             model.load_state_dict(state_dict)
         elif model_name == "SwinUNETRClassifier":
             classifier_weight = state_dict['classifier.0.weight']
@@ -1111,8 +1113,15 @@ def ensemble_evaluate_models(model_name, model_dir, test_loader, device, args, f
     # Get predictions (argmax of averaged probabilities)
     ensemble_predictions = np.argmax(ensemble_probabilities, axis=1)
     
+    # Apply label mapping to test_labels for metrics calculation
+    # Get the label mapping from the training data
+    from sklearn.preprocessing import LabelEncoder
+    le = LabelEncoder()
+    le.fit(test_labels)
+    mapped_test_labels = le.transform(test_labels)
+    
     # Calculate metrics
-    ensemble_metrics = calculate_metrics(ensemble_predictions, ensemble_probabilities, test_labels)
+    ensemble_metrics = calculate_metrics(ensemble_predictions, ensemble_probabilities, mapped_test_labels)
     
     # Add ensemble-specific information
     ensemble_metrics['ensemble_info'] = {
@@ -1130,7 +1139,7 @@ def ensemble_evaluate_models(model_name, model_dir, test_loader, device, args, f
     print(f"  Ensemble accuracy: {ensemble_metrics['accuracy']:.4f}")
     print(f"  Ensemble AUC: {ensemble_metrics['auc']:.4f}")
     
-    return ensemble_predictions, ensemble_probabilities, test_labels, ensemble_metrics
+    return ensemble_predictions, ensemble_probabilities, mapped_test_labels, ensemble_metrics
 
 def k_fold_training(args, k_folds=5, models_to_run=None):
     """
@@ -1549,7 +1558,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 with open(test_metrics_path, "w") as f:
                     json.dump(ensemble_metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
                 
-                # Save ensemble plots
+                # Save ensemble plots (test_labels are already mapped in ensemble_evaluate_models)
                 test_eval_dir = os.path.join(model_dir, "ensemble_test_evaluation_plots")
                 create_evaluation_plots(ensemble_predictions, ensemble_probabilities, test_labels, ensemble_metrics, test_eval_dir)
                 print(f"Ensemble test evaluation for {model_name} saved to: {test_eval_dir}")
@@ -1570,6 +1579,14 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                     label_mapping = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
                     
                     model = get_3d_model(model_name, num_classes=num_classes, in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+                    
+                    # Fix classifier size for Simple3DCNN if needed
+                    if model_name == "Simple3DCNN":
+                        classifier_weight = state_dict['classifier.0.weight']
+                        actual_input_size = classifier_weight.shape[1]
+                        model.classifier[0] = nn.Linear(actual_input_size, 256)
+                        model._initialized = True
+                    
                     model.load_state_dict(state_dict)
                     model.to(args.device)
                     model.eval()
