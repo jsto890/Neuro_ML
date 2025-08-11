@@ -28,13 +28,21 @@ import sys
 import argparse
 import logging
 import subprocess
+import shutil
+import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import nibabel as nib
-from nibabel.processing import resample_to_output
 from nibabel.processing import resample_from_to
+from scipy.ndimage import gaussian_filter, binary_erosion, binary_dilation, label
+
+try:
+    # TemplateFlow is optional; we use it if requested/available
+    from templateflow.api import get as tf_get
+except Exception:  # pragma: no cover
+    tf_get = None
 
 
 # -----------------------------
@@ -65,6 +73,148 @@ def compute_voxel_stats(data: np.ndarray) -> dict:
         "median": voxel_median,
         "std": voxel_std
     }
+
+
+def find_executable(names: list) -> str:
+    """Return the first executable found in PATH from names, else empty string."""
+    for name in names:
+        path = shutil.which(name)
+        if path:
+            return path
+    return ""
+
+
+def run_cmd(cmd: list, check: bool = True, capture_output: bool = True) -> subprocess.CompletedProcess:
+    """Run a subprocess command with logging."""
+    logging.info("Running: %s", " ".join(map(str, cmd)))
+    result = subprocess.run(
+        cmd,
+        check=False,
+        stdout=subprocess.PIPE if capture_output else None,
+        stderr=subprocess.PIPE if capture_output else None,
+        text=True,
+    )
+    if result.returncode != 0:
+        logging.error("Command failed [%s]", result.returncode)
+        if capture_output:
+            if result.stdout:
+                logging.debug("stdout:\n%s", result.stdout)
+            if result.stderr:
+                logging.error("stderr:\n%s", result.stderr)
+        if check:
+            raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+    return result
+
+
+def fetch_templateflow_paths() -> tuple:
+    """Fetch MNI152NLin2009cAsym 2mm T1 and its brain mask via TemplateFlow."""
+    if tf_get is None:
+        raise RuntimeError("TemplateFlow is not installed. Install with 'pip install templateflow'.")
+    t1 = tf_get("MNI152NLin2009cAsym", resolution=2, suffix="T1w", desc=None, extension=".nii.gz")
+    brain_mask = tf_get("MNI152NLin2009cAsym", resolution=2, suffix="mask", desc="brain", extension=".nii.gz")
+    return str(t1), str(brain_mask)
+
+
+def run_synthstrip(input_img: Path, out_brain: Path, out_mask: Path) -> bool:
+    """Run SynthStrip (tries FreeSurfer mri_synthstrip or synthstrip). Returns True if succeeded."""
+    exe = find_executable(["mri_synthstrip", "synthstrip"])
+    if not exe:
+        logging.warning("SynthStrip not found in PATH; skipping PET brain extraction.")
+        return False
+    # Prefer FreeSurfer mri_synthstrip CLI flags
+    try:
+        if os.path.basename(exe) == "mri_synthstrip":
+            cmd = [exe, "-i", str(input_img), "-o", str(out_brain), "-m", str(out_mask)]
+        else:
+            # synthstrip python package CLI may use long flags
+            cmd = [exe, "--i", str(input_img), "--o", str(out_brain), "--m", str(out_mask)]
+        run_cmd(cmd, check=True)
+        if out_brain.is_file() and out_mask.is_file():
+            return True
+    except Exception as e:  # pragma: no cover
+        logging.warning("SynthStrip failed: %s", e)
+    return False
+
+
+def compute_sigma_voxels(fwhm_mm: float, voxel_sizes_mm: np.ndarray) -> np.ndarray:
+    """Convert FWHM in mm to per-axis sigma in voxels using sigma = FWHM/2.355 / voxel_size."""
+    if fwhm_mm <= 0:
+        return np.array([0.0, 0.0, 0.0], dtype=float)
+    sigma_mm = fwhm_mm / 2.355
+    return sigma_mm / voxel_sizes_mm
+
+
+def apply_brain_mask(img: nib.Nifti1Image, mask_img: nib.Nifti1Image) -> nib.Nifti1Image:
+    """Multiply image by binary brain mask (nearest-neighbor resampled if needed)."""
+    if img.shape != mask_img.shape or not np.allclose(img.affine, mask_img.affine, atol=1e-6):
+        mask_img = resample_from_to(mask_img, img, order=0)
+    data = img.get_fdata(dtype=np.float32)
+    mask = (mask_img.get_fdata(dtype=np.float32) > 0).astype(np.float32)
+    return nib.Nifti1Image(data * mask, img.affine, img.header)
+
+
+def registration_syNQuick(moving_brain: Path, fixed: Path, out_prefix: Path, threads: int) -> bool:
+    """Try antsRegistrationSyNQuick.sh; return True if success, else False."""
+    exe = find_executable(["antsRegistrationSyNQuick.sh", "antsRegistrationSyNQuick".replace(".sh", "")])
+    if not exe:
+        return False
+    cmd = [
+        exe,
+        "-d", "3",
+        "-f", str(fixed),
+        "-m", str(moving_brain),
+        "-o", str(out_prefix),
+        "-t", "s",
+        "-n", str(threads),
+    ]
+    try:
+        run_cmd(cmd, check=True)
+        # SyNQuick outputs: <prefix>0GenericAffine.mat and <prefix>1Warp.nii.gz
+        aff = Path(f"{out_prefix}0GenericAffine.mat")
+        warp = Path(f"{out_prefix}1Warp.nii.gz")
+        return aff.is_file() and warp.is_file()
+    except Exception:
+        return False
+
+
+def registration_MI_fallback(moving_brain: Path, fixed: Path, out_prefix: Path) -> None:
+    """Fallback antsRegistration with MI + SyN, similar to previous implementation."""
+    cmd = [
+        "antsRegistration",
+        "--dimensionality", "3",
+        "--float", "1",
+        "--output", f"[{out_prefix},{out_prefix}Warped.nii.gz]",
+        "--interpolation", "Linear",
+        "--initial-moving-transform", f"[{fixed},{moving_brain},1]",
+        # Rigid stage
+        "--transform", "Rigid[0.1]",
+        "--metric", f"MI[{fixed},{moving_brain},1,32]",
+        "--convergence", "1000x500x250x100",
+        "--shrink-factors", "8x4x2x1",
+        "--smoothing-sigmas", "3x2x1x0vox",
+        # SyN stage
+        "--transform", "BSplineSyN[0.1,26,0]",
+        "--metric", f"CC[{fixed},{moving_brain},1,4]",
+        "--convergence", "50x30x20x10",
+        "--shrink-factors", "8x4x2x1",
+        "--smoothing-sigmas", "4x3x2x1vox",
+    ]
+    run_cmd(cmd, check=True)
+
+
+def ants_apply_transforms(input_img: Path, reference_img: Path, output_img: Path, affine_mat: Path, warp_field: Path) -> None:
+    cmd = [
+        "antsApplyTransforms",
+        "--dimensionality", "3",
+        "--float", "1",
+        "--input", str(input_img),
+        "--reference-image", str(reference_img),
+        "--output", str(output_img),
+        "--interpolation", "Linear",
+        "--transform", f"[{affine_mat},0]",
+        "--transform", str(warp_field),
+    ]
+    run_cmd(cmd, check=True, capture_output=False)
 
 
 def write_qc_csv(header: list, row: dict, out_path: Path, append: bool = False):
@@ -193,7 +343,7 @@ def collapse_4d_to_static(raw_path: Path, out_static_path: Path) -> nib.Nifti1Im
 def main():
     # 1. Parse command-line arguments
     parser = argparse.ArgumentParser(
-        description="Preprocess ADNI PET scans: 4D→3D static, resample, register, SUVR, crop (COM-based), QC."
+        description="Preprocess PET scans: 4D→3D static, SynthStrip brain extraction, register to MNI2009c 2mm, brain mask, SUVR (+optional smoothing), z-score, QC & manifest."
     )
     parser.add_argument(
         "--input_root",
@@ -210,20 +360,21 @@ def main():
     parser.add_argument(
         "--lowres_template",
         type=Path,
-        required=True,
-        help="Path to 2 mm isotropic PET template (160×192×192)"
+        required=False,
+        help="Path to 2 mm isotropic MNI template. If omitted and --use_templateflow is set, will be fetched automatically."
     )
     parser.add_argument(
         "--cerebellum_mask",
         type=Path,
-        required=True,
-        help="Path to binary cerebellum mask (160×192×192)"
+        required=False,
+        default=None,
+        help="Path to binary cerebellum mask in MNI2009c 2mm. If absent, fallback to global mean."
     )
     parser.add_argument(
         "--brain_mask_template",
         type=Path,
-        required=True,
-        help="Path to whole-brain mask in PET template space (160×192×192)"
+        required=False,
+        help="Path to MNI2009c 2mm brain mask. If omitted and --use_templateflow is set, will be fetched automatically."
     )
     parser.add_argument(
         "--crop_dims",
@@ -238,6 +389,28 @@ def main():
         type=int,
         default=8,
         help="Number of CPU threads for ANTs calls"
+    )
+    parser.add_argument(
+        "--use_templateflow",
+        action="store_true",
+        help="Use TemplateFlow to fetch MNI152NLin2009cAsym 2mm T1 and brain mask. Overrides provided template/mask paths if set."
+    )
+    parser.add_argument(
+        "--smooth_fwhm",
+        type=float,
+        default=0.0,
+        help="Optional Gaussian smoothing FWHM in mm applied to SUVR (0 disables)."
+    )
+    parser.add_argument(
+        "--presmooth_fwhm",
+        type=float,
+        default=0.0,
+        help="Optional light pre-smoothing FWHM in mm before registration to stabilise MI (0 disables)."
+    )
+    parser.add_argument(
+        "--write_manifest",
+        action="store_true",
+        help="Write a per-subject JSON provenance manifest next to outputs."
     )
     args = parser.parse_args()
 
@@ -255,19 +428,31 @@ def main():
     os.environ["OMP_NUM_THREADS"] = str(args.threads)
     os.environ["MKL_NUM_THREADS"] = str(args.threads)
 
-    # 4. Validate paths
+    # 4. Validate / resolve templates
     if not args.input_root.is_dir():
         logging.error(f"Input root not found: {args.input_root}")
         sys.exit(1)
-    if not args.lowres_template.is_file():
-        logging.error(f"Low-res template not found: {args.lowres_template}")
+    template_path: Path
+    brain_mask_path: Path
+    if args.use_templateflow:
+        try:
+            t1_path, bm_path = fetch_templateflow_paths()
+            template_path = Path(t1_path)
+            brain_mask_path = Path(bm_path)
+            logging.info("Using TemplateFlow MNI2009c 2mm template: %s", template_path)
+            logging.info("Using TemplateFlow brain mask: %s", brain_mask_path)
+        except Exception as e:
+            logging.error("TemplateFlow fetch failed: %s", e)
         sys.exit(1)
-    if not args.cerebellum_mask.is_file():
-        logging.error(f"Cerebellum mask not found: {args.cerebellum_mask}")
+    else:
+        if not args.lowres_template or not args.lowres_template.is_file():
+            logging.error("Low-res template not found or not provided. Provide --lowres_template or use --use_templateflow.")
         sys.exit(1)
-    if not args.brain_mask_template.is_file():
-        logging.error(f"Brain mask template not found: {args.brain_mask_template}")
+        if not args.brain_mask_template or not args.brain_mask_template.is_file():
+            logging.error("Brain mask template not found or not provided. Provide --brain_mask_template or use --use_templateflow.")
         sys.exit(1)
+        template_path = args.lowres_template
+        brain_mask_path = args.brain_mask_template
 
     # 5. Prepare master QC CSV
     master_qc_path = args.output_root / "qc_stats_master.csv"
@@ -294,22 +479,26 @@ def main():
         master_qc_path.unlink()
         write_qc_csv(qc_header, {}, master_qc_path, append=False)
 
-    # 6. Load static template, cerebellum mask, and whole-brain mask
+    # 6. Load template, cerebellum mask (optional), and whole-brain mask
     try:
-        tmpl_img = nib.load(str(args.lowres_template))
+        tmpl_img = nib.load(str(template_path))
     except Exception as e:
         logging.error(f"Failed to load template: {e}")
         sys.exit(1)
     try:
-        cereb_img = nib.load(str(args.cerebellum_mask))
-        if cereb_img.shape != tmpl_img.shape or not np.allclose(cereb_img.affine, tmpl_img.affine, atol=1e-6):
-            logging.info(f"Resampling cerebellum mask {cereb_img.shape} → {tmpl_img.shape}")
-        cereb_img = resample_from_to(cereb_img, tmpl_img, order=0)  # nearest-neighbor
+        if args.cerebellum_mask and Path(args.cerebellum_mask).is_file():
+            cereb_img = nib.load(str(args.cerebellum_mask))
+            if cereb_img.shape != tmpl_img.shape or not np.allclose(cereb_img.affine, tmpl_img.affine, atol=1e-6):
+                logging.info(f"Resampling cerebellum mask {cereb_img.shape} → {tmpl_img.shape}")
+            cereb_img = resample_from_to(cereb_img, tmpl_img, order=0)  # nearest-neighbor
+        else:
+            cereb_img = None
+            logging.warning("No cerebellum mask provided; will fallback to global brain mean for SUVR.")
     except Exception as e:
         logging.error(f"Failed to load cerebellum mask: {e}")
-        sys.exit(1)
+        cereb_img = None
     try:
-        brain_img = nib.load(str(args.brain_mask_template))
+        brain_img = nib.load(str(brain_mask_path))
         if brain_img.shape != tmpl_img.shape or not np.allclose(brain_img.affine, tmpl_img.affine, atol=1e-6):
             logging.info(f"Resampling brain mask {brain_img.shape} → {tmpl_img.shape}")
         brain_img = resample_from_to(brain_img, tmpl_img, order=0)  # nearest‐neighbor
@@ -370,121 +559,79 @@ def main():
                 continue
 
             # ---------------------
-            # STEP 1: Resample static→ Low-Res (2 mm)
+            # STEP 1: Optional pre-smoothing before registration
             # ---------------------
-            try:
-                logging.info(f"[{sub_id}] Resampling static to 2 mm isotropic (low-res)")
-                lowres_img = resample_from_to(static_img, tmpl_img, order=1)
-                nib.save(lowres_img, str(lowres_path))
-                if not lowres_path.is_file():
-                    raise RuntimeError("Failed to save low-res image")
-
-                lowres_data = lowres_img.get_fdata(dtype=np.float32)
-                stats = compute_voxel_stats(lowres_data)
-                qc_stats.update({
-                    "lowres_min": stats["min"],
-                    "lowres_max": stats["max"],
-                    "lowres_nonzero_frac": stats["nonzero_frac"],
-                    "lowres_mean": stats["mean"],
-                    "lowres_median": stats["median"],
-                    "lowres_std": stats["std"]
-                })
-                logging.debug(f"[{sub_id}] Low-res stats: {stats}")
-            except Exception as e:
-                logging.error(f"[{sub_id}] Error during low-res resampling: {e}")
-                qc_stats["crop_status"] = "LOWRES_ERROR"
-                write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
-                write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
-                continue
+            static_for_reg_path = out_sub_dir / f"{sub_id}_static_presmooth.nii.gz"
+            if args.presmooth_fwhm and args.presmooth_fwhm > 0:
+                logging.info(f"[{sub_id}] Pre-smoothing static with FWHM={args.presmooth_fwhm:.2f} mm before registration")
+                static_data = static_img.get_fdata(dtype=np.float32)
+                # Approximate voxel sizes from affine
+                vx = np.array([abs(static_img.affine[0, 0]), abs(static_img.affine[1, 1]), abs(static_img.affine[2, 2])])
+                sigmas = compute_sigma_voxels(args.presmooth_fwhm, vx)
+                smoothed = gaussian_filter(static_data, sigma=sigmas[::-1])  # scipy uses z,y,x order; our vx is x,y,z
+                sm_img = nib.Nifti1Image(smoothed, static_img.affine, static_img.header)
+                nib.save(sm_img, str(static_for_reg_path))
+                moving_static_path = static_for_reg_path
+            else:
+                moving_static_path = static_path
 
             # ---------------------
-            # STEP 2: ANTs Rigid + SyN Registration (Low-Res → Template)
+            # STEP 2: Brain extraction (SynthStrip)
             # ---------------------
-            out_prefix = str(out_sub_dir / f"{sub_id}_lowres_")
-            ants_reg_cmd = [
-                "antsRegistration",
-                "--dimensionality", "3",
-                "--float", "1",
-                "--output", f"[{out_prefix},{out_prefix}Warped.nii.gz]",
-                "--interpolation", "Linear",
-                "--initial-moving-transform", f"[{args.lowres_template},{lowres_path},1]",
-                # Rigid stage
-                "--transform", "Rigid[0.1]",
-                "--metric", f"MI[{args.lowres_template},{lowres_path},1,32]",
-                "--convergence", "1000x500x250x100",
-                "--shrink-factors", "8x4x2x1",
-                "--smoothing-sigmas", "3x2x1x0vox",
-                # SyN stage
-                "--transform", "BSplineSyN[0.1,26,0]",
-                "--metric", f"CC[{args.lowres_template},{lowres_path},1,4]",
-                "--convergence", "50x30x20x10",
-                "--shrink-factors", "8x4x2x1",
-                "--smoothing-sigmas", "4x3x2x1vox"
-            ]
-            try:
-                logging.info(f"[{sub_id}] About to run antsRegistration with the following command:")
+            pet_brain_path = out_sub_dir / f"{sub_id}_static_brain.nii.gz"
+            pet_brainmask_path = out_sub_dir / f"{sub_id}_static_brainmask.nii.gz"
+            brain_extracted = run_synthstrip(moving_static_path, pet_brain_path, pet_brainmask_path)
+            if not brain_extracted:
+                # Fallback: use the input as brain, and a dummy all-ones mask at native space
+                logging.warning(f"[{sub_id}] Proceeding without SynthStrip. Using original as brain for registration.")
+                shutil.copyfile(moving_static_path, pet_brain_path)
+                # create mask of ones with same shape
+                tmp_img = nib.load(str(moving_static_path))
+                msk = np.ones(tmp_img.shape, dtype=np.uint8)
+                nib.save(nib.Nifti1Image(msk, tmp_img.affine, tmp_img.header), str(pet_brainmask_path))
+            else:
+                # Quick sanity on brainmask; adjust if wildly off
+                msk_img = nib.load(str(pet_brainmask_path))
+                frac = float(np.count_nonzero(msk_img.get_fdata() > 0) / np.prod(msk_img.shape))
+                if frac < 0.05 or frac > 0.95:
+                    logging.warning(f"[{sub_id}] SynthStrip mask fraction {frac:.1%} suspicious; applying 1-voxel morphology fix")
+                    arr = (msk_img.get_fdata() > 0).astype(np.uint8)
+                    arr = binary_dilation(arr) if frac < 0.05 else binary_erosion(arr)
+                    nib.save(nib.Nifti1Image(arr.astype(np.uint8), msk_img.affine, msk_img.header), str(pet_brainmask_path))
 
-                result = subprocess.run(
-                    ants_reg_cmd,
-                    check=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
-                )
-                if result.returncode != 0:
-                    logging.error(f"[{sub_id}] antsRegistration stderr:\n{result.stderr.strip()}")
-                    raise RuntimeError("antsRegistration failed")
-                    # At this point you can copy-paste the logged command exactly into your shell
-                    # to see the full ANTs help/error message.
-                if not lowres_warped_path.is_file():
-                    raise RuntimeError("antsRegistration did not produce low-res warped image")
+            # ---------------------
+            # STEP 3: Registration (SyNQuick preferred, fallback to MI+SyN)
+            # ---------------------
+            out_prefix = str(out_sub_dir / f"{sub_id}_reg_")
+            # Ensure environment threads
+            os.environ["ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS"] = str(args.threads)
+            os.environ["OMP_NUM_THREADS"] = str(args.threads)
+            os.environ["MKL_NUM_THREADS"] = str(args.threads)
 
-                lowres_warped_img = nib.load(str(lowres_warped_path))
-                lrw_data = lowres_warped_img.get_fdata(dtype=np.float32)
-                stats = compute_voxel_stats(lrw_data)
-                qc_stats.update({
-                    "lowres_warped_min": stats["min"],
-                    "lowres_warped_max": stats["max"],
-                    "lowres_warped_nonzero_frac": stats["nonzero_frac"],
-                    "lowres_warped_mean": stats["mean"],
-                    "lowres_warped_median": stats["median"],
-                    "lowres_warped_std": stats["std"]
-                })
-                logging.debug(f"[{sub_id}] Low-res warped stats: {stats}")
-            except Exception as e:
-                logging.error(f"[{sub_id}] Error after antsRegistration: {e}")
+            moved_brain = Path(pet_brain_path)
+            fixed_tmpl = template_path
+            used_method = "SyNQuick"
+            if not registration_syNQuick(moved_brain, fixed_tmpl, out_prefix, args.threads):
+                logging.info(f"[{sub_id}] SyNQuick unavailable/failed; using MI+SyN fallback")
+                used_method = "MI+SyN"
+                registration_MI_fallback(moved_brain, fixed_tmpl, out_prefix)
+
+            # Collect transform paths
+            transform_affine = Path(f"{out_prefix}0GenericAffine.mat")
+            transform_warp = Path(f"{out_prefix}1Warp.nii.gz")
+            if not transform_affine.is_file() or not transform_warp.is_file():
+                logging.error(f"[{sub_id}] Missing transform files from registration")
                 qc_stats["crop_status"] = "REGISTRATION_ERROR"
                 write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
                 write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
                 continue
 
             # ---------------------
-            # STEP 3: Apply Transforms to Static (Full-Res → MNI)
+            # STEP 4: Apply Transforms to Static (Full-Res → MNI), then apply MNI brain mask
             # ---------------------
             try:
-                logging.info(f"[{sub_id}] Applying ANTs transforms to static")
-                # ​Make sure we use the matrix first (with “,0” to disable inversion),
-                # and then the warp field, so ANTs applies them in the correct forward chain.
-                transform_affine = f"{out_prefix}0GenericAffine.mat"
-                transform_warp   = f"{out_prefix}1Warp.nii.gz"
-                if not Path(transform_affine).is_file() or not Path(transform_warp).is_file():
-                    raise RuntimeError("Missing transform files from registration")
-
-                ants_apply_cmd = [
-                    "antsApplyTransforms",
-                    "--dimensionality", "3",
-                    "--float", "1",
-                    "--input", str(static_path),
-                    "--reference-image", str(args.lowres_template),
-                    "--output", str(fullres_warped_path),
-                    "--interpolation", "Linear",
-                    # 1) apply affine (forward), do NOT invert – hence the “,0”
-                    "--transform", f"[{transform_affine},0]",
-                    # 2) then apply the nonlinear warp
-                    "--transform", transform_warp
-                ]
-                subprocess.run(ants_apply_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
+                logging.info(f"[{sub_id}] Applying transforms to static and masking with MNI brain mask")
+                ants_apply_transforms(static_path, template_path, fullres_warped_path, transform_affine, transform_warp)
                 if not fullres_warped_path.is_file():
                     raise RuntimeError("antsApplyTransforms did not produce full-res warped image")
 
@@ -500,6 +647,10 @@ def main():
                     "fullres_warped_std": stats["std"]
                 })
                 logging.debug(f"[{sub_id}] Full-res warped stats: {stats}")
+
+                # Apply standard brain mask
+                masked_img = apply_brain_mask(fullres_warped_img, brain_img)
+                nib.save(masked_img, str(out_sub_dir / f"{sub_id}_MNI_brain.nii.gz"))
             except subprocess.CalledProcessError as e:
                 logging.error(f"[{sub_id}] antsApplyTransforms failed: {e}")
                 qc_stats["crop_status"] = "APPLY_TRANSFORMS_ERROR"
@@ -514,22 +665,30 @@ def main():
                 continue
 
             # ---------------------
-            # STEP 4: Compute SUVR (Cerebellum Normalization)
+            # STEP 5: Compute SUVR (Cerebellum Normalization; fallback to global mean)
             # ---------------------
             try:
                 logging.info(f"[{sub_id}] Computing SUVR")
-                if not ensure_matched_affine_and_shape(fullres_warped_img, cereb_img):
-                    raise RuntimeError("Cerebellum mask/template mismatch")
+                # Ensure brain mask aligned
+                brain_mask_img = brain_img
+                if not ensure_matched_affine_and_shape(fullres_warped_img, brain_mask_img):
+                    brain_mask_img = resample_from_to(brain_mask_img, fullres_warped_img, order=0)
+                brain_mask = (brain_mask_img.get_fdata() > 0)
 
-                cereb_array = cereb_img.get_fdata(dtype=np.float32)
-                cereb_bool = cereb_array > 0
-                if not np.any(cereb_bool):
-                    raise RuntimeError("Empty cerebellum mask")
-
-                ref_values = frw_data[cereb_bool]
-                ref_mean = float(np.mean(ref_values))
-                if np.isnan(ref_mean) or ref_mean <= 0:
-                    raise RuntimeError(f"Invalid cerebellum reference mean = {ref_mean:.4f}")
+                suvr_reference = "cerebellum" if cereb_img is not None else "global"
+                ref_mean = None
+                if cereb_img is not None and ensure_matched_affine_and_shape(fullres_warped_img, cereb_img):
+                    cereb_array = (cereb_img.get_fdata(dtype=np.float32) > 0)
+                    if np.any(cereb_array):
+                        ref_values = frw_data[cereb_array]
+                        ref_mean = float(np.mean(ref_values))
+                    else:
+                        suvr_reference = "global"
+                if ref_mean is None or np.isnan(ref_mean) or ref_mean <= 0:
+                    # Fallback to global brain mean
+                    ref_values = frw_data[brain_mask]
+                    ref_mean = float(np.mean(ref_values))
+                    suvr_reference = "global"
 
                 suvr_array = frw_data / (ref_mean + 1e-8)
                 suvr_img = nib.Nifti1Image(suvr_array, fullres_warped_img.affine, fullres_warped_img.header)
@@ -547,6 +706,8 @@ def main():
                     "suvr_std": stats["std"]
                 })
                 logging.debug(f"[{sub_id}] SUVR stats: {stats}")
+                qc_stats["registration_method"] = used_method
+                qc_stats["suvr_reference"] = suvr_reference
             except Exception as e:
                 logging.error(f"[{sub_id}] Error during SUVR computation: {e}")
                 qc_stats["crop_status"] = "SUVR_ERROR"
@@ -555,7 +716,46 @@ def main():
                 continue
             
             # ---------------------
-            # STEP 5: Robust subject-based crop & affine update
+            # STEP 6: Optional smoothing and Z-score
+            # ---------------------
+            z_img_path = out_sub_dir / f"{sub_id}_SUVR_Z.nii.gz"
+            try:
+                # Optional smoothing
+                if args.smooth_fwhm and args.smooth_fwhm > 0:
+                    logging.info(f"[{sub_id}] Applying Gaussian smoothing to SUVR with FWHM={args.smooth_fwhm:.2f} mm")
+                    suvr_img = nib.load(str(suvr_path))
+                    suvr_data = suvr_img.get_fdata(dtype=np.float32)
+                    vx = np.array([abs(suvr_img.affine[0, 0]), abs(suvr_img.affine[1, 1]), abs(suvr_img.affine[2, 2])])
+                    sig = compute_sigma_voxels(args.smooth_fwhm, vx)
+                    smoothed = gaussian_filter(suvr_data, sigma=sig[::-1])
+                    suvr_smooth_img = nib.Nifti1Image(smoothed, suvr_img.affine, suvr_img.header)
+                    suvr_s_path = out_sub_dir / f"{sub_id}_SUVR_s{int(round(args.smooth_fwhm))}.nii.gz"
+                    nib.save(suvr_smooth_img, str(suvr_s_path))
+                    qc_stats["smoothing_fwhm"] = float(args.smooth_fwhm)
+                else:
+                    qc_stats["smoothing_fwhm"] = 0.0
+
+                # Z-score inside brain mask
+                suvr_img = nib.load(str(suvr_path))
+                suvr_data = suvr_img.get_fdata(dtype=np.float32)
+                mask_img_res = brain_img
+                if not ensure_matched_affine_and_shape(suvr_img, mask_img_res):
+                    mask_img_res = resample_from_to(mask_img_res, suvr_img, order=0)
+                brain_mask = (mask_img_res.get_fdata() > 0)
+                brain_vals = suvr_data[brain_mask]
+                mu = float(np.mean(brain_vals)) if brain_vals.size > 0 else 0.0
+                sd = float(np.std(brain_vals)) if brain_vals.size > 0 else 1.0
+                z = np.zeros_like(suvr_data, dtype=np.float32)
+                if sd > 0:
+                    z[brain_mask] = (suvr_data[brain_mask] - mu) / sd
+                nib.save(nib.Nifti1Image(z, suvr_img.affine, suvr_img.header), str(z_img_path))
+                qc_stats["qc_z_mean"] = mu
+                qc_stats["qc_z_std"] = sd
+            except Exception as e:
+                logging.warning(f"[{sub_id}] Smoothing/Z-score step failed: {e}")
+
+            # ---------------------
+            # STEP 7: Robust subject-based crop & affine update (unchanged)
             # ---------------------
             try:
                 logging.info(f"[{sub_id}] Robust cropping/padding around subject COM to {tuple(args.crop_dims)}")
@@ -572,14 +772,14 @@ def main():
 
                 # 5.3 build initial mask & keep only largest CC
                 init_mask = suvr_array > thresh
-                labels, num = label(init_mask)
+                labels_arr, num = label(init_mask)
                 if num == 0:
                     raise RuntimeError("Empty mask after threshold.")
                 # pick largest component (ignore background label 0)
-                counts = np.bincount(labels.flat)
+                counts = np.bincount(labels_arr.flat)
                 counts[0] = 0
                 main_lbl = counts.argmax()
-                subj_mask = (labels == main_lbl)
+                subj_mask = (labels_arr == main_lbl)
 
                 # 5.4 if the mask is too small, fallback to template COM
                 vol_frac = subj_mask.sum() / subj_mask.size
@@ -620,14 +820,95 @@ def main():
                 qc_stats["crop_status"] = "CROP_ERROR"
 
             # ---------------------
-            # STEP 6: Write QC Stats CSVs
+            # STEP 8: Compute QC gates and write QC Stats & Manifest
             # ---------------------
             try:
+                # Minimal QC gates
+                try:
+                    # Registration sanity: fraction of warped brain voxels outside MNI brain mask
+                    frw_img = nib.load(str(fullres_warped_path))
+                    frw_masked = apply_brain_mask(frw_img, brain_img)
+                    brain_mask_res = resample_from_to(brain_img, frw_img, order=0)
+                    m = (brain_mask_res.get_fdata() > 0)
+                    nz = frw_img.get_fdata() > 0
+                    outside = np.logical_and(nz, ~m)
+                    overlap_frac = 1.0 - float(np.count_nonzero(outside) / max(1, np.count_nonzero(nz)))
+                    qc_stats["qc_registration_overlap"] = overlap_frac
+                    qc_stats["qc_registration_pass"] = overlap_frac > 0.9
+                except Exception:
+                    qc_stats["qc_registration_overlap"] = ""
+                    qc_stats["qc_registration_pass"] = ""
+
+                try:
+                    qc_stats["qc_reference_mean"] = ref_mean
+                    # flag if <= 5th percentile of brain intensities
+                    frw_img = nib.load(str(fullres_warped_path))
+                    m = (resample_from_to(brain_img, frw_img, order=0).get_fdata() > 0)
+                    vals = frw_img.get_fdata()[m]
+                    p5 = float(np.percentile(vals, 5)) if vals.size > 0 else 0.0
+                    qc_stats["qc_reference_pass"] = (ref_mean is not None) and (ref_mean > 0) and (ref_mean > p5)
+                except Exception:
+                    qc_stats["qc_reference_pass"] = ""
+
+                try:
+                    qc_stats["qc_suvr_median"] = qc_stats.get("suvr_median", "")
+                    med = qc_stats.get("suvr_median", None)
+                    qc_stats["qc_suvr_median_pass"] = (med is not None) and (0.7 <= float(med) <= 1.3)
+                except Exception:
+                    qc_stats["qc_suvr_median_pass"] = ""
+
+                try:
+                    # z-score check (inside-brain mean≈0, SD≈1)
+                    z_ok = abs(float(qc_stats.get("qc_z_mean", 0.0))) < 0.1 and abs(float(qc_stats.get("qc_z_std", 1.0)) - 1.0) < 0.1
+                    qc_stats["qc_z_pass"] = z_ok
+                except Exception:
+                    qc_stats["qc_z_pass"] = ""
+
                 write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
                 write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
                 logging.info(f"[{sub_id}] QC stats written (status: {qc_stats['crop_status']})")
             except Exception as e:
                 logging.error(f"[{sub_id}] Failed to write QC CSV: {e}")
+
+            # Write provenance manifest
+            try:
+                if args.write_manifest:
+                    manifest = {
+                        "subject_id": sub_id,
+                        "registration_method": used_method,
+                        "template_path": str(template_path),
+                        "brain_mask_path": str(brain_mask_path),
+                        "cerebellum_mask_path": str(args.cerebellum_mask) if args.cerebellum_mask else None,
+                        "suvr_reference": qc_stats.get("suvr_reference", None),
+                        "reference_mean": ref_mean,
+                        "smoothing_fwhm": qc_stats.get("smoothing_fwhm", 0.0),
+                        "presmooth_fwhm": float(args.presmooth_fwhm),
+                        "transforms": {
+                            "affine": str(transform_affine),
+                            "warp": str(transform_warp),
+                        },
+                        "outputs": {
+                            "warped": str(fullres_warped_path),
+                            "suvr": str(suvr_path),
+                            "zmap": str(z_img_path),
+                        },
+                        "qc": {
+                            "registration_overlap": qc_stats.get("qc_registration_overlap", None),
+                            "registration_pass": qc_stats.get("qc_registration_pass", None),
+                            "reference_mean": qc_stats.get("qc_reference_mean", None),
+                            "reference_pass": qc_stats.get("qc_reference_pass", None),
+                            "suvr_median": qc_stats.get("suvr_median", None),
+                            "suvr_median_pass": qc_stats.get("qc_suvr_median_pass", None),
+                            "z_mean": qc_stats.get("qc_z_mean", None),
+                            "z_std": qc_stats.get("qc_z_std", None),
+                            "z_pass": qc_stats.get("qc_z_pass", None),
+                        },
+                    }
+                    with open(out_sub_dir / f"{sub_id}_provenance.json", "w") as f:
+                        json.dump(manifest, f, indent=2)
+                    qc_stats["provenance_manifest"] = str(out_sub_dir / f"{sub_id}_provenance.json")
+            except Exception as e:
+                logging.warning(f"[{sub_id}] Failed to write manifest: {e}")
 
     logging.info("PET preprocessing pipeline completed")
 
