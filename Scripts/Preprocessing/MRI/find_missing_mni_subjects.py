@@ -163,7 +163,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("/Users/josephstorey/P4P/config.yaml"),
+        default=Path("~/reseng202500013-ndd-ml/P4P/config.yaml"),
         help="Path to config.yaml containing raw_data.smri and preprocessed_data.smri_p",
     )
     parser.add_argument(
