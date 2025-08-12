@@ -669,16 +669,9 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             return focal_loss.mean()
 
     criterion = FocalLoss(alpha=0.25, gamma=2)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
-    
-    # Add learning rate scheduler with more patience
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, 
-        mode='max', 
-        factor=0.5, 
-        patience=10,  # Increased patience
-        min_lr=1e-6   # Minimum learning rate
-    )
+    # Use AdamW optimizer with OneCycleLR (cosine) schedule and warmup
+    initial_lr = max(args.learning_rate / 25.0, 1e-6)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=initial_lr, weight_decay=args.weight_decay)
 
     model.to(device)
     best_val_auc = 0.0
@@ -698,11 +691,23 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     # Store training history
     training_history = []
     
-    # Initialize mixed precision training for memory efficiency
+    # Initialize LR scheduler (OneCycle) and mixed precision training
     if device.startswith('cuda'):
         scaler = torch.amp.GradScaler()
     else:
         scaler = None
+    steps_per_epoch = max(len(train_loader), 1)
+    total_steps = max(steps_per_epoch * epochs, 1)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=args.learning_rate,
+        total_steps=total_steps,
+        pct_start=0.1,
+        anneal_strategy='cos',
+        div_factor=25.0,
+        final_div_factor=1e4,
+        three_phase=False,
+    )
 
     for epoch in range(1, epochs + 1):
         # --- Training phase ---
@@ -729,6 +734,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
+                scheduler.step()
             else:
                 # Standard training for CPU
                 logits = model(smri)              # [B, 2]
@@ -736,6 +742,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 
                 loss.backward()
                 optimizer.step()
+                scheduler.step()
 
             running_loss += loss.item() * smri.size(0)
             preds = torch.argmax(logits, dim=1)
@@ -994,7 +1001,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     """
     import copy
     from sklearn.model_selection import train_test_split
-
+    
     # Create dated folder for this run
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_folder = f"run_{timestamp}"
@@ -1036,15 +1043,15 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     master_df = pd.read_csv(args.master_csv)
     if 'subject_id' not in master_df.columns or 'label' not in master_df.columns:
         master_df = pd.read_csv(args.master_csv, header=None, names=['subject_id', 'label'])
-
+    
     # Drop header rows if present
     master_df = master_df[~master_df['subject_id'].isin(['subject_id', ''])]
     master_df = master_df[~master_df['label'].isin(['label', ''])]
-
+    
     # Convert labels to int and filter
     master_df['label'] = master_df['label'].astype(int)
     filtered_df = master_df[master_df['label'].isin(args.labels)].reset_index(drop=True)
-
+    
     print(f"Master dataset: {len(master_df)} total subjects")
     print(f"After filtering for labels {args.labels}: {len(filtered_df)} subjects")
 
@@ -1121,16 +1128,16 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
             val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
             test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
-
+            
             # Initialize model for this fold
             unique_labels = sorted(train_dataset.df['label'].unique())
             num_classes = len(unique_labels)
             print(f"[INFO] Model initialized with {num_classes} classes for labels: {unique_labels}")
             label_mapping = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
             print(f"[INFO] Label mapping: {label_mapping}")
-
+            
             model = get_3d_model(model_name, num_classes=num_classes, in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-
+            
             # Train
             (
                 model,
@@ -1166,10 +1173,16 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 )
             else:
                 threshold_plot_info = None
-
+            
             # Test immediately on this fold's Test set
             print(f"Evaluating {model_name} on fold {fold_idx} test set...")
-            predictions, probabilities, labels = evaluate_model(model, test_loader, args.device, label_mapping=label_mapping)
+            # Use optimal validation threshold for test predictions (binary only)
+            test_threshold = None
+            if num_classes == 2 and best_threshold is not None:
+                test_threshold = float(best_threshold)
+            predictions, probabilities, labels = evaluate_model(
+                model, test_loader, args.device, label_mapping=label_mapping, threshold=test_threshold
+            )
             metrics = calculate_metrics(predictions, probabilities, labels)
             test_eval_dir = os.path.join(model_dir, f"test_evaluation_plots_fold_{fold_idx}")
             create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
@@ -1207,7 +1220,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 final_train_acc=final_train_acc,
                 notes=f"{model_name} Fold {fold_idx}/{k_folds}"
             )
-
+        
         # Aggregate per-model results and save
         avg_val_auc = float(np.mean([r['best_val_auc'] for r in fold_results]))
         avg_val_acc = float(np.mean([r['best_val_acc'] for r in fold_results]))
@@ -1217,7 +1230,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         avg_mcc = float(np.mean([r.get('best_mcc', 0.0) for r in fold_results]))
         avg_threshold = float(np.mean([r.get('best_threshold', 0.5) for r in fold_results]))
         avg_accuracy_improvement = float(np.mean([r.get('threshold_optimization', {}).get('improvement', 0.0) for r in fold_results]))
-
+        
         evaluation_dir = os.path.join(model_dir, "evaluation_plots")
         create_training_plots(folds_data, evaluation_dir, model_name)
         folds_data_filename = f"{model_name}_folds_data.json"
@@ -1272,7 +1285,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         print(f"\n{model_name} results saved to: {model_dir}")
         print(f"Average optimal threshold: {avg_threshold:.3f} (default: 0.5)")
         print(f"Average accuracy improvement: {avg_accuracy_improvement:.4f}")
-
+        
     # Clean up temporary CSVs created for this run
     removed_count = 0
     for fpath in temp_files_this_run:
@@ -1283,7 +1296,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             pass
     if removed_count:
         print(f"Cleaned up {removed_count} temporary CSV files from data directory")
-
+    
     # --- Summary comparison plot ---
     print("\nGenerating summary comparison plot for all models...")
     model_names = [r['model_name'] for r in all_model_results]
