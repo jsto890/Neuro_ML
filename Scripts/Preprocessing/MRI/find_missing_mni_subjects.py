@@ -84,9 +84,20 @@ def load_site_disease_mapping(records_csv: Path) -> Dict[str, Tuple[str, str]]:
     if not records_csv.is_file():
         raise FileNotFoundError(f"Records CSV not found: {records_csv}")
 
-    subject_cols = ["subject_id", "Subject", "subject", "SUBJECT", "ID", "id"]
+    subject_cols = [
+        "subject_id",
+        "SubjectID",
+        "Subject",
+        "subject",
+        "SUBJECT",
+        "participant_id",
+        "ParticipantID",
+        "ID",
+        "id",
+    ]
     site_cols = ["Site", "site", "SITE"]
     disease_cols = ["Disease", "disease", "DISEASE", "Diagnosis", "diagnosis", "Group", "group"]
+    modality_cols = ["Modality", "modality", "MODALITY", "mod", "Mod"]
 
     mapping: Dict[str, Tuple[str, str]] = {}
     with open(records_csv, newline="") as f:
@@ -109,6 +120,7 @@ def load_site_disease_mapping(records_csv: Path) -> Dict[str, Tuple[str, str]]:
         subj_col = pick(subject_cols)
         site_col = pick(site_cols)
         dis_col = pick(disease_cols)
+        mod_col = pick(modality_cols)
         if subj_col is None:
             raise KeyError(
                 f"Could not find subject column in CSV. Tried: {subject_cols}. Found: {reader.fieldnames}"
@@ -117,7 +129,14 @@ def load_site_disease_mapping(records_csv: Path) -> Dict[str, Tuple[str, str]]:
             # allow missing site or disease; will fallback to 'UNKNOWN'
             pass
 
-        for row in reader:
+        rows = list(reader)
+        # Prefer MRI rows if modality column is present and any MRI exist
+        if mod_col is not None:
+            mri_rows = [r for r in rows if str(r.get(mod_col, "")).strip().lower() == "mri"]
+            if len(mri_rows) > 0:
+                rows = mri_rows
+
+        for row in rows:
             sub_raw = row.get(subj_col, "")
             if sub_raw is None:
                 continue
