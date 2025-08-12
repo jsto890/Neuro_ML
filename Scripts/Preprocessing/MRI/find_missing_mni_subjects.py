@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple, Set
+from typing import Dict, List, Tuple, Set, Optional
 
 try:
     import yaml  # type: ignore
@@ -50,26 +50,81 @@ def load_paths_from_config(config_path: Path) -> Tuple[Path, Path]:
     return raw_smri_root, smri_p_root
 
 
-def enumerate_subjects_by_site_and_disease(raw_smri_root: Path) -> Dict[str, Dict[str, Set[str]]]:
-    """Return mapping: site -> disease -> set(subject_ids) discovered in raw data.
+def enumerate_subjects_in_smriprep(smriprep_root: Path) -> List[str]:
+    """Return list of subject IDs discovered under sMRIPrep root (sub-*/anat)."""
+    if not smriprep_root.is_dir():
+        return []
+    subjects: List[str] = []
+    for entry in sorted(smriprep_root.iterdir()):
+        if entry.is_dir() and entry.name.startswith("sub-"):
+            # require anat folder exists to be considered a subject folder
+            if (entry / "anat").is_dir():
+                subjects.append(entry.name)
+    return subjects
 
-    Expects directory structure: raw_smri_root/<site>/<disease>/sub-*.
-    Subject IDs are directory basenames (e.g., 'sub-XXXX').
+
+def normalize_subject_id(value: str) -> str:
+    v = str(value).strip()
+    if not v:
+        return v
+    if v.startswith("sub-"):
+        return v
+    # add sub- prefix if missing
+    return f"sub-{v}"
+
+
+def load_site_disease_mapping(records_csv: Path) -> Dict[str, Tuple[str, str]]:
+    """Load mapping from subject_id -> (site, disease) from imaging_records.csv.
+
+    Tries common column names for subject, site, and disease.
+    Subject IDs are normalized to 'sub-XXXX' format.
     """
-    mapping: Dict[str, Dict[str, Set[str]]] = {}
-    if not raw_smri_root.is_dir():
-        return mapping
+    import csv
 
-    for site_dir in sorted([p for p in raw_smri_root.iterdir() if p.is_dir()]):
-        site_name = site_dir.name
-        for disease_dir in sorted([p for p in site_dir.iterdir() if p.is_dir()]):
-            disease_name = disease_dir.name
-            subs = set()
-            for subj_dir in sorted(disease_dir.glob("sub-*")):
-                if subj_dir.is_dir():
-                    subs.add(subj_dir.name)
-            if subs:
-                mapping.setdefault(site_name, {}).setdefault(disease_name, set()).update(subs)
+    if not records_csv.is_file():
+        raise FileNotFoundError(f"Records CSV not found: {records_csv}")
+
+    subject_cols = ["subject_id", "Subject", "subject", "SUBJECT", "ID", "id"]
+    site_cols = ["Site", "site", "SITE"]
+    disease_cols = ["Disease", "disease", "DISEASE", "Diagnosis", "diagnosis", "Group", "group"]
+
+    mapping: Dict[str, Tuple[str, str]] = {}
+    with open(records_csv, newline="") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames is None:
+            raise ValueError("Records CSV has no header")
+        fields_lower = {name.lower(): name for name in reader.fieldnames}
+
+        def pick(cols: List[str]) -> Optional[str]:
+            for c in cols:
+                # exact match first
+                if c in reader.fieldnames:
+                    return c
+                # case-insensitive fallback
+                cl = c.lower()
+                if cl in fields_lower:
+                    return fields_lower[cl]
+            return None
+
+        subj_col = pick(subject_cols)
+        site_col = pick(site_cols)
+        dis_col = pick(disease_cols)
+        if subj_col is None:
+            raise KeyError(
+                f"Could not find subject column in CSV. Tried: {subject_cols}. Found: {reader.fieldnames}"
+            )
+        if site_col is None or dis_col is None:
+            # allow missing site or disease; will fallback to 'UNKNOWN'
+            pass
+
+        for row in reader:
+            sub_raw = row.get(subj_col, "")
+            if sub_raw is None:
+                continue
+            sub_id = normalize_subject_id(str(sub_raw))
+            site_val = row.get(site_col, "UNKNOWN") if site_col else "UNKNOWN"
+            dis_val = row.get(dis_col, "UNKNOWN") if dis_col else "UNKNOWN"
+            mapping[sub_id] = (str(site_val), str(dis_val))
     return mapping
 
 
@@ -100,20 +155,19 @@ def subject_is_complete_in_mni(smriprep_root: Path, subject_id: str) -> bool:
     return has_preproc and has_mask
 
 
-def find_missing_by_group(
-    subjects_by_site_disease: Dict[str, Dict[str, Set[str]]],
+def find_missing_by_group_from_smriprep(
+    subjects: List[str],
     smriprep_root: Path,
+    site_dis_map: Dict[str, Tuple[str, str]],
 ) -> Dict[str, Dict[str, List[str]]]:
-    """Return mapping: site -> disease -> [missing_subject_ids]."""
+    """Return mapping: site -> disease -> [missing_subject_ids] using sMRIPrep subject list."""
     missing: Dict[str, Dict[str, List[str]]] = {}
-    for site_name, diseases in subjects_by_site_disease.items():
-        for disease_name, subject_ids in diseases.items():
-            missing_list: List[str] = []
-            for subject_id in sorted(subject_ids):
-                if not subject_is_complete_in_mni(smriprep_root, subject_id):
-                    missing_list.append(subject_id)
-            if missing_list:
-                missing.setdefault(site_name, {})[disease_name] = missing_list
+    for subject_id in subjects:
+        complete = subject_is_complete_in_mni(smriprep_root, subject_id)
+        if complete:
+            continue
+        site, disease = site_dis_map.get(subject_id, ("UNKNOWN", "UNKNOWN"))
+        missing.setdefault(site, {}).setdefault(disease, []).append(subject_id)
     return missing
 
 
@@ -167,16 +221,16 @@ def main() -> None:
         help="Path to config.yaml containing raw_data.smri and preprocessed_data.smri_p",
     )
     parser.add_argument(
-        "--raw-smri",
-        type=Path,
-        default=None,
-        help="Override for raw MRI root (expects <site>/<disease>/sub-* under this).",
-    )
-    parser.add_argument(
         "--smriprep-root",
         type=Path,
         default=None,
         help="Override for sMRIPrep derivatives root (expects sub-*/anat under this).",
+    )
+    parser.add_argument(
+        "--records-csv",
+        type=Path,
+        default=Path("~/reseng202500013-ndd-ml/data/imaging_records.csv"),
+        help="Path to imaging_records.csv used to map subject IDs to Site and Disease.",
     )
     parser.add_argument(
         "--out-csv",
@@ -190,24 +244,25 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Resolve paths
-    if args.raw_smri is not None and args.smriprep_root is not None:
-        raw_smri_root = args.raw_smri.expanduser().resolve()
+    # Resolve sMRIPrep root
+    if args.smriprep_root is not None:
         smri_p_root = args.smriprep_root.expanduser().resolve()
     else:
-        raw_smri_root, smri_p_root = load_paths_from_config(args.config.expanduser().resolve())
+        # Load from config if not explicitly provided
+        _, smri_p_root = load_paths_from_config(args.config.expanduser().resolve())
 
     # Validate
-    if not raw_smri_root.is_dir():
-        raise FileNotFoundError(f"Raw MRI root not found: {raw_smri_root}")
     if not smri_p_root.is_dir():
         raise FileNotFoundError(f"sMRIPrep root not found: {smri_p_root}")
+    records_csv = args.records_csv.expanduser().resolve()
 
-    subjects_by_group = enumerate_subjects_by_site_and_disease(raw_smri_root)
-    missing = find_missing_by_group(subjects_by_group, smri_p_root)
+    # Enumerate subjects from sMRIPrep and load records mapping
+    subjects = enumerate_subjects_in_smriprep(smri_p_root)
+    site_dis_map = load_site_disease_mapping(records_csv)
+    missing = find_missing_by_group_from_smriprep(subjects, smri_p_root, site_dis_map)
 
-    print(f"Raw MRI root:        {raw_smri_root}")
     print(f"sMRIPrep root:       {smri_p_root}")
+    print(f"Records CSV:         {records_csv}")
     print_report(missing)
 
     if args.out_csv is not None:
