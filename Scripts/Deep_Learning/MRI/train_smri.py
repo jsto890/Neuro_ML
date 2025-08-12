@@ -1048,15 +1048,22 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     print(f"Master dataset: {len(master_df)} total subjects")
     print(f"After filtering for labels {args.labels}: {len(filtered_df)} subjects")
 
-    # Show label distribution
-    label_counts = filtered_df['label'].value_counts().sort_index()
+    # Optional: balance entire dataset BEFORE outer CV; leftovers are discarded
+    if args.balance_dataset:
+        print("\nBalancing entire dataset before outer CV (undersampling; leftovers discarded)...")
+        dataset_for_cv = balance_dataset(filtered_df, random_state=args.random_seed)
+    else:
+        dataset_for_cv = filtered_df
+
+    # Show label distribution used for CV
+    label_counts = dataset_for_cv['label'].value_counts().sort_index()
     for label, count in label_counts.items():
-        print(f"  Label {label}: {count} subjects ({count/len(filtered_df)*100:.1f}%)")
+        print(f"  Label {label}: {count} subjects ({count/len(dataset_for_cv)*100:.1f}%)")
 
     # Build outer folds (test sets) with StratifiedKFold -> each fold's test set is unique
     # Note: n_splits defines the test proportion as 1/n_splits
     outer_skf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=args.random_seed)
-    outer_splits = list(outer_skf.split(range(len(filtered_df)), filtered_df['label']))
+    outer_splits = list(outer_skf.split(range(len(dataset_for_cv)), dataset_for_cv['label']))
 
     # Model variants to try
     if models_to_run is None:
@@ -1080,16 +1087,12 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             print(f"\nFOLD {fold_idx}/{k_folds} [{model_name}]")
 
             # Get fold-specific TrainPool and Test
-            test_df = filtered_df.iloc[test_idx].copy()
-            train_pool_df = filtered_df.iloc[train_pool_idx].copy()
+            test_df = dataset_for_cv.iloc[test_idx].copy()
+            train_pool_df = dataset_for_cv.iloc[train_pool_idx].copy()
             print(f"Train pool (pre-balance): {len(train_pool_df)} | Test: {len(test_df)}")
 
-            # Balance TrainPool via undersampling (discard leftovers)
-            if args.balance_dataset:
-                print("Balancing train pool via undersampling (discarding leftovers for this fold)...")
-                balanced_train_pool_df = balance_dataset(train_pool_df, random_state=args.random_seed)
-            else:
-                balanced_train_pool_df = train_pool_df
+            # If balanced globally already, do not re-balance per fold
+            balanced_train_pool_df = train_pool_df
 
             # Train/Val split on balanced TrainPool (stratified)
             train_df, val_df = train_test_split(
