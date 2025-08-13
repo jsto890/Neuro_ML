@@ -33,8 +33,9 @@ class Simple3DCNN(nn.Module):
     Input:  [B, 1, D, H, W]  single‐channel sMRI
     Output: [B, num_classes] logits
     """
-    def __init__(self, num_classes=2, base_channels=16):  # Reduced base channels
+    def __init__(self, num_classes=2, base_channels=16, classifier_dropout: float = 0.5):  # Reduced base channels
         super().__init__()
+        self.classifier_dropout = float(classifier_dropout)
         self.features = nn.Sequential(
             # First conv block
             nn.Conv3d(1, base_channels, kernel_size=3, padding=1),
@@ -59,7 +60,7 @@ class Simple3DCNN(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(1, 256),  # Reduced intermediate size
             nn.ReLU(),
-            nn.Dropout(0.5),
+            nn.Dropout(self.classifier_dropout),
             nn.Linear(256, num_classes)
         )
         
