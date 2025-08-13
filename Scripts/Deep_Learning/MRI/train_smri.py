@@ -721,7 +721,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     if use_swa:
         try:
             from torch.optim.swa_utils import AveragedModel, update_bn
-            averaged_model = AveragedModel(model)
+            averaged_model = None  # Lazily initialize after first forward when shapes are fixed
             swa_start_step = int(total_steps * float(getattr(args, 'swa_start_frac', 0.85)))
             swa_lr = float(getattr(args, 'swa_lr', 1e-4))
         except Exception:
@@ -777,10 +777,15 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                         else:
                             ema_shadow[name].mul_(ema_decay).add_(param.detach(), alpha=1.0 - ema_decay)
 
-            # SWA update after warmup portion
-            if use_swa and averaged_model is not None:
+            # SWA update after warmup portion (lazy init AveragedModel once shapes are stable)
+            if use_swa:
                 if global_step >= swa_start_step:
-                    averaged_model.update_parameters(model)
+                    if averaged_model is None:
+                        # Ensure dynamic heads (e.g., Simple3DCNN) are initialized
+                        if not hasattr(model, '_initialized') or getattr(model, '_initialized', True):
+                            averaged_model = AveragedModel(model)
+                    if averaged_model is not None:
+                        averaged_model.update_parameters(model)
 
             global_step += 1
 
