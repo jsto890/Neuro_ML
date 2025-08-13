@@ -52,7 +52,7 @@ def load_model(model_path, num_classes=2, device='cpu'):
     model.eval()
     return model
 
-def evaluate_model(model, test_loader, device='cpu', label_mapping=None):
+def evaluate_model(model, test_loader, device='cpu', label_mapping=None, threshold: float | None = None):
     """Evaluate model and return predictions and metrics."""
     model.eval()
     all_predictions = []
@@ -69,7 +69,12 @@ def evaluate_model(model, test_loader, device='cpu', label_mapping=None):
             
             logits = model(smri)
             probabilities = nn.Softmax(dim=1)(logits)
-            predictions = torch.argmax(logits, dim=1)
+            if threshold is not None and probabilities.shape[1] == 2:
+                # Use provided threshold on positive class prob for binary case
+                pred_pos = (probabilities[:, 1] >= threshold).long()
+                predictions = pred_pos
+            else:
+                predictions = torch.argmax(logits, dim=1)
             
             all_predictions.extend(predictions.cpu().numpy())
             all_probabilities.extend(probabilities.cpu().numpy())

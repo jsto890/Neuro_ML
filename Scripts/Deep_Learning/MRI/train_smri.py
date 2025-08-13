@@ -669,16 +669,9 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             return focal_loss.mean()
 
     criterion = FocalLoss(alpha=0.25, gamma=2)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
-    
-    # Add learning rate scheduler with more patience
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, 
-        mode='max', 
-        factor=0.5, 
-        patience=10,  # Increased patience
-        min_lr=1e-6   # Minimum learning rate
-    )
+    # Use AdamW optimizer with OneCycleLR (cosine) schedule and warmup
+    initial_lr = max(args.learning_rate / 25.0, 1e-6)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=initial_lr, weight_decay=args.weight_decay)
 
     model.to(device)
     best_val_auc = 0.0
@@ -698,12 +691,46 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     # Store training history
     training_history = []
     
-    # Initialize mixed precision training for memory efficiency
+    # Initialize LR scheduler (OneCycle) and mixed precision training
     if device.startswith('cuda'):
         scaler = torch.amp.GradScaler()
     else:
         scaler = None
+    steps_per_epoch = max(len(train_loader), 1)
+    total_steps = max(steps_per_epoch * epochs, 1)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=args.learning_rate,
+        total_steps=total_steps,
+        pct_start=float(getattr(args, 'onecycle_pct_start', 0.25)),
+        anneal_strategy='cos',
+        div_factor=25.0,
+        final_div_factor=1e4,
+        three_phase=False,
+    )
 
+    # Exponential Moving Average (EMA) setup
+    use_ema = getattr(args, 'ema_decay', 0.0) and args.ema_decay > 0.0
+    ema_decay = float(getattr(args, 'ema_decay', 0.0)) if use_ema else 0.0
+    ema_shadow = None
+    if use_ema:
+        ema_shadow = {}
+
+    # SWA setup
+    use_swa = bool(getattr(args, 'use_swa', False))
+    if use_swa:
+        try:
+            from torch.optim.swa_utils import AveragedModel, update_bn
+            averaged_model = AveragedModel(model)
+            swa_start_step = int(total_steps * float(getattr(args, 'swa_start_frac', 0.85)))
+            swa_lr = float(getattr(args, 'swa_lr', 1e-4))
+        except Exception:
+            use_swa = False
+            averaged_model = None
+            swa_start_step = None
+            swa_lr = None
+
+    global_step = 0
     for epoch in range(1, epochs + 1):
         # --- Training phase ---
         model.train()
@@ -729,6 +756,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
+                scheduler.step()
             else:
                 # Standard training for CPU
                 logits = model(smri)              # [B, 2]
@@ -736,6 +764,25 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 
                 loss.backward()
                 optimizer.step()
+                scheduler.step()
+
+            # EMA update after optimizer step (handle dynamic-sized classifier)
+            if use_ema and ema_shadow is not None:
+                with torch.no_grad():
+                    for name, param in model.named_parameters():
+                        if not param.requires_grad:
+                            continue
+                        if name not in ema_shadow or ema_shadow[name].shape != param.shape:
+                            ema_shadow[name] = param.detach().clone()
+                        else:
+                            ema_shadow[name].mul_(ema_decay).add_(param.detach(), alpha=1.0 - ema_decay)
+
+            # SWA update after warmup portion
+            if use_swa and averaged_model is not None:
+                if global_step >= swa_start_step:
+                    averaged_model.update_parameters(model)
+
+            global_step += 1
 
             running_loss += loss.item() * smri.size(0)
             preds = torch.argmax(logits, dim=1)
@@ -776,9 +823,8 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 'support': int(support[i])
             }
 
-        # Update learning rate based on validation AUC
-        old_lr = optimizer.param_groups[0]['lr']
-        scheduler.step(val_auc)
+        # Record current learning rate
+        old_lr = epoch_data['lr'] if 'lr' in locals() else optimizer.param_groups[0]['lr']
         new_lr = optimizer.param_groups[0]['lr']
         
         # Store epoch data
@@ -800,16 +846,11 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             'val_mcc': float(val_mcc)
         }
         training_history.append(epoch_data)
-        
-        # Print learning rate change if it occurred
-        lr_change = ""
-        if new_lr != old_lr:
-            lr_change = f"  [LR reduced to {new_lr:.6f}]"
 
         print(f"Epoch {epoch}/{epochs}  "
               f"Train loss={epoch_loss:.4f}, Train acc={epoch_acc:.4f}  "
               f"Val AUC={val_auc:.4f}, Val acc={val_acc:.4f}  "
-              f"LR={new_lr:.6f}{lr_change}")
+              f"LR={new_lr:.6f}")
 
         # Checkpoint if this is the best AUC so far
         if val_auc > best_val_auc:
@@ -849,8 +890,23 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             print(f"\nEarly stopping triggered after {epoch} epochs")
             break
 
-    # Load best model weights before returning
-    if best_state is not None:
+    # Finalize weights: prefer SWA > EMA > best_state
+    if use_swa and 'averaged_model' in locals() and averaged_model is not None:
+        try:
+            from torch.optim.swa_utils import update_bn
+            # Update BN stats for SWA model using training data
+            update_bn(train_loader, averaged_model, device=device if isinstance(device, str) else 'cpu')
+        except Exception:
+            pass
+        model.load_state_dict(averaged_model.state_dict())
+    elif use_ema and ema_shadow is not None:
+        # Load EMA weights
+        current_state = model.state_dict()
+        for name, param in current_state.items():
+            if name in ema_shadow:
+                param.copy_(ema_shadow[name])
+        model.load_state_dict(current_state)
+    elif best_state is not None:
         model.load_state_dict(best_state)
     
     return model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix, best_threshold, best_threshold_results
@@ -986,7 +1042,11 @@ def evaluate_model_with_threshold_optimization(model, val_loader, device, optimi
 
 def k_fold_training(args, k_folds=5, models_to_run=None):
     """
-    Perform k-fold cross validation on master dataset with proper train/val/test splits.
+    Outer stratified k-fold with per-fold test sets:
+    - For each fold, use 20% (or args.test_ratio) of subjects as Test (non-overlapping across folds)
+    - From remaining 80% as TrainPool, optionally undersample to balance classes (leftovers discarded)
+    - Split TrainPool into Train/Val stratified (val_ratio)
+    - Train, validate, then immediately evaluate on that fold's Test
     """
     import copy
     from sklearn.model_selection import train_test_split
@@ -1039,148 +1099,156 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     
     # Convert labels to int and filter
     master_df['label'] = master_df['label'].astype(int)
-    filtered_df = master_df[master_df['label'].isin(args.labels)]
+    filtered_df = master_df[master_df['label'].isin(args.labels)].reset_index(drop=True)
     
     print(f"Master dataset: {len(master_df)} total subjects")
     print(f"After filtering for labels {args.labels}: {len(filtered_df)} subjects")
 
-    # Show label distribution
-    label_counts = filtered_df['label'].value_counts().sort_index()
-    for label, count in label_counts.items():
-        print(f"  Label {label}: {count} subjects ({count/len(filtered_df)*100:.1f}%)")
-
-    # Balance dataset and create splits using new strategy
+    # Optional: balance entire dataset BEFORE outer CV; leftovers are discarded
     if args.balance_dataset:
-        print(f"\nUsing new balancing strategy: undersample -> split 90/10 -> add remaining to test")
-        # For 90/10 split, we use 0.1 for test_ratio and no val_ratio
-        train, test, removed_subjects = balance_and_split_dataset_90_10(
-            filtered_df, 
-            test_ratio=0.1, 
-            random_state=args.random_seed
-        )
-        val = None  # No separate validation set
+        print("\nBalancing entire dataset before outer CV (undersampling; leftovers discarded)...")
+        dataset_for_cv = balance_dataset(filtered_df, random_state=args.random_seed)
     else:
-        # Create stratified train/test splits (90/10)
-        print(f"\nCreating stratified splits (train: 90%, test: 10%)")
-        
-        # Split: train vs test (90/10)
-        train, test = train_test_split(
-            filtered_df, 
-            test_size=0.1, 
-            stratify=filtered_df['label'], 
-            random_state=args.random_seed
-        )
-        val = None  # No separate validation set
+        dataset_for_cv = filtered_df
 
-    # Save splits to data directory
-    data_dir = os.path.dirname(args.master_csv)
-    temp_train_csv = os.path.join(data_dir, f'temp_train_{run_folder}.csv')
-    temp_test_csv = os.path.join(data_dir, f'temp_test_{run_folder}.csv')
-    
-    train.to_csv(temp_train_csv, index=False)
-    test.to_csv(temp_test_csv, index=False)
+    # Show label distribution used for CV
+    label_counts = dataset_for_cv['label'].value_counts().sort_index()
+    for label, count in label_counts.items():
+        print(f"  Label {label}: {count} subjects ({count/len(dataset_for_cv)*100:.1f}%)")
 
-    # Create datasets with split data
-    train_dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root)
-    test_dataset = SMRIDataset(csv_path=temp_test_csv, data_root=args.data_root)
-
-    # Print split information
-    print(f"\nDataset splits:")
-    print(f"Training set: {len(train_dataset)} subjects ({len(train_dataset)/len(filtered_df)*100:.1f}%)")
-    train_labels = [train_dataset.labels[i] for i in range(len(train_dataset))]
-    train_counts = pd.Series(train_labels).value_counts().sort_index()
-    for label, count in train_counts.items():
-        print(f"  Label {label}: {count} subjects ({count/len(train_labels)*100:.1f}%)")
-    
-    print(f"Test set: {len(test_dataset)} subjects ({len(test_dataset)/len(filtered_df)*100:.1f}%)")
-    test_labels = [test_dataset.labels[i] for i in range(len(test_dataset))]
-    test_counts = pd.Series(test_labels).value_counts().sort_index()
-    for label, count in test_counts.items():
-        print(f"  Label {label}: {count} subjects ({count/len(test_labels)*100:.1f}%)")
-
-    # Create test loader
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers
-    )
-
-    # Initialize stratified k-fold on training set
-    skfold = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=args.random_seed)
-    splits = list(skfold.split(range(len(train_dataset)), train_labels))
+    # Build outer folds (test sets) with StratifiedKFold -> each fold's test set is unique
+    # Note: n_splits defines the test proportion as 1/n_splits
+    outer_skf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=args.random_seed)
+    outer_splits = list(outer_skf.split(range(len(dataset_for_cv)), dataset_for_cv['label']))
 
     # Model variants to try
     if models_to_run is None:
-        models_to_run = ["Simple3DCNN", "ResNet18_3D", "DenseNet121_3D", "EfficientNetB0_3D", 
-                        "VisionTransformer3D", "SwinUNETRClassifier", "FullSwinUNETRClassifier"]
+        models_to_run = [
+            "Simple3DCNN", "ResNet18_3D", "DenseNet121_3D", "EfficientNetB0_3D",
+            "VisionTransformer3D", "SwinUNETRClassifier", "FullSwinUNETRClassifier"
+        ]
 
     all_model_results = []
+    temp_files_this_run = []
 
     for model_name in models_to_run:
         print(f"\n{'#'*30}\nTraining model: {model_name}\n{'#'*30}")
         model_dir = os.path.join(run_dir, model_name)
         os.makedirs(model_dir, exist_ok=True)
+
         fold_results = []
         folds_data = []
-        for fold, (train_ids, val_fold_ids) in enumerate(splits):
-            print(f'\nFOLD {fold + 1}/{k_folds} [{model_name}]')
-            print(f'Training on {len(train_ids)} subjects, validating on {len(val_fold_ids)} subjects')
-            train_labels_fold = [train_labels[i] for i in train_ids]
-            val_fold_labels = [train_labels[i] for i in val_fold_ids]
-            print(f'Training set class distribution:')
-            train_counts = pd.Series(train_labels_fold).value_counts().sort_index()
-            for label, count in train_counts.items():
-                print(f'  Label {label}: {count} subjects ({count/len(train_labels_fold)*100:.1f}%)')
-            print(f'Validation fold class distribution:')
-            val_fold_counts = pd.Series(val_fold_labels).value_counts().sort_index()
-            for label, count in val_fold_counts.items():
-                print(f'  Label {label}: {count} subjects ({count/len(val_fold_labels)*100:.1f}%)')
-            
-            train_sampler = SubsetRandomSampler(train_ids)
-            val_fold_sampler = SubsetRandomSampler(val_fold_ids)
-            
-            train_loader = DataLoader(
-                train_dataset,
-                batch_size=args.batch_size,
-                sampler=train_sampler,
-                num_workers=args.num_workers
+
+        for fold_idx, (train_pool_idx, test_idx) in enumerate(outer_splits, start=1):
+            print(f"\nFOLD {fold_idx}/{k_folds} [{model_name}]")
+
+            # Get fold-specific TrainPool and Test
+            test_df = dataset_for_cv.iloc[test_idx].copy()
+            train_pool_df = dataset_for_cv.iloc[train_pool_idx].copy()
+            print(f"Train pool (pre-balance): {len(train_pool_df)} | Test: {len(test_df)}")
+
+            # If balanced globally already, do not re-balance per fold
+            balanced_train_pool_df = train_pool_df
+
+            # Train/Val split on balanced TrainPool (stratified)
+            train_df, val_df = train_test_split(
+                balanced_train_pool_df,
+                test_size=args.val_ratio,
+                stratify=balanced_train_pool_df['label'],
+                random_state=args.random_seed,
             )
-            val_fold_loader = DataLoader(
-                train_dataset,
-                batch_size=args.batch_size,
-                sampler=val_fold_sampler,
-                num_workers=args.num_workers
-            )
+            print(f"Train: {len(train_df)} | Val: {len(val_df)} | Test: {len(test_df)}")
+
+            # Save CSVs per fold
+            fold_tag = f"{run_folder}_{model_name}_fold_{fold_idx}"
+            temp_train_csv = os.path.join(data_dir, f"temp_train_{fold_tag}.csv")
+            temp_val_csv = os.path.join(data_dir, f"temp_val_{fold_tag}.csv")
+            temp_test_csv = os.path.join(data_dir, f"temp_test_{fold_tag}.csv")
+            train_df.to_csv(temp_train_csv, index=False)
+            val_df.to_csv(temp_val_csv, index=False)
+            test_df.to_csv(temp_test_csv, index=False)
+            temp_files_this_run.extend([temp_train_csv, temp_val_csv, temp_test_csv])
+
+            # Datasets and loaders
+            train_dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root)
+            val_dataset = SMRIDataset(csv_path=temp_val_csv, data_root=args.data_root)
+            test_dataset = SMRIDataset(csv_path=temp_test_csv, data_root=args.data_root)
+
+            train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+            val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+            test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
             
             # Initialize model for this fold
-            # Use the actual number of unique labels in the dataset, not just len(args.labels)
             unique_labels = sorted(train_dataset.df['label'].unique())
             num_classes = len(unique_labels)
             print(f"[INFO] Model initialized with {num_classes} classes for labels: {unique_labels}")
-            
-            # Create label mapping to convert to zero-based indexing
             label_mapping = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
             print(f"[INFO] Label mapping: {label_mapping}")
             
             model = get_3d_model(model_name, num_classes=num_classes, in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            if model_name == "Simple3DCNN" and hasattr(model, 'classifier') and hasattr(args, 'classifier_dropout'):
+                # Replace dropout layer in classifier with user-specified rate
+                try:
+                    model.classifier[2] = nn.Dropout(float(args.classifier_dropout))
+                except Exception:
+                    pass
             
-            # Train the model using training fold and validate on validation fold
-            model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix, best_threshold, best_threshold_results = train_sMRI_model(
-                model, train_loader, val_fold_loader, args.epochs, args.device, model_dir, args, fold_num=fold + 1, label_mapping=label_mapping
+            # Train
+            (
+                model,
+                best_val_auc,
+                best_val_acc,
+                final_train_loss,
+                final_train_acc,
+                training_history,
+                best_precision_macro,
+                best_recall_macro,
+                best_f1_macro,
+                best_class_metrics,
+                best_confusion_matrix,
+                best_threshold,
+                best_threshold_results,
+            ) = train_sMRI_model(
+                model,
+                train_loader,
+                val_loader,
+                args.epochs,
+                args.device,
+                model_dir,
+                args,
+                fold_num=fold_idx,
+                label_mapping=label_mapping,
             )
-            
-            # Create threshold optimization plot for this fold
+
+            # Threshold optimization plot
             if best_threshold_results:
                 threshold_plot_dir = os.path.join(model_dir, "threshold_optimization_plots")
                 threshold_plot_info = create_threshold_optimization_plot(
-                    best_threshold_results, threshold_plot_dir, model_name, fold + 1
+                    best_threshold_results, threshold_plot_dir, model_name, fold_idx
                 )
             else:
                 threshold_plot_info = None
             
+            # Test immediately on this fold's Test set
+            print(f"Evaluating {model_name} on fold {fold_idx} test set...")
+            # Use optimal validation threshold for test predictions (binary only)
+            test_threshold = None
+            if num_classes == 2 and best_threshold is not None:
+                test_threshold = float(best_threshold)
+            predictions, probabilities, labels = evaluate_model(
+                model, test_loader, args.device, label_mapping=label_mapping, threshold=test_threshold
+            )
+            metrics = calculate_metrics(predictions, probabilities, labels)
+            test_eval_dir = os.path.join(model_dir, f"test_evaluation_plots_fold_{fold_idx}")
+            create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
+            test_metrics_path = os.path.join(model_dir, f"test_metrics_fold_{fold_idx}.json")
+            with open(test_metrics_path, "w") as f:
+                json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+            print(f"Fold {fold_idx} test evaluation saved to: {test_eval_dir}")
+
+            # Collect results
             fold_results.append({
-                'fold': fold + 1,
+                'fold': fold_idx,
                 'best_val_auc': float(best_val_auc),
                 'best_val_acc': float(best_val_acc),
                 'final_train_loss': float(final_train_loss),
@@ -1191,13 +1259,12 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 'best_class_metrics': best_class_metrics,
                 'best_confusion_matrix': best_confusion_matrix.tolist() if best_confusion_matrix is not None else None,
                 'best_threshold': float(best_threshold),
-                'threshold_optimization': threshold_plot_info
+                'threshold_optimization': threshold_plot_info,
+                'test_metrics_path': test_metrics_path,
             })
-            folds_data.append({
-                'fold': fold + 1,
-                'data': training_history
-            })
-            run_id = f"fold_{fold + 1}_{uuid.uuid4().hex[:8]}"
+            folds_data.append({'fold': fold_idx, 'data': training_history})
+
+            run_id = f"fold_{fold_idx}_{uuid.uuid4().hex[:8]}"
             log_metrics(
                 run_id=run_id,
                 model_name=model_name,
@@ -1206,10 +1273,10 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 best_val_acc=best_val_acc,
                 final_train_loss=final_train_loss,
                 final_train_acc=final_train_acc,
-                notes=f"{model_name} Fold {fold + 1}/{k_folds}"
+                notes=f"{model_name} Fold {fold_idx}/{k_folds}"
             )
         
-        # Save per-model results
+        # Aggregate per-model results and save
         avg_val_auc = float(np.mean([r['best_val_auc'] for r in fold_results]))
         avg_val_acc = float(np.mean([r['best_val_acc'] for r in fold_results]))
         avg_precision_macro = float(np.mean([r['best_precision_macro'] for r in fold_results]))
@@ -1274,174 +1341,16 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         print(f"Average optimal threshold: {avg_threshold:.3f} (default: 0.5)")
         print(f"Average accuracy improvement: {avg_accuracy_improvement:.4f}")
         
-        # Test set evaluation (always available now)
-        print(f"\nEvaluating {model_name} on the test set...")
-        
-        if args.test_strategy == "best_fold":
-            # Find the best fold based on validation AUC
-            best_fold_idx = np.argmax([r['best_val_auc'] for r in fold_results])
-            best_fold = fold_results[best_fold_idx]['fold']
-            best_fold_auc = fold_results[best_fold_idx]['best_val_auc']
-            
-            print(f"Using best fold: {best_fold} (AUC: {best_fold_auc:.4f})")
-            
-            # Load the best model from the best fold
-            best_model_path = os.path.join(model_dir, f"best_smri_model_fold_{best_fold}.pth")
-            
-                        # If fold-specific model doesn't exist, fall back to the general one
-            if not os.path.exists(best_model_path):
-                best_model_path = os.path.join(model_dir, "best_smri_model.pth")
-                print(f"Warning: Fold-specific model not found, using general model")
-            
-            if os.path.exists(best_model_path):
-                file_size = os.path.getsize(best_model_path) / (1024*1024)  # MB
-                print(f"Model file size: {file_size:.2f} MB")
-                state_dict = torch.load(best_model_path, map_location=args.device)
-                # For Simple3DCNN, we need to handle the classifier size mismatch
-                if model_name == "Simple3DCNN":
-                    classifier_weight = state_dict['classifier.0.weight']
-                    actual_input_size = classifier_weight.shape[1]
-                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                    model.classifier[0] = nn.Linear(actual_input_size, 256)
-                    model._initialized = True
-                    model.load_state_dict(state_dict)
-                elif model_name == "SwinUNETRClassifier":
-                    classifier_weight = state_dict['classifier.0.weight']
-                    actual_input_size = classifier_weight.shape[1]
-                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                    model.classifier[0] = nn.Linear(actual_input_size, 512)
-                    model._initialized = True
-                    model.load_state_dict(state_dict)
-                elif model_name == "FullSwinUNETRClassifier":
-                    classifier_weight = state_dict['classifier.0.weight']
-                    actual_input_size = classifier_weight.shape[1]
-                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                    model.classifier[0] = nn.Linear(actual_input_size, 512)
-                    model._initialized = True
-                    model.load_state_dict(state_dict)
-                else:
-                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                    model.load_state_dict(state_dict)
-                model.to(args.device)
-                model.eval()
-                # Evaluate
-                predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
-                metrics = calculate_metrics(predictions, probabilities, labels)
-                # Save metrics
-                test_metrics_path = os.path.join(model_dir, "test_metrics.json")
-                with open(test_metrics_path, "w") as f:
-                    json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
-                # Save plots
-                test_eval_dir = os.path.join(model_dir, "test_evaluation_plots")
-                create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
-                print(f"Test set evaluation for {model_name} saved to: {test_eval_dir}")
-            else:
-                print(f"ERROR: Model file not found: {best_model_path}")
-                continue
-                
-        elif args.test_strategy == "last_fold":
-            # Use the last fold's model (original behavior)
-            best_model_path = os.path.join(model_dir, "best_smri_model.pth")
-            if os.path.exists(best_model_path):
-                file_size = os.path.getsize(best_model_path) / (1024*1024)  # MB
-                print(f"Model file size: {file_size:.2f} MB")
-                state_dict = torch.load(best_model_path, map_location=args.device)
-                # For Simple3DCNN, we need to handle the classifier size mismatch
-                if model_name == "Simple3DCNN":
-                    classifier_weight = state_dict['classifier.0.weight']
-                    actual_input_size = classifier_weight.shape[1]
-                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                    model.classifier[0] = nn.Linear(actual_input_size, 256)
-                    model._initialized = True
-                    model.load_state_dict(state_dict)
-                elif model_name == "SwinUNETRClassifier":
-                    classifier_weight = state_dict['classifier.0.weight']
-                    actual_input_size = classifier_weight.shape[1]
-                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                    model.classifier[0] = nn.Linear(actual_input_size, 512)
-                    model._initialized = True
-                    model.load_state_dict(state_dict)
-                elif model_name == "FullSwinUNETRClassifier":
-                    classifier_weight = state_dict['classifier.0.weight']
-                    actual_input_size = classifier_weight.shape[1]
-                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                    model.classifier[0] = nn.Linear(actual_input_size, 512)
-                    model._initialized = True
-                    model.load_state_dict(state_dict)
-                else:
-                    model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                    model.load_state_dict(state_dict)
-                model.to(args.device)
-                model.eval()
-                # Evaluate
-                predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
-                metrics = calculate_metrics(predictions, probabilities, labels)
-                # Save metrics
-                test_metrics_path = os.path.join(model_dir, "test_metrics.json")
-                with open(test_metrics_path, "w") as f:
-                    json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
-                # Save plots
-                test_eval_dir = os.path.join(model_dir, "test_evaluation_plots")
-                create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
-                print(f"Test set evaluation for {model_name} saved to: {test_eval_dir}")
-            else:
-                print(f"ERROR: Model file not found: {best_model_path}")
-                continue
-                
-        elif args.test_strategy == "ensemble":
-            print(f"\nEvaluating {model_name} ensemble on the test set...")
-            try:
-                # Use ensemble evaluation
-                ensemble_predictions, ensemble_probabilities, test_labels, ensemble_metrics = ensemble_evaluate_models(
-                    model_name, model_dir, test_loader, args.device, args, fold_results
-                )
-                
-                # Save ensemble metrics
-                test_metrics_path = os.path.join(model_dir, "ensemble_test_metrics.json")
-                with open(test_metrics_path, "w") as f:
-                    json.dump(ensemble_metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
-                
-                # Save ensemble plots
-                test_eval_dir = os.path.join(model_dir, "ensemble_test_evaluation_plots")
-                create_evaluation_plots(ensemble_predictions, ensemble_probabilities, test_labels, ensemble_metrics, test_eval_dir)
-                print(f"Ensemble test evaluation for {model_name} saved to: {test_eval_dir}")
-                
-            except Exception as e:
-                print(f"Error in ensemble evaluation: {e}")
-                print("Falling back to best fold evaluation...")
-                # Fall back to best fold evaluation
-                best_fold_idx = np.argmax([r['best_val_auc'] for r in fold_results])
-                best_fold = fold_results[best_fold_idx]['fold']
-                best_model_path = os.path.join(model_dir, f"best_smri_model_fold_{best_fold}.pth")
-                
-                if os.path.exists(best_model_path):
-                    state_dict = torch.load(best_model_path, map_location=args.device)
-                    # Use the same model initialization as during training
-                    unique_labels = sorted(train_dataset.df['label'].unique())
-                    num_classes = len(unique_labels)
-                    label_mapping = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
-                    
-                    model = get_3d_model(model_name, num_classes=num_classes, in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-                    model.load_state_dict(state_dict)
-                    model.to(args.device)
-                    model.eval()
-                    predictions, probabilities, labels = evaluate_model(model, test_loader, args.device, label_mapping=label_mapping)
-                    metrics = calculate_metrics(predictions, probabilities, labels)
-                    test_metrics_path = os.path.join(model_dir, "fallback_test_metrics.json")
-                    with open(test_metrics_path, "w") as f:
-                        json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
-                    print(f"Fallback test evaluation saved to: {test_metrics_path}")
-                else:
-                    print(f"ERROR: Could not perform ensemble or fallback evaluation")
-            continue
-
-    # Clean up temporary files
-    try:
-        os.remove(temp_train_csv)
-        os.remove(temp_test_csv)
-        print(f"Cleaned up temporary files from data directory")
-    except Exception as e:
-        print(f"Warning: Could not clean up temporary files: {e}")
+    # Clean up temporary CSVs created for this run
+    removed_count = 0
+    for fpath in temp_files_this_run:
+        try:
+            os.remove(fpath)
+            removed_count += 1
+        except Exception:
+            pass
+    if removed_count:
+        print(f"Cleaned up {removed_count} temporary CSV files from data directory")
     
     # --- Summary comparison plot ---
     print("\nGenerating summary comparison plot for all models...")
@@ -1707,15 +1616,27 @@ Examples:
     parser.add_argument("--labels",      type=int, nargs='+', required=True,
                         help="Labels to include in training (e.g., 0 1 for AD vs CN)")
     parser.add_argument("--val_ratio", type=float, default=0.2,
-                        help="Proportion of balanced data for validation set (default: 0.2 for 70/20/10 split)")
-    parser.add_argument("--test_ratio", type=float, default=0.1,
-                        help="Proportion of balanced data for test set (default: 0.1 for 70/20/10 split)")
+                        help="Proportion for validation set inside each fold's training pool (default: 0.2 -> 80/20 train/val)")
+    parser.add_argument("--test_ratio", type=float, default=0.2,
+                        help="Unused in outer K-fold mode; effective test proportion is 1/k_folds (default k_folds=5 -> 0.2)")
     parser.add_argument("--random_seed", type=int, default=None,
                         help="Random seed for reproducible splits (None for random)")
     parser.add_argument("--balance_dataset", action='store_true',
-                        help="Use new balancing strategy: undersample -> split 70/20/10 -> add remaining subjects to test set")
+                        help="Per-fold: undersample the training pool to the minority class; discard leftovers; then split Train/Val 80/20 (stratified)")
     parser.add_argument("--optimize_threshold", action='store_true', default=True,
                         help="Optimize decision threshold for accuracy (default: True)")
+    parser.add_argument("--classifier_dropout", type=float, default=0.4,
+                        help="Dropout probability for classifier head (Simple3DCNN only)")
+    parser.add_argument("--onecycle_pct_start", type=float, default=0.25,
+                        help="Fraction of OneCycle steps to increase LR (0-1)")
+    parser.add_argument("--ema_decay", type=float, default=0.999,
+                        help="EMA decay for weight averaging (0 disables EMA)")
+    parser.add_argument("--use_swa", action='store_true',
+                        help="Enable Stochastic Weight Averaging over final epochs")
+    parser.add_argument("--swa_start_frac", type=float, default=0.85,
+                        help="Fraction of training steps when SWA starts (e.g., 0.85)")
+    parser.add_argument("--swa_lr", type=float, default=1e-4,
+                        help="Learning rate for SWA phase")
     parser.add_argument("--test_strategy", type=str, default="best_fold", choices=["best_fold", "ensemble", "last_fold"],
                         help="Strategy for test evaluation: best_fold (default), ensemble, or last_fold")
     
