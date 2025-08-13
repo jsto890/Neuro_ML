@@ -702,35 +702,13 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         optimizer,
         max_lr=args.learning_rate,
         total_steps=total_steps,
-        pct_start=float(getattr(args, 'onecycle_pct_start', 0.25)),
+        pct_start=0.1,
         anneal_strategy='cos',
         div_factor=25.0,
         final_div_factor=1e4,
         three_phase=False,
     )
 
-    # Exponential Moving Average (EMA) setup
-    use_ema = getattr(args, 'ema_decay', 0.0) and args.ema_decay > 0.0
-    ema_decay = float(getattr(args, 'ema_decay', 0.0)) if use_ema else 0.0
-    ema_shadow = None
-    if use_ema:
-        ema_shadow = {}
-
-    # SWA setup
-    use_swa = bool(getattr(args, 'use_swa', False))
-    if use_swa:
-        try:
-            from torch.optim.swa_utils import AveragedModel, update_bn
-            averaged_model = None  # Lazily initialize after first forward when shapes are fixed
-            swa_start_step = int(total_steps * float(getattr(args, 'swa_start_frac', 0.85)))
-            swa_lr = float(getattr(args, 'swa_lr', 1e-4))
-        except Exception:
-            use_swa = False
-            averaged_model = None
-            swa_start_step = None
-            swa_lr = None
-
-    global_step = 0
     for epoch in range(1, epochs + 1):
         # --- Training phase ---
         model.train()
@@ -765,29 +743,6 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 loss.backward()
                 optimizer.step()
                 scheduler.step()
-
-            # EMA update after optimizer step (handle dynamic-sized classifier)
-            if use_ema and ema_shadow is not None:
-                with torch.no_grad():
-                    for name, param in model.named_parameters():
-                        if not param.requires_grad:
-                            continue
-                        if name not in ema_shadow or ema_shadow[name].shape != param.shape:
-                            ema_shadow[name] = param.detach().clone()
-                        else:
-                            ema_shadow[name].mul_(ema_decay).add_(param.detach(), alpha=1.0 - ema_decay)
-
-            # SWA update after warmup portion (lazy init AveragedModel once shapes are stable)
-            if use_swa:
-                if global_step >= swa_start_step:
-                    if averaged_model is None:
-                        # Ensure dynamic heads (e.g., Simple3DCNN) are initialized
-                        if not hasattr(model, '_initialized') or getattr(model, '_initialized', True):
-                            averaged_model = AveragedModel(model)
-                    if averaged_model is not None:
-                        averaged_model.update_parameters(model)
-
-            global_step += 1
 
             running_loss += loss.item() * smri.size(0)
             preds = torch.argmax(logits, dim=1)
@@ -828,8 +783,9 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 'support': int(support[i])
             }
 
-        # Record current learning rate
-        old_lr = epoch_data['lr'] if 'lr' in locals() else optimizer.param_groups[0]['lr']
+        # Update learning rate based on validation AUC
+        old_lr = optimizer.param_groups[0]['lr']
+        scheduler.step(val_auc)
         new_lr = optimizer.param_groups[0]['lr']
         
         # Store epoch data
@@ -851,11 +807,16 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             'val_mcc': float(val_mcc)
         }
         training_history.append(epoch_data)
+        
+        # Print learning rate change if it occurred
+        lr_change = ""
+        if new_lr != old_lr:
+            lr_change = f"  [LR reduced to {new_lr:.6f}]"
 
         print(f"Epoch {epoch}/{epochs}  "
               f"Train loss={epoch_loss:.4f}, Train acc={epoch_acc:.4f}  "
               f"Val AUC={val_auc:.4f}, Val acc={val_acc:.4f}  "
-              f"LR={new_lr:.6f}")
+              f"LR={new_lr:.6f}{lr_change}")
 
         # Checkpoint if this is the best AUC so far
         if val_auc > best_val_auc:
@@ -895,23 +856,8 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             print(f"\nEarly stopping triggered after {epoch} epochs")
             break
 
-    # Finalize weights: prefer SWA > EMA > best_state
-    if use_swa and 'averaged_model' in locals() and averaged_model is not None:
-        try:
-            from torch.optim.swa_utils import update_bn
-            # Update BN stats for SWA model using training data
-            update_bn(train_loader, averaged_model, device=device if isinstance(device, str) else 'cpu')
-        except Exception:
-            pass
-        model.load_state_dict(averaged_model.state_dict())
-    elif use_ema and ema_shadow is not None:
-        # Load EMA weights
-        current_state = model.state_dict()
-        for name, param in current_state.items():
-            if name in ema_shadow:
-                param.copy_(ema_shadow[name])
-        model.load_state_dict(current_state)
-    elif best_state is not None:
+    # Load best model weights before returning
+    if best_state is not None:
         model.load_state_dict(best_state)
     
     return model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix, best_threshold, best_threshold_results
@@ -1191,12 +1137,6 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             print(f"[INFO] Label mapping: {label_mapping}")
             
             model = get_3d_model(model_name, num_classes=num_classes, in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
-            if model_name == "Simple3DCNN" and hasattr(model, 'classifier') and hasattr(args, 'classifier_dropout'):
-                # Replace dropout layer in classifier with user-specified rate
-                try:
-                    model.classifier[2] = nn.Dropout(float(args.classifier_dropout))
-                except Exception:
-                    pass
             
             # Train
             (
@@ -1630,18 +1570,6 @@ Examples:
                         help="Per-fold: undersample the training pool to the minority class; discard leftovers; then split Train/Val 80/20 (stratified)")
     parser.add_argument("--optimize_threshold", action='store_true', default=True,
                         help="Optimize decision threshold for accuracy (default: True)")
-    parser.add_argument("--classifier_dropout", type=float, default=0.4,
-                        help="Dropout probability for classifier head (Simple3DCNN only)")
-    parser.add_argument("--onecycle_pct_start", type=float, default=0.25,
-                        help="Fraction of OneCycle steps to increase LR (0-1)")
-    parser.add_argument("--ema_decay", type=float, default=0.999,
-                        help="EMA decay for weight averaging (0 disables EMA)")
-    parser.add_argument("--use_swa", action='store_true',
-                        help="Enable Stochastic Weight Averaging over final epochs")
-    parser.add_argument("--swa_start_frac", type=float, default=0.85,
-                        help="Fraction of training steps when SWA starts (e.g., 0.85)")
-    parser.add_argument("--swa_lr", type=float, default=1e-4,
-                        help="Learning rate for SWA phase")
     parser.add_argument("--test_strategy", type=str, default="best_fold", choices=["best_fold", "ensemble", "last_fold"],
                         help="Strategy for test evaluation: best_fold (default), ensemble, or last_fold")
     
