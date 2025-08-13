@@ -14,7 +14,7 @@ preprocessed SPECT root from config, with an additional subdirectory name you
 can control via --output-subdir (defaults to 'jfinal').
 
 Example:
-  python Preprocessing/JSPECT/run_jspect.py \
+  python Scripts/Preprocessing/JSPECT/run_jspect.py \
     --output-subdir jfinal \
     --clip-upper 10.0 \
     --skip-existing
@@ -252,7 +252,12 @@ def resample_to_iso_like_template(image: sitk.Image, template: sitk.Image, iso_m
     return resampler.Execute(image)
 
 
-def compute_occipital_mean(template_space_image: sitk.Image, occipital_mask_img: sitk.Image) -> float:
+def compute_occipital_stat(
+    template_space_image: sitk.Image,
+    occipital_mask_img: sitk.Image,
+    method: str = "median",
+    nonzero_only: bool = True,
+) -> float:
     img_np = sitk.GetArrayFromImage(template_space_image).astype(np.float64)
     mask_np = sitk.GetArrayFromImage(occipital_mask_img).astype(bool)
     if img_np.shape != mask_np.shape:
@@ -260,20 +265,32 @@ def compute_occipital_mean(template_space_image: sitk.Image, occipital_mask_img:
             f"Shape mismatch: image {img_np.shape} vs mask {mask_np.shape}. Ensure the occipital mask matches the template grid."
         )
     masked_vals = img_np[mask_np]
-    # Guard against zeros/empties
     masked_vals = masked_vals[np.isfinite(masked_vals)]
-    if masked_vals.size == 0:
+    nz = masked_vals > 0 if nonzero_only else np.ones_like(masked_vals, dtype=bool)
+    if not np.any(nz):
+        nz = np.ones_like(masked_vals, dtype=bool)
+    vals = masked_vals[nz]
+    if vals.size == 0:
         raise ValueError("Occipital mask contains no valid voxels in the resampled image")
-    occ_mean = float(masked_vals.mean())
-    # Guard rails
-    if not np.isfinite(occ_mean) or occ_mean <= 1e-6:
-        raise ValueError(f"Invalid occipital mean encountered: {occ_mean}")
-    return occ_mean
+    if method.lower() == "median":
+        stat = float(np.median(vals))
+    elif method.lower() == "mean":
+        stat = float(np.mean(vals))
+    else:
+        raise ValueError(f"Unknown method '{method}', expected 'median' or 'mean'")
+    if not np.isfinite(stat) or stat <= 1e-6:
+        raise ValueError(f"Invalid occipital statistic encountered: {stat}")
+    return stat
 
 
-def suvr_normalize(template_space_image: sitk.Image, occipital_mask_img: sitk.Image) -> sitk.Image:
-    occ_mean = compute_occipital_mean(template_space_image, occipital_mask_img)
-    scale = 1.0 / max(occ_mean, 1e-6)
+def suvr_normalize(
+    template_space_image: sitk.Image,
+    occipital_mask_img: sitk.Image,
+    method: str = "median",
+    nonzero_only: bool = True,
+) -> sitk.Image:
+    occ_val = compute_occipital_stat(template_space_image, occipital_mask_img, method=method, nonzero_only=nonzero_only)
+    scale = 1.0 / max(occ_val, 1e-6)
     suvr_img = sitk.ShiftScale(template_space_image, shift=0.0, scale=scale)
     return suvr_img
 
@@ -353,6 +370,8 @@ def process_subject(
     final_iso_mm: Optional[float],
     save_transforms: bool,
     save_qc: bool,
+    occipital_method: str,
+    occipital_nonzero_only: bool,
 ) -> Tuple[str, Optional[str]]:
     subject_id = derive_subject_id(subject_nii)
     out_pre = output_dir / f"{subject_id}_space-MNI.nii.gz"
@@ -387,8 +406,13 @@ def process_subject(
     registered_iso = resample_to_iso_like_template(registered_img, template_img, final_iso_mm)
     save_image(registered_iso, out_pre)
 
-    # 3) SUVR using occipital mask
-    suvr_img = suvr_normalize(registered_iso, occipital_mask_img)
+    # 3) SUVR using occipital mask (robust by default)
+    suvr_img = suvr_normalize(
+        registered_iso,
+        occipital_mask_img,
+        method=occipital_method,
+        nonzero_only=occipital_nonzero_only,
+    )
 
     # 4) Optional clipping
     # Percentile-based additional clipping safeguard
@@ -417,16 +441,20 @@ def process_subject(
     ncc = compute_ncc(registered_iso, template_img)
     brain_fraction = _compute_mask_fraction(tpl_mask)
     try:
-        occ_mean_val = compute_occipital_mean(registered_iso, occipital_mask_img)
+        occ_stat_val = compute_occipital_stat(
+            registered_iso, occipital_mask_img, method=occipital_method, nonzero_only=occipital_nonzero_only
+        )
     except Exception:
-        occ_mean_val = None
+        occ_stat_val = None
     provenance = {
         "subject": subject_id,
         "enable_nonlinear": enable_nonlinear,
         "final_iso_mm": final_iso_mm,
         "clip_lower": clip_lower,
         "clip_upper": clip_upper,
-        "occipital_mean": occ_mean_val,
+        "occipital_reference_method": occipital_method,
+        "occipital_reference_nonzero_only": occipital_nonzero_only,
+        "occipital_reference_value": occ_stat_val,
         "ncc_to_template": ncc,
         "template_brain_fraction": brain_fraction,
         "registered_path": str(out_pre),
@@ -452,7 +480,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--config",
         type=str,
-        default=str(Path(__file__).resolve().parents[2] / "config.yaml"),
+        default=str(Path(__file__).resolve().parents[3] / "config.yaml"),
         help="Path to config.yaml",
     )
     p.add_argument(
@@ -487,6 +515,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--final-iso-mm", type=float, default=1.0, help="Final isotropic voxel size in mm (<=0 to skip)")
     p.add_argument("--no-save-transforms", action="store_true", help="Do not save transform .tfm files")
     p.add_argument("--no-save-qc", action="store_true", help="Do not save QC PNG slices")
+    p.add_argument(
+        "--occipital-method",
+        type=str,
+        default="median",
+        choices=["median", "mean"],
+        help="Statistic over occipital mask for SUVR (default: median)",
+    )
+    p.add_argument(
+        "--occipital-include-zeros",
+        action="store_true",
+        help="Include zero voxels inside occipital mask when computing the statistic",
+    )
     return p.parse_args()
 
 
@@ -516,6 +556,10 @@ def main() -> None:
             "clip_lower": args.clip_lower,
             "clip_upper": args.clip_upper,
             "skip_existing": args.skip_existing,
+            "nonlinear": not args.disable_nonlinear,
+            "final_iso_mm": args.final_iso_mm,
+            "occipital_method": args.occipital_method,
+            "occipital_include_zeros": args.occipital_include_zeros,
         },
         indent=2,
     ))
@@ -564,6 +608,8 @@ def main() -> None:
                 final_iso_mm=args.final_iso_mm,
                 save_transforms=(not args.no_save_transforms),
                 save_qc=(not args.no_save_qc),
+                occipital_method=args.occipital_method,
+                occipital_nonzero_only=(not args.occipital_include_zeros),
             )
             status = "skipped" if skipped_reason else "ok"
             print(f"[{i}/{len(subject_niis)}] {subject_id}: {status}")
