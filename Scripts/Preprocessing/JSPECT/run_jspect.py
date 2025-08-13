@@ -247,8 +247,8 @@ def register_to_template(
     registration.SetInitialTransform(bspline_tx, inPlace=False)
     final_bspline = registration.Execute(fixed_template, moving_image)
 
-    # Build final composite: affine followed by bspline
-    final_composite = sitk.Transform(3, sitk.sitkComposite)
+    # Build final composite: affine followed by bspline (use CompositeTransform API)
+    final_composite = sitk.CompositeTransform(3)
     final_composite.AddTransform(affine_tx)
     final_composite.AddTransform(final_bspline)
     return final_composite
@@ -325,6 +325,49 @@ def suvr_normalize(
     scale = 1.0 / max(occ_val, 1e-6)
     suvr_img = sitk.ShiftScale(template_space_image, shift=0.0, scale=scale)
     return suvr_img
+
+
+def _dilate_mask(mask_img: sitk.Image, iterations: int) -> sitk.Image:
+    out = mask_img
+    for _ in range(max(0, iterations)):
+        out = sitk.BinaryDilate(out, [1, 1, 1])
+    return out
+
+
+def get_occipital_reference_value(
+    template_space_image: sitk.Image,
+    occipital_mask_img: sitk.Image,
+    method: str = "median",
+    nonzero_only: bool = True,
+) -> tuple[float, bool, str]:
+    # Try original mask
+    try:
+        val = compute_occipital_stat(template_space_image, occipital_mask_img, method=method, nonzero_only=nonzero_only)
+        if val > 1e-6 and np.isfinite(val):
+            return val, False, "none"
+    except Exception:
+        pass
+
+    # Try dilated masks progressively
+    for iters in (1, 2, 3):
+        try:
+            dil = _dilate_mask(occipital_mask_img, iters)
+            val = compute_occipital_stat(template_space_image, dil, method=method, nonzero_only=nonzero_only)
+            if val > 1e-6 and np.isfinite(val):
+                return val, True, f"dilated_{iters}"
+        except Exception:
+            continue
+
+    # Fallback: global median of positive intensities within image
+    arr = sitk.GetArrayFromImage(template_space_image).astype(np.float64)
+    arr = arr[np.isfinite(arr) & (arr > 0)]
+    if arr.size > 0:
+        val = float(np.median(arr))
+        if val > 1e-6 and np.isfinite(val):
+            return val, True, "global_median_positive"
+
+    # Last resort small positive
+    return 1e-3, True, "epsilon"
 
 
 def clip_intensity(image: sitk.Image, lower: Optional[float], upper: Optional[float]) -> sitk.Image:
@@ -448,12 +491,12 @@ def process_subject(
     save_image(registered_img, out_pre)
 
     # 3) SUVR using occipital mask (robust by default)
-    suvr_img = suvr_normalize(
-        registered_img,
-        occipital_mask_img,
-        method=occipital_method,
-        nonzero_only=occipital_nonzero_only,
+    # Robust SUVR reference with graceful fallback
+    occ_val, occ_fallback_used, occ_fallback_strategy = get_occipital_reference_value(
+        registered_img, occipital_mask_img, method=occipital_method, nonzero_only=occipital_nonzero_only
     )
+    scale = 1.0 / max(occ_val, 1e-6)
+    suvr_img = sitk.ShiftScale(registered_img, shift=0.0, scale=scale)
 
     # 4) Optional clipping
     # Percentile-based additional clipping safeguard
@@ -483,9 +526,7 @@ def process_subject(
     ncc = compute_ncc(registered_img, template_img)
     brain_fraction = _compute_mask_fraction(tpl_mask)
     try:
-        occ_stat_val = compute_occipital_stat(
-            registered_img, occipital_mask_img, method=occipital_method, nonzero_only=occipital_nonzero_only
-        )
+        occ_stat_val = occ_val
     except Exception:
         occ_stat_val = None
     provenance = {
@@ -497,6 +538,8 @@ def process_subject(
         "occipital_reference_method": occipital_method,
         "occipital_reference_nonzero_only": occipital_nonzero_only,
         "occipital_reference_value": occ_stat_val,
+        "occipital_reference_fallback_used": occ_fallback_used,
+        "occipital_reference_fallback_strategy": occ_fallback_strategy,
         "ncc_to_template": ncc,
         "template_brain_fraction": brain_fraction,
         "registered_path": str(out_pre),
