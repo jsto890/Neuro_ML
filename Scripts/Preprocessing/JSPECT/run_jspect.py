@@ -180,9 +180,15 @@ def register_to_template(
         registration.SetSmoothingSigmasPerLevel([2, 1, 0])
         registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
 
-        registration.SetInitialTransform(initial_tx, inPlace=False)
-        final_tx = registration.Execute(fixed_template, moving_image)
-        return final_tx
+        if fixed_mask is not None:
+            registration.SetMetricFixedMask(fixed_mask)
+        if moving_mask is not None:
+            registration.SetMetricMovingMask(moving_mask)
+
+        # Optimize in-place so the returned transform preserves its concrete type
+        registration.SetInitialTransform(initial_tx, inPlace=True)
+        registration.Execute(fixed_template, moving_image)
+        return initial_tx
 
     # Rigid initialization (centered)
     initial_rigid = sitk.CenteredTransformInitializer(
@@ -191,13 +197,15 @@ def register_to_template(
         sitk.VersorRigid3DTransform(),
         sitk.CenteredTransformInitializerFilter.GEOMETRY,
     )
-    rigid_tx = _run_stage(initial_rigid, sitk.VersorRigid3DTransform())
+    # Ensure concrete VersorRigid3D type
+    rigid_tx = sitk.VersorRigid3DTransform(initial_rigid)
+    rigid_tx = _run_stage(rigid_tx, None)
 
     # Affine refinement initialized from rigid
     affine_init = sitk.AffineTransform(3)
-    affine_init.SetMatrix(sitk.VersorRigid3DTransform(rigid_tx).GetMatrix())
-    affine_init.SetTranslation(sitk.VersorRigid3DTransform(rigid_tx).GetTranslation())
-    affine_tx = _run_stage(affine_init, sitk.AffineTransform(3))
+    affine_init.SetMatrix(rigid_tx.GetMatrix())
+    affine_init.SetTranslation(rigid_tx.GetTranslation())
+    affine_tx = _run_stage(affine_init, None)
 
     if not enable_nonlinear:
         return sitk.Transform(affine_tx)
@@ -216,9 +224,14 @@ def register_to_template(
     registration.SetMetricSamplingPercentage(sampling_percentage)
     registration.SetInterpolator(sitk.sitkLinear)
 
-    registration.SetOptimizerAsLBFGSB(gradientConvergenceTolerance=1e-5, numberOfIterations=100, maximumNumberOfCorrections=5, maximumNumberOfFunctionEvaluations=500)
-    registration.SetShrinkFactorsPerLevel([2] * num_pyramid_levels)
-    registration.SetSmoothingSigmasPerLevel([1] * num_pyramid_levels)
+    registration.SetOptimizerAsLBFGSB(
+        gradientConvergenceTolerance=1e-5,
+        numberOfIterations=100,
+        maximumNumberOfCorrections=5,
+        maximumNumberOfFunctionEvaluations=500,
+    )
+    registration.SetShrinkFactorsPerLevel([4, 2, 1])
+    registration.SetSmoothingSigmasPerLevel([2, 1, 0])
     registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
 
     if fixed_mask is not None:
