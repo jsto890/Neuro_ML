@@ -485,7 +485,7 @@ def process_subject(
 
     # Save the pre-SUVR registered image
     # Post-registration template brain mask to clean background
-    registered_img = sitk.Mask(registered_img, tpl_mask)
+    # registered_img = sitk.Mask(registered_img, tpl_mask)
 
     # Save pre-SUVR registered image (on template grid)
     save_image(registered_img, out_pre)
