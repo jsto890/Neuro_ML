@@ -98,6 +98,8 @@ def _compute_mask_fraction(mask: sitk.Image) -> float:
 
 
 def create_brain_mask_otsu(image: sitk.Image) -> sitk.Image:
+    orig = image  # Save original for metadata
+
     # Ensure non-negative values for stable thresholding
     img_arr = sitk.GetArrayFromImage(image)
     min_intensity = float(np.nanmin(img_arr))
@@ -108,9 +110,9 @@ def create_brain_mask_otsu(image: sitk.Image) -> sitk.Image:
     img_arr = sitk.GetArrayFromImage(image)
     img_arr = np.nan_to_num(img_arr, nan=0.0, posinf=0.0, neginf=0.0)
     image = sitk.GetImageFromArray(img_arr)
-    image.CopyInformation(sitk.Cast(image, sitk.sitkFloat32))
+    image.CopyInformation(orig)  # Fix: copy from orig
 
-    mask = sitk.OtsuThreshold(image, 0, 1, numberOfHistogramBins=256)
+    mask = sitk.OtsuThreshold(image, 0, 1)  # Remove numberOfHistogramBins for compatibility
     mask = sitk.BinaryFillhole(mask)
     mask = sitk.BinaryMorphologicalClosing(mask, [2, 2, 2])
     mask = sitk.BinaryDilate(mask, [1, 1, 1])
@@ -127,6 +129,13 @@ def create_brain_mask_otsu(image: sitk.Image) -> sitk.Image:
         mask = sitk.BinaryErode(mask, [2, 2, 2])
         mask = _keep_largest_component(mask)
 
+    # Add fallback after frac checks
+    frac = _compute_mask_fraction(mask)
+    if frac < 0.01:
+        thr = np.percentile(img_arr[img_arr > 0], 70)
+        mask = sitk.Cast(sitk.BinaryThreshold(image, lowerThreshold=thr, upperThreshold=1e12, insideValue=1, outsideValue=0), sitk.sitkUInt8)
+        mask = _keep_largest_component(mask)
+
     return sitk.Cast(mask, sitk.sitkUInt8)
 
 
@@ -139,8 +148,9 @@ def register_to_template(
     fixed_template: sitk.Image,
     sampling_percentage: float = 0.2,
     num_pyramid_levels: int = 3,
-
     enable_nonlinear: bool = True,
+    fixed_mask: Optional[sitk.Image] = None,
+    moving_mask: Optional[sitk.Image] = None,
 ) -> sitk.Transform:
     """Multi-stage registration: rigid -> affine -> optional BSpline non-linear.
 
@@ -149,7 +159,7 @@ def register_to_template(
 
     def _run_stage(initial_tx: sitk.Transform, transform: sitk.Transform) -> sitk.Transform:
         registration = sitk.ImageRegistrationMethod()
-        registration.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
+        registration.SetMetricAsCorrelation()  # Swap from Mattes
         registration.SetMetricSamplingStrategy(registration.RANDOM)
         registration.SetMetricSamplingPercentage(sampling_percentage)
         registration.SetInterpolator(sitk.sitkLinear)
@@ -162,8 +172,8 @@ def register_to_template(
         )
         registration.SetOptimizerScalesFromPhysicalShift()
 
-        registration.SetShrinkFactorsPerLevel([2] * num_pyramid_levels)
-        registration.SetSmoothingSigmasPerLevel([1] * num_pyramid_levels)
+        registration.SetShrinkFactorsPerLevel([4, 2, 1])  # Stronger multi-res
+        registration.SetSmoothingSigmasPerLevel([2, 1, 0])
         registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
 
         registration.SetInitialTransform(initial_tx, inPlace=False)
@@ -197,7 +207,7 @@ def register_to_template(
     bspline_initial = sitk.BSplineTransformInitializer(image1=fixed_template, transformDomainMeshSize=mesh_size, order=3)
 
     registration = sitk.ImageRegistrationMethod()
-    registration.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
+    registration.SetMetricAsCorrelation()  # Swap from Mattes
     registration.SetMetricSamplingStrategy(registration.RANDOM)
     registration.SetMetricSamplingPercentage(sampling_percentage)
     registration.SetInterpolator(sitk.sitkLinear)
@@ -206,6 +216,11 @@ def register_to_template(
     registration.SetShrinkFactorsPerLevel([2] * num_pyramid_levels)
     registration.SetSmoothingSigmasPerLevel([1] * num_pyramid_levels)
     registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
+
+    if fixed_mask is not None:
+        registration.SetMetricFixedMask(fixed_mask)
+    if moving_mask is not None:
+        registration.SetMetricMovingMask(moving_mask)
 
     # Compose affine then bspline
     composite_init = sitk.Transform(affine_tx)
@@ -387,19 +402,25 @@ def process_subject(
     moving_img = sitk.ReadImage(str(subject_nii))
 
     # Optional light pre-smoothing to stabilize MI on noisy scans
-    moving_img = sitk.DiscreteGaussian(moving_img, variance=1.5)
+    sigma_mm = 3.0
+    moving_img = sitk.SmoothingRecursiveGaussian(moving_img, sigma_mm)  # Replace DiscreteGaussian
 
     # 1) Masking in native space
     brain_mask = create_brain_mask_otsu(moving_img)
     masked_img = apply_mask(moving_img, brain_mask)
 
     # 2) Register to template (rigid + affine) and resample to template grid
-    tx = register_to_template(masked_img, template_img, enable_nonlinear=enable_nonlinear)
+    tpl_mask = create_template_brain_mask(template_img)  # Move up before registration
+    tx = register_to_template(
+        masked_img, template_img,
+        enable_nonlinear=enable_nonlinear,
+        fixed_mask=tpl_mask,
+        moving_mask=brain_mask
+    )
     registered_img = resample_to_reference(masked_img, template_img, tx)
 
     # Save the pre-SUVR registered image
     # Post-registration template brain mask to clean background
-    tpl_mask = create_template_brain_mask(template_img)
     registered_img = sitk.Mask(registered_img, tpl_mask)
 
     # Optional final resampling to isotropic grid similar to template FOV
@@ -408,7 +429,7 @@ def process_subject(
 
     # 3) SUVR using occipital mask (robust by default)
     suvr_img = suvr_normalize(
-        registered_iso,
+        registered_img,
         occipital_mask_img,
         method=occipital_method,
         nonzero_only=occipital_nonzero_only,
@@ -421,7 +442,8 @@ def process_subject(
     suvr_img = clip_intensity(suvr_img, clip_lower, clip_upper if clip_upper is not None else (p99 if p99 else None))
 
     # 5) Save final
-    save_image(suvr_img, out_suvr)
+    suvr_iso = resample_to_iso_like_template(suvr_img, template_img, final_iso_mm)
+    save_image(suvr_iso, out_suvr)
 
     # Save transforms
     if save_transforms:
@@ -468,7 +490,7 @@ def process_subject(
 
     if save_qc:
         try:
-            save_qc_png(registered_iso, suvr_img, template_img, out_qc)
+            save_qc_png(registered_iso, suvr_iso, template_img, out_qc)
         except Exception:
             pass
 
