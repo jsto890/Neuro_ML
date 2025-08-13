@@ -715,9 +715,6 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     ema_shadow = None
     if use_ema:
         ema_shadow = {}
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                ema_shadow[name] = param.detach().clone()
 
     # SWA setup
     use_swa = bool(getattr(args, 'use_swa', False))
@@ -769,11 +766,15 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 optimizer.step()
                 scheduler.step()
 
-            # EMA update after optimizer step
+            # EMA update after optimizer step (handle dynamic-sized classifier)
             if use_ema and ema_shadow is not None:
                 with torch.no_grad():
                     for name, param in model.named_parameters():
-                        if param.requires_grad:
+                        if not param.requires_grad:
+                            continue
+                        if name not in ema_shadow or ema_shadow[name].shape != param.shape:
+                            ema_shadow[name] = param.detach().clone()
+                        else:
                             ema_shadow[name].mul_(ema_decay).add_(param.detach(), alpha=1.0 - ema_decay)
 
             # SWA update after warmup portion
