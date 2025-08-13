@@ -112,7 +112,11 @@ def create_brain_mask_otsu(image: sitk.Image) -> sitk.Image:
     image = sitk.GetImageFromArray(img_arr)
     image.CopyInformation(orig)  # Fix: copy from orig
 
-    mask = sitk.OtsuThreshold(image, 0, 1)  # Remove numberOfHistogramBins for compatibility
+    otsu = sitk.OtsuThresholdImageFilter()
+    otsu.SetNumberOfHistogramBins(256)
+    otsu.SetInsideValue(1)
+    otsu.SetOutsideValue(0)
+    mask = otsu.Execute(image)
     mask = sitk.BinaryFillhole(mask)
     mask = sitk.BinaryMorphologicalClosing(mask, [2, 2, 2])
     mask = sitk.BinaryDilate(mask, [1, 1, 1])
@@ -336,7 +340,11 @@ def save_image(img: sitk.Image, out_path: Path) -> None:
 
 def create_template_brain_mask(template_img: sitk.Image) -> sitk.Image:
     # Threshold template using Otsu to get brain-like region, then clean up
-    mask = sitk.OtsuThreshold(template_img, 0, 1, numberOfHistogramBins=128)
+    otsu = sitk.OtsuThresholdImageFilter()
+    otsu.SetNumberOfHistogramBins(128)
+    otsu.SetInsideValue(1)
+    otsu.SetOutsideValue(0)
+    mask = otsu.Execute(template_img)
     mask = sitk.BinaryFillhole(mask)
     mask = sitk.BinaryMorphologicalClosing(mask, [1, 1, 1])
     mask = _keep_largest_component(mask)
@@ -423,9 +431,8 @@ def process_subject(
     # Post-registration template brain mask to clean background
     registered_img = sitk.Mask(registered_img, tpl_mask)
 
-    # Optional final resampling to isotropic grid similar to template FOV
-    registered_iso = resample_to_iso_like_template(registered_img, template_img, final_iso_mm)
-    save_image(registered_iso, out_pre)
+    # Save pre-SUVR registered image (on template grid)
+    save_image(registered_img, out_pre)
 
     # 3) SUVR using occipital mask (robust by default)
     suvr_img = suvr_normalize(
@@ -460,11 +467,11 @@ def process_subject(
             pass
 
     # Compute QC metrics and save sidecar
-    ncc = compute_ncc(registered_iso, template_img)
+    ncc = compute_ncc(registered_img, template_img)
     brain_fraction = _compute_mask_fraction(tpl_mask)
     try:
         occ_stat_val = compute_occipital_stat(
-            registered_iso, occipital_mask_img, method=occipital_method, nonzero_only=occipital_nonzero_only
+            registered_img, occipital_mask_img, method=occipital_method, nonzero_only=occipital_nonzero_only
         )
     except Exception:
         occ_stat_val = None
@@ -490,7 +497,7 @@ def process_subject(
 
     if save_qc:
         try:
-            save_qc_png(registered_iso, suvr_iso, template_img, out_qc)
+            save_qc_png(registered_img, suvr_iso, template_img, out_qc)
         except Exception:
             pass
 
