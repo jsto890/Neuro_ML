@@ -886,13 +886,18 @@ def main():
                     qc_stats["qc_registration_pass"] = ""
 
                 try:
-                    qc_stats["qc_reference_mean"] = ref_mean
+                    chosen_stat = str(qc_stats.get("suvr_ref_stat", "mean"))
+                    # value actually used for SUVR scaling
+                    ref_val = float(qc_stats.get("reference_mean", float("nan")))
+                    if chosen_stat == "median":
+                        ref_val = float(qc_stats.get("reference_median", float("nan")))
+                    qc_stats["qc_reference_value"] = ref_val
                     # flag if <= 5th percentile of brain intensities
                     frw_img = nib.load(str(fullres_warped_path))
                     m = (resample_from_to(brain_img, frw_img, order=0).get_fdata() > 0)
                     vals = frw_img.get_fdata()[m]
                     p5 = float(np.percentile(vals, 5)) if vals.size > 0 else 0.0
-                    qc_stats["qc_reference_pass"] = (ref_mean is not None) and (ref_mean > 0) and (ref_mean > p5)
+                    qc_stats["qc_reference_pass"] = np.isfinite(ref_val) and (ref_val > 0) and (ref_val > p5)
                 except Exception:
                     qc_stats["qc_reference_pass"] = ""
 
@@ -926,7 +931,10 @@ def main():
                         "brain_mask_path": str(brain_mask_path),
                         "cerebellum_mask_path": str(args.cerebellum_mask) if args.cerebellum_mask else None,
                         "suvr_reference": qc_stats.get("suvr_reference", None),
-                        "reference_mean": ref_mean,
+                        "suvr_ref_stat": qc_stats.get("suvr_ref_stat", None),
+                        "reference_mean": qc_stats.get("reference_mean", None),
+                        "reference_median": qc_stats.get("reference_median", None),
+                        "reference_value": qc_stats.get("qc_reference_value", None),
                         "smoothing_fwhm": qc_stats.get("smoothing_fwhm", 0.0),
                         "presmooth_fwhm": float(args.presmooth_fwhm),
                         "transforms": {
