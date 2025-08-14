@@ -513,18 +513,43 @@ def main():
         cohort_name = cohort_dir.name
         logging.info(f"Processing cohort: {cohort_name}")
 
-        for subject_dir in sorted(cohort_dir.iterdir()):
+        # Handle nested directory structure (ADNI/AD/sub-xxx vs direct ADNI/sub-xxx)
+        all_subject_dirs = []
+        for item in sorted(cohort_dir.iterdir()):
+            if not item.is_dir():
+                continue
+            # Check if this directory contains .nii files (subject dir) or subdirectories (group dir)
+            nii_files = list(item.glob("*.nii*"))
+            if nii_files:
+                # This is a subject directory
+                all_subject_dirs.append(item)
+            else:
+                # This might be a group directory, check for subdirectories
+                for subitem in item.iterdir():
+                    if subitem.is_dir():
+                        all_subject_dirs.append(subitem)
+        
+        for subject_dir in all_subject_dirs:
             if not subject_dir.is_dir():
                 continue
             sub_id = subject_dir.name
             logging.info(f"--- Subject: {sub_id} ---")
 
-            # 7.1. Locate the single <sub-ID>.nii file in subject_dir
+            # 7.1. Locate .nii file in subject_dir (flexible pattern matching)
             raw_candidates = list(subject_dir.glob(f"{sub_id}.nii*"))
             if len(raw_candidates) == 0:
-                logging.error(f"[{sub_id}] No {sub_id}.nii file found; skipping.")
+                # Try any .nii file, but filter out processed files
+                all_nii = list(subject_dir.glob("*.nii*"))
+                raw_candidates = [f for f in all_nii if not any(x in f.name.lower() for x in ['static', 'warped', 'reg_', 'low_'])]
+            
+            if len(raw_candidates) == 0:
+                logging.error(f"[{sub_id}] No suitable .nii file found; skipping.")
                 continue
+            elif len(raw_candidates) > 1:
+                logging.warning(f"[{sub_id}] Multiple .nii files found, using: {raw_candidates[0].name}")
+            
             raw_nifti = raw_candidates[0]
+            logging.info(f"[{sub_id}] Processing file: {raw_nifti.name}")
 
             # 7.2. Create output subject directory
             out_sub_dir = args.output_root / cohort_name / sub_id
