@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pure_pet_standardise.py (saved as 04JUNE.py)
+pure_pet_standardise.py
 
 Automatically preprocess raw 4D/3D amyloid PET scans from ADNI:
  1. Locate the single <sub-ID>.nii (4D or 3D) in each subject folder.
@@ -443,14 +443,14 @@ def main():
             logging.info("Using TemplateFlow brain mask: %s", brain_mask_path)
         except Exception as e:
             logging.error("TemplateFlow fetch failed: %s", e)
-        sys.exit(1)
+            sys.exit(1)
     else:
         if not args.lowres_template or not args.lowres_template.is_file():
             logging.error("Low-res template not found or not provided. Provide --lowres_template or use --use_templateflow.")
-        sys.exit(1)
+            sys.exit(1)
         if not args.brain_mask_template or not args.brain_mask_template.is_file():
             logging.error("Brain mask template not found or not provided. Provide --brain_mask_template or use --use_templateflow.")
-        sys.exit(1)
+            sys.exit(1)
         template_path = args.lowres_template
         brain_mask_path = args.brain_mask_template
 
