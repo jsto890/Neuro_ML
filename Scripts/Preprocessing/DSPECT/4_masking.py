@@ -11,94 +11,80 @@ print("Hello World! Step 4 brain masking script starting...")
 
 def fix_path(path):
     """Convert config path to actual mounted path"""
-    # Since we're running from inside the research drive, just expand ~
     return os.path.expanduser(path)
 
-# Set up argument parser
-parser = argparse.ArgumentParser(description="Apply brain mask to registered SPECT images.")
+parser = argparse.ArgumentParser(description="Apply SPECT-specific brain mask to registered SPECT images.")
 parser.add_argument("--diagnosis", type=str, choices=['CN', 'PD'], required=True, 
                     help="Diagnosis group to process (CN or PD)")
 args = parser.parse_args()
 
-# Load config
-with open('config.yaml', 'r') as f:
+# Find config file in project root
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(script_dir, '..', '..', '..'))
+config_path = os.path.join(project_root, 'config.yaml')
+
+with open(config_path, 'r') as f:
     config = yaml.safe_load(f)
 
-# === CONFIG ===
 input_dir = os.path.join(fix_path(config['preprocessed_data']['spect_p']), 'registered', args.diagnosis)
-brain_mask_path = fix_path(config['templates']['MRI_brain_mask'])
+spect_mask_path = fix_path(config['templates']['SPECT_occipital'])
 output_base = os.path.join(fix_path(config['preprocessed_data']['spect_p']), 'masked', args.diagnosis)
 
 print(f"\n🔄 Processing {args.diagnosis} subjects")
 print(f"📁 Input directory: {input_dir}")
 print(f"📁 Output directory: {output_base}")
-print(f"🎭 Brain mask: {brain_mask_path}\n")
+print(f"🎭 SPECT mask: {spect_mask_path}\n")
 
-# === HELPERS ===
-def apply_brain_mask(image_path, mask_path, output_path):
-    """Apply brain mask to image and save masked result"""
-    # Load image and mask
+def apply_spect_mask(image_path, mask_path, output_path):
+    """Apply SPECT-specific mask to image and save masked result"""
     img = load_img(image_path)
     mask = load_img(mask_path)
     
-    # Resample mask to match image dimensions
     mask_resampled = resample_to_img(mask, img, interpolation='nearest')
     
-    # Get data arrays
     img_data = img.get_fdata()
     mask_data = mask_resampled.get_fdata()
     
-    # Apply mask (multiply image by binary mask)
-    masked_data = img_data * mask_data
+    masked_data = img_data * (mask_data > 0)
     
-    # Create new image with masked data
     masked_img = nib.Nifti1Image(masked_data, img.affine, img.header)
-    
-    # Save masked image
     masked_img.to_filename(output_path)
     
     return masked_data
 
-# === RUN ===
 subject_dirs = [d for d in os.listdir(input_dir) if d.startswith("sub-")]
-
 failed_subjects = []
 
 for subject_id in subject_dirs:
     if subject_id.startswith("._") or subject_id == ".DS_Store":
-        continue  # skip macOS junk
+        continue
 
     print(f"\n🔄 Masking {subject_id}")
     subj_input_dir = os.path.join(input_dir, subject_id)
     output_dir = os.path.join(output_base, subject_id)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    # Copy ALL JSON files
     for fname in os.listdir(subj_input_dir):
         if fname.endswith(".json") and not fname.startswith("._"):
             shutil.copy(os.path.join(subj_input_dir, fname), os.path.join(output_dir, fname))
 
-    # Proceed with masking
     input_nii = os.path.join(subj_input_dir, f"{subject_id}_registered.nii.gz")
     output_nii = os.path.join(output_dir, f"{subject_id}_masked.nii.gz")
 
     try:
-        # Apply brain mask
-        masked_data = apply_brain_mask(input_nii, brain_mask_path, output_nii)
+        masked_data = apply_spect_mask(input_nii, spect_mask_path, output_nii)
         
-        # Calculate some statistics
         non_zero_voxels = np.count_nonzero(masked_data)
         total_voxels = masked_data.size
         brain_coverage = (non_zero_voxels / total_voxels) * 100
         
         print(f"✅ Saved: {output_nii}")
-        print(f"📊 Brain coverage: {brain_coverage:.2f}% ({non_zero_voxels:,} voxels)")
+        print(f"📊 SPECT coverage: {brain_coverage:.2f}% ({non_zero_voxels:,} voxels)")
 
     except Exception as e:
         print(f"❌ Error for {subject_id}: {e}")
         failed_subjects.append(subject_id)
 
-# === SUMMARY ===
 if failed_subjects:
     print("\n======================")
     print("❌ FAILED SUBJECTS")

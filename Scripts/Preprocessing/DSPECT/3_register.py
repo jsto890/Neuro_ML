@@ -12,7 +12,6 @@ print("Hello World! Step 3 registration script starting...")
 
 def fix_path(path):
     """Convert config path to actual mounted path"""
-    # Since we're running from inside the research drive, just expand ~
     return os.path.expanduser(path)
 
 # Set up argument parser
@@ -21,8 +20,13 @@ parser.add_argument("--diagnosis", type=str, choices=['CN', 'PD'], required=True
                     help="Diagnosis group to process (CN or PD)")
 args = parser.parse_args()
 
+# Find config file in project root
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(script_dir, '..', '..', '..'))
+config_path = os.path.join(project_root, 'config.yaml')
+
 # Load config
-with open('config.yaml', 'r') as f:
+with open(config_path, 'r') as f:
     config = yaml.safe_load(f)
 
 # === CONFIG ===

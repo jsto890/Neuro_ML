@@ -18,8 +18,13 @@ parser.add_argument("--shape", type=int, nargs=3, default=[91, 109, 91], help="T
 parser.add_argument("--intensity_norm", action="store_true", help="Apply zero-mean, unit-variance normalisation (default: off)")
 args = parser.parse_args()
 
+# Find config file in project root
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(script_dir, '..', '..', '..'))
+config_path = os.path.join(project_root, 'config.yaml')
+
 # --- Load config ---
-with open('config.yaml', 'r') as f:
+with open(config_path, 'r') as f:
     config = yaml.safe_load(f)
 
 input_dir = os.path.join(fix_path(config['preprocessed_data']['spect_p']), 'masked', args.diagnosis)

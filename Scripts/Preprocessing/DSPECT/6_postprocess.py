@@ -26,7 +26,12 @@ def full_path(path):
         return os.path.join(base_dir, os.path.relpath(os.path.expanduser(path), start=os.path.expanduser('~/reseng202500013-ndd-ml')))
     return path
 
-with open('config.yaml', 'r') as f:
+# Find config file in project root
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(script_dir, '..', '..', '..'))
+config_path = os.path.join(project_root, 'config.yaml')
+
+with open(config_path, 'r') as f:
     config = yaml.safe_load(f)
 
 input_dir = os.path.join(full_path(config['preprocessed_data']['spect_p']), 'finalised', args.diagnosis)

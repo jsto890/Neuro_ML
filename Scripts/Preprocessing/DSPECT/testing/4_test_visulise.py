@@ -2,9 +2,10 @@ import nibabel as nib
 import matplotlib.pyplot as plt
 import os
 import argparse
+import numpy as np
 
 # --- Argument Parser ---
-parser = argparse.ArgumentParser(description="Test script for brain masking visualization.")
+parser = argparse.ArgumentParser(description="Test script for SPECT brain masking visualization.")
 parser.add_argument("--isHasel", action="store_true", help="Set this flag if running on the Hasel server.")
 args = parser.parse_args()
 
@@ -49,19 +50,44 @@ try:
     z_index = before_data.shape[2] // 2  # Middle slice
 
     # === Plot ===
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
 
-    ax1.imshow(before_data[:, :, z_index].T, cmap='gray', origin='lower')
+    vmin, vmax = np.percentile(before_data[before_data > 0], [5, 95])
+
+    ax1.imshow(before_data[:, :, z_index].T, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
     ax1.set_title("Before Masking")
     ax1.axis("off")
 
-    ax2.imshow(after_data[:, :, z_index].T, cmap='gray', origin='lower')
+    ax2.imshow(after_data[:, :, z_index].T, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
     ax2.set_title("After Masking")
     ax2.axis("off")
 
-    fig.suptitle(f"Brain Masking Quality Check: {subject_id}")
+    ax3.hist(before_data[before_data > 0].flatten(), bins=50, alpha=0.7, label='Before')
+    ax3.hist(after_data[after_data > 0].flatten(), bins=50, alpha=0.7, label='After')
+    ax3.set_xlabel('Intensity')
+    ax3.set_ylabel('Frequency')
+    ax3.legend()
+    ax3.set_title('Intensity Distribution')
+
+    before_coverage = np.count_nonzero(before_data) / before_data.size * 100
+    after_coverage = np.count_nonzero(after_data) / after_data.size * 100
+    
+    ax4.text(0.1, 0.8, f'Before masking: {before_coverage:.2f}%', fontsize=12)
+    ax4.text(0.1, 0.6, f'After masking: {after_coverage:.2f}%', fontsize=12)
+    ax4.text(0.1, 0.4, f'Reduction: {before_coverage - after_coverage:.2f}%', fontsize=12)
+    ax4.text(0.1, 0.2, f'Non-zero voxels: {np.count_nonzero(after_data):,}', fontsize=12)
+    ax4.axis('off')
+    ax4.set_title('Masking Statistics')
+
+    fig.suptitle(f"SPECT Masking Quality Check: {subject_id}")
     plt.tight_layout()
     plt.show()
+
+    print(f"\n✅ Masking validation:")
+    if after_coverage < before_coverage and after_coverage > 5:
+        print("   ✓ Masking appears successful")
+    else:
+        print("   ⚠️ Masking results may need review")
 
 except FileNotFoundError as e:
     print(f"\n❌ File not found: {e}")

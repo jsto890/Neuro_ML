@@ -41,14 +41,29 @@ reoriented_path = os.path.join(reoriented_base_dir, subject_id, f"{subject_id}_R
 # --- Run Test ---
 try:
     if not os.path.exists(raw_path):
-        # Some subjects might be .nii.gz
         raw_path = os.path.join(data_root, "data/raw/SPECT/PPMI/CN", subject_id, f"{subject_id}.nii.gz")
+
+    if not os.path.exists(raw_path):
+        print(f"❌ Raw file not found: {raw_path}")
+        print("Raw data may be on external drive. Checking external drive...")
+        
+        external_raw_path = os.path.join('/Volumes/reseng202500013-ndd-ml', "data/raw/SPECT/PPMI/CN", subject_id, f"{subject_id}.nii")
+        if not os.path.exists(external_raw_path):
+            external_raw_path = os.path.join('/Volumes/reseng202500013-ndd-ml', "data/raw/SPECT/PPMI/CN", subject_id, f"{subject_id}.nii.gz")
+        
+        if os.path.exists(external_raw_path):
+            raw_path = external_raw_path
+            print(f"✅ Found raw data on external drive: {raw_path}")
+        else:
+            print(f"❌ Raw data not found on external drive either: {external_raw_path}")
+            exit(1)
 
     orig = nib.load(raw_path)
     reoriented = nib.load(reoriented_path)
 
     print("Original orientation:", aff2axcodes(orig.affine))
     print("Reoriented orientation:", aff2axcodes(reoriented.affine))
+    print("✅ Reorientation test passed!")
 
 except FileNotFoundError as e:
     print(f"\n❌ File not found: {e}")

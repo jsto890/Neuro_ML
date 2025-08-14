@@ -4,10 +4,10 @@ from nibabel.orientations import axcodes2ornt, ornt_transform, io_orientation
 import argparse
 import shutil
 import yaml
+import numpy as np
 
 def fix_path(path):
     """Convert config path to actual mounted path"""
-    # Since we're running from inside the research drive, just expand ~
     return os.path.expanduser(path)
 
 # Set up argument parser
@@ -17,8 +17,13 @@ parser.add_argument("--diagnosis", type=str, choices=['CN', 'PD'], required=True
                     help="Diagnosis group to process (CN or PD)")
 args = parser.parse_args()
 
+# Find config file in project root
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(script_dir, '..', '..', '..'))
+config_path = os.path.join(project_root, 'config.yaml')
+
 # Load config
-with open('config.yaml', 'r') as f:
+with open(config_path, 'r') as f:
     config = yaml.safe_load(f)
 
 # Define input and output directories
@@ -27,6 +32,7 @@ input_dir = os.path.join(root_dir, "PPMI", args.diagnosis)
 output_dir = os.path.join(fix_path(config['preprocessed_data']['spect_p']), "reoriented", args.diagnosis)
 
 print("\n=== Path Configuration ===")
+print(f"Config file: {config_path}")
 print(f"Config SPECT path: {config['raw_data']['spect']}")
 print(f"Root directory: {root_dir}")
 print(f"Input directory: {input_dir}")
@@ -59,20 +65,46 @@ def reorient_to_RAS(nifti_path, output_path):
 
     if orig_ornt_codes != target_ornt_codes:
         print("Reorienting to RAS...")
+        
+        # Get current and target orientations
         current_ornt = io_orientation(affine)
         target_ornt = axcodes2ornt(target_ornt_codes)
+        
+        # Calculate the transformation
         transform = ornt_transform(current_ornt, target_ornt)
-        data = nib.orientations.apply_orientation(data, transform)
+        
+        # Use nibabel's built-in reorientation which handles affine correctly
+        reoriented_img = nib.as_closest_canonical(img)
+        data = reoriented_img.get_fdata()
+        new_affine = reoriented_img.affine
+        
+        # Resample to isotropic 1mm voxels to avoid visual distortion
+        from nilearn.image import resample_img
+        target_affine = np.eye(4)
+        target_affine[0,0] = 1  # 1mm voxel size
+        target_affine[1,1] = 1
+        target_affine[2,2] = 1
+        # Preserve center
+        center = np.dot(new_affine, np.array(data.shape + (1,)) / 2)[:3]
+        target_affine[:3,3] = center - np.dot(target_affine[:3,:3], np.array(reoriented_img.shape) / 2)
+        reoriented_img = resample_img(reoriented_img, target_affine=target_affine, interpolation='continuous')
+        data = reoriented_img.get_fdata()
+        new_affine = reoriented_img.affine
+        
         print("New data shape after reorient:", data.shape)
-        # affine is unchanged here!
+        print("New affine matrix:")
+        print(new_affine)
     else:
         print("Image is already RAS. No reorientation needed.")
+        new_affine = affine
 
     # Always print final orientation codes
+    final_ornt_codes = nib.orientations.aff2axcodes(new_affine)
+    print("Final orientation codes:", final_ornt_codes)
     print("Final data shape:", data.shape)
     print("--- End Debug ---\n")
 
-    reoriented_img = nib.Nifti1Image(data, affine)
+    reoriented_img = nib.Nifti1Image(data, new_affine)
     nib.save(reoriented_img, output_path)
 
     # Copy matching JSON file if it exists
