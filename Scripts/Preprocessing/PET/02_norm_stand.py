@@ -412,6 +412,13 @@ def main():
         action="store_true",
         help="Write a per-subject JSON provenance manifest next to outputs."
     )
+    parser.add_argument(
+        "--suvr_ref_stat",
+        type=str,
+        choices=["mean", "median"],
+        default="mean",
+        help="Statistic to use for SUVR reference (mean or median) for cerebellum/global. Default: mean."
+    )
     args = parser.parse_args()
 
     # 2. Configure logging
@@ -701,21 +708,32 @@ def main():
                 brain_mask = (brain_mask_img.get_fdata() > 0)
 
                 suvr_reference = "cerebellum" if cereb_img is not None else "global"
-                ref_mean = None
+                ref_values = None
+                # Prefer cerebellum reference if available and aligned
                 if cereb_img is not None and ensure_matched_affine_and_shape(fullres_warped_img, cereb_img):
                     cereb_array = (cereb_img.get_fdata(dtype=np.float32) > 0)
                     if np.any(cereb_array):
                         ref_values = frw_data[cereb_array]
-                        ref_mean = float(np.mean(ref_values))
                     else:
                         suvr_reference = "global"
-                if ref_mean is None or np.isnan(ref_mean) or ref_mean <= 0:
-                    # Fallback to global brain mean
+                # Fallback to global brain reference
+                if ref_values is None:
                     ref_values = frw_data[brain_mask]
-                    ref_mean = float(np.mean(ref_values))
                     suvr_reference = "global"
 
-                suvr_array = frw_data / (ref_mean + 1e-8)
+                ref_mean_val = float(np.mean(ref_values)) if ref_values.size > 0 else float("nan")
+                ref_median_val = float(np.median(ref_values)) if ref_values.size > 0 else float("nan")
+                chosen_stat = args.suvr_ref_stat if hasattr(args, "suvr_ref_stat") else "mean"
+                ref_value = ref_mean_val if chosen_stat == "mean" else ref_median_val
+                # Guard against non-finite/zero reference
+                if not np.isfinite(ref_value) or ref_value <= 0:
+                    ref_values = frw_data[brain_mask]
+                    ref_mean_val = float(np.mean(ref_values)) if ref_values.size > 0 else float("nan")
+                    ref_median_val = float(np.median(ref_values)) if ref_values.size > 0 else float("nan")
+                    ref_value = ref_mean_val if chosen_stat == "mean" else ref_median_val
+                    suvr_reference = "global"
+
+                suvr_array = frw_data / (ref_value + 1e-8)
                 suvr_img = nib.Nifti1Image(suvr_array, fullres_warped_img.affine, fullres_warped_img.header)
                 nib.save(suvr_img, str(suvr_path))
                 if not suvr_path.is_file():
@@ -733,6 +751,9 @@ def main():
                 logging.debug(f"[{sub_id}] SUVR stats: {stats}")
                 qc_stats["registration_method"] = used_method
                 qc_stats["suvr_reference"] = suvr_reference
+                qc_stats["suvr_ref_stat"] = chosen_stat
+                qc_stats["reference_mean"] = ref_mean_val
+                qc_stats["reference_median"] = ref_median_val
             except Exception as e:
                 logging.error(f"[{sub_id}] Error during SUVR computation: {e}")
                 qc_stats["crop_status"] = "SUVR_ERROR"
