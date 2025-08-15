@@ -425,6 +425,11 @@ def main():
         help="Skip COM-based cropping; keep outputs at template resolution."
     )
     parser.add_argument(
+        "--skip_if_exists",
+        action="store_true",
+        help="Skip a subject if its expected final output already exists (e.g., SUVR_s{int(smooth_fwhm)}.nii.gz when smoothing>0, otherwise SUVR.nii.gz)."
+    )
+    parser.add_argument(
         "--subjects",
         nargs="*",
         default=None,
@@ -630,6 +635,15 @@ def main():
                 logging.info(f"[{sub_id}] --overwrite set: removing existing {out_sub_dir}")
                 shutil.rmtree(out_sub_dir, ignore_errors=True)
             out_sub_dir.mkdir(parents=True, exist_ok=True)
+
+            # Optionally skip if final output already exists
+            if args.skip_if_exists:
+                expected = out_sub_dir / (f"{sub_id}_SUVR_s{int(round(args.smooth_fwhm))}.nii.gz" if (args.smooth_fwhm and args.smooth_fwhm>0) else f"{sub_id}_SUVR.nii.gz")
+                if expected.exists():
+                    logging.info(f"[{sub_id}] Skipping (final output exists): {expected}")
+                    # mark as success to advance progress
+                    set_subject_status(cohort_name, group_name, sub_id, "SUCCESS")
+                    continue
 
             # Initialize QC dict
             qc_stats = {key: "" for key in qc_header}
@@ -1056,9 +1070,6 @@ def main():
                 write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
                 write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
                 logging.info(f"[{sub_id}] QC stats written (status: {qc_stats['crop_status']})")
-                # mark completion
-                if qc_stats.get("crop_status") in ("SUCCESS", "SKIPPED"):
-                    set_subject_status(cohort_name, group_name, sub_id, "SUCCESS")
             except Exception as e:
                 logging.error(f"[{sub_id}] Failed to write QC CSV: {e}")
 
