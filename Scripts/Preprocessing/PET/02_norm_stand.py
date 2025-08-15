@@ -419,6 +419,22 @@ def main():
         default="mean",
         help="Statistic to use for SUVR reference (mean or median) for cerebellum/global. Default: mean."
     )
+    parser.add_argument(
+        "--skip_cropping",
+        action="store_true",
+        help="Skip COM-based cropping; keep outputs at template resolution."
+    )
+    parser.add_argument(
+        "--subjects",
+        nargs="*",
+        default=None,
+        help="Optional list of subject directory names to process (e.g., sub-XXX ...). If omitted, process all."
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="If set, delete any existing output subject folder before processing to avoid using stale intermediates."
+    )
     args = parser.parse_args()
 
     # 2. Configure logging
@@ -540,6 +556,8 @@ def main():
             if not subject_dir.is_dir():
                 continue
             sub_id = subject_dir.name
+            if args.subjects and sub_id not in set(args.subjects):
+                continue
             logging.info(f"--- Subject: {sub_id} ---")
 
             # 7.1. Locate .nii file in subject_dir (flexible pattern matching)
@@ -560,6 +578,9 @@ def main():
 
             # 7.2. Create output subject directory
             out_sub_dir = args.output_root / cohort_name / sub_id
+            if args.overwrite and out_sub_dir.exists():
+                logging.info(f"[{sub_id}] --overwrite set: removing existing {out_sub_dir}")
+                shutil.rmtree(out_sub_dir, ignore_errors=True)
             out_sub_dir.mkdir(parents=True, exist_ok=True)
 
             # Initialize QC dict
@@ -801,9 +822,13 @@ def main():
                 logging.warning(f"[{sub_id}] Smoothing/Z-score step failed: {e}")
 
             # ---------------------
-            # STEP 7: Robust subject-based crop & affine update (unchanged)
+            # STEP 7: Robust subject-based crop & affine update (optional)
             # ---------------------
             try:
+                if args.skip_cropping:
+                    logging.info(f"[{sub_id}] Skipping cropping (keeping template resolution)")
+                    qc_stats["crop_status"] = "SKIPPED"
+                    raise RuntimeError("CROP_SKIPPED")
                 logging.info(f"[{sub_id}] Robust cropping/padding around subject COM to {tuple(args.crop_dims)}")
 
                 # 5.1 load SUVR
@@ -862,8 +887,11 @@ def main():
                 logging.info(f"[{sub_id}] Cropping/padding successful")
 
             except Exception as e:
-                logging.error(f"[{sub_id}] Error during cropping/padding: {e}")
-                qc_stats["crop_status"] = "CROP_ERROR"
+                if str(e) == "CROP_SKIPPED":
+                    pass
+                else:
+                    logging.error(f"[{sub_id}] Error during cropping/padding: {e}")
+                    qc_stats["crop_status"] = "CROP_ERROR"
 
             # ---------------------
             # STEP 8: Compute QC gates and write QC Stats & Manifest
