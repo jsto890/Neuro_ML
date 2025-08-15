@@ -1056,6 +1056,9 @@ def main():
                 write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
                 write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
                 logging.info(f"[{sub_id}] QC stats written (status: {qc_stats['crop_status']})")
+                # mark completion
+                if qc_stats.get("crop_status") in ("SUCCESS", "SKIPPED"):
+                    set_subject_status(cohort_name, group_name, sub_id, "SUCCESS")
             except Exception as e:
                 logging.error(f"[{sub_id}] Failed to write QC CSV: {e}")
 
