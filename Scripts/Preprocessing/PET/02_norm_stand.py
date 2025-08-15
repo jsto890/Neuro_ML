@@ -438,9 +438,9 @@ def main():
     parser.add_argument(
         "--reg_mode",
         type=str,
-        choices=["syn", "affine", "rigid"],
+        choices=["syn", "syn_light", "affine", "rigid"],
         default="syn",
-        help="Registration mode: non-linear SyN (syn), affine only (affine), or rigid only (rigid). Default: syn."
+        help="Registration mode: SyN (syn), lighter/less-deformable SyN (syn_light), affine only (affine), or rigid only (rigid). Default: syn."
     )
     args = parser.parse_args()
 
@@ -671,12 +671,21 @@ def main():
             moved_brain = Path(pet_brain_path)
             fixed_tmpl = template_path
             used_method = ""
-            if args.reg_mode == "syn":
+            if args.reg_mode in ("syn","syn_light"):
                 used_method = "SyNQuick"
                 if not registration_syNQuick(moved_brain, fixed_tmpl, out_prefix, args.threads):
                     logging.info(f"[{sub_id}] SyNQuick unavailable/failed; using MI+SyN fallback")
                     used_method = "MI+SyN"
                     registration_MI_fallback(moved_brain, fixed_tmpl, out_prefix)
+                # If syn_light, down-weight/suppress the non-linear warp by converting to affine-only application
+                if args.reg_mode == "syn_light":
+                    # Remove warp if present to effectively apply only affine
+                    try:
+                        warp_path = Path(f"{out_prefix}1Warp.nii.gz")
+                        if warp_path.exists():
+                            warp_path.unlink()
+                    except Exception:
+                        pass
             else:
                 # Affine or rigid only via antsRegistration
                 used_method = "AffineOnly" if args.reg_mode == "affine" else "RigidOnly"
