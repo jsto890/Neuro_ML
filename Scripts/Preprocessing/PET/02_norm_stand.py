@@ -458,6 +458,40 @@ def main():
     os.environ["OMP_NUM_THREADS"] = str(args.threads)
     os.environ["MKL_NUM_THREADS"] = str(args.threads)
 
+    # Helper: progress tracking utilities
+    def render_bar(completed: int, total: int, width: int = 24) -> str:
+        total = max(total, 1)
+        k = int(width * completed / total)
+        return "[" + ("#" * k) + ("." * (width - k)) + "]"
+
+    progress = {}
+    def write_progress_file():
+        try:
+            out_path = args.output_root / "progress.json"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "w") as f:
+                json.dump(progress, f, indent=2)
+        except Exception:
+            pass
+
+    def set_subject_status(cohort: str, group: str, subject: str, status: str):
+        grp = progress.setdefault(cohort, {}).setdefault(group, {
+            "total": 0, "completed": 0, "success": 0, "error": 0, "subjects": {}
+        })
+        prev = grp["subjects"].get(subject, {}).get("status")
+        if prev in ("SUCCESS", "ERROR"):
+            return
+        grp["subjects"][subject] = {"status": status}
+        if status in ("SUCCESS", "ERROR"):
+            grp["completed"] += 1
+            if status == "SUCCESS":
+                grp["success"] += 1
+            else:
+                grp["error"] += 1
+        write_progress_file()
+        # log concise progress line
+        logging.info(f"Progress [{cohort}/{group}] {render_bar(grp['completed'], grp['total'])} {grp['completed']}/{grp['total']} ok:{grp['success']} err:{grp['error']}")
+
     # 4. Validate / resolve templates
     if not args.input_root.is_dir():
         logging.error(f"Input root not found: {args.input_root}")
@@ -553,11 +587,16 @@ def main():
             if nii_files:
                 # This is a subject directory
                 all_subject_dirs.append(item)
+                grp = progress.setdefault(cohort_name, {}).setdefault("subjects", {"total": 0, "completed": 0, "success": 0, "error": 0, "subjects": {}})
+                grp["total"] += 1
             else:
                 # This might be a group directory, check for subdirectories
                 for subitem in item.iterdir():
                     if subitem.is_dir():
                         all_subject_dirs.append(subitem)
+                        grp = progress.setdefault(cohort_name, {}).setdefault(item.name, {"total": 0, "completed": 0, "success": 0, "error": 0, "subjects": {}})
+                        grp["total"] += 1
+        write_progress_file()
         
         for subject_dir in all_subject_dirs:
             if not subject_dir.is_dir():
@@ -566,7 +605,9 @@ def main():
             if args.subjects and sub_id not in set(args.subjects):
                 continue
             logging.info(f"--- Subject: {sub_id} ---")
-
+            # infer group for progress accounting
+            group_name = subject_dir.parent.name if subject_dir.parent != cohort_dir else "subjects"
+            set_subject_status(cohort_name, group_name, sub_id, "RUNNING")
             # 7.1. Locate .nii file in subject_dir (flexible pattern matching)
             raw_candidates = list(subject_dir.glob(f"{sub_id}.nii*"))
             if len(raw_candidates) == 0:
@@ -616,6 +657,7 @@ def main():
                 qc_stats["crop_status"] = "STATIC_ERROR"
                 write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
                 write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
+                set_subject_status(cohort_name, group_name, sub_id, "ERROR")
                 continue
 
             # ---------------------
@@ -730,6 +772,7 @@ def main():
                 qc_stats["crop_status"] = "REGISTRATION_ERROR"
                 write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
                 write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
+                set_subject_status(cohort_name, group_name, sub_id, "ERROR")
                 continue
 
             # ---------------------
@@ -773,12 +816,14 @@ def main():
                 qc_stats["crop_status"] = "APPLY_TRANSFORMS_ERROR"
                 write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
                 write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
+                set_subject_status(cohort_name, group_name, sub_id, "ERROR")
                 continue
             except Exception as e:
                 logging.error(f"[{sub_id}] Error during full-res apply: {e}")
                 qc_stats["crop_status"] = "APPLY_TRANSFORMS_ERROR"
                 write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
                 write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
+                set_subject_status(cohort_name, group_name, sub_id, "ERROR")
                 continue
 
             # ---------------------
@@ -844,6 +889,7 @@ def main():
                 qc_stats["crop_status"] = "SUVR_ERROR"
                 write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
                 write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
+                set_subject_status(cohort_name, group_name, sub_id, "ERROR")
                 continue
             
             # ---------------------
