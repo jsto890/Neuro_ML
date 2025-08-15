@@ -435,6 +435,13 @@ def main():
         action="store_true",
         help="If set, delete any existing output subject folder before processing to avoid using stale intermediates."
     )
+    parser.add_argument(
+        "--reg_mode",
+        type=str,
+        choices=["syn", "affine", "rigid"],
+        default="syn",
+        help="Registration mode: non-linear SyN (syn), affine only (affine), or rigid only (rigid). Default: syn."
+    )
     args = parser.parse_args()
 
     # 2. Configure logging
@@ -663,16 +670,53 @@ def main():
 
             moved_brain = Path(pet_brain_path)
             fixed_tmpl = template_path
-            used_method = "SyNQuick"
-            if not registration_syNQuick(moved_brain, fixed_tmpl, out_prefix, args.threads):
-                logging.info(f"[{sub_id}] SyNQuick unavailable/failed; using MI+SyN fallback")
-                used_method = "MI+SyN"
-                registration_MI_fallback(moved_brain, fixed_tmpl, out_prefix)
+            used_method = ""
+            if args.reg_mode == "syn":
+                used_method = "SyNQuick"
+                if not registration_syNQuick(moved_brain, fixed_tmpl, out_prefix, args.threads):
+                    logging.info(f"[{sub_id}] SyNQuick unavailable/failed; using MI+SyN fallback")
+                    used_method = "MI+SyN"
+                    registration_MI_fallback(moved_brain, fixed_tmpl, out_prefix)
+            else:
+                # Affine or rigid only via antsRegistration
+                used_method = "AffineOnly" if args.reg_mode == "affine" else "RigidOnly"
+                reg_cmd = [
+                    "antsRegistration","--dimensionality","3","--float","1",
+                    "--output", f"[{out_prefix},{out_prefix}Warped.nii.gz]",
+                    "--interpolation","Linear",
+                    "--initial-moving-transform", f"[{fixed_tmpl},{moved_brain},1]",
+                ]
+                if args.reg_mode == "rigid":
+                    reg_cmd += [
+                        "--transform","Rigid[0.1]",
+                        "--metric",f"MI[{fixed_tmpl},{moved_brain},1,32]",
+                        "--convergence","1000x500x250x100",
+                        "--shrink-factors","8x4x2x1",
+                        "--smoothing-sigmas","3x2x1x0vox",
+                    ]
+                else:
+                    reg_cmd += [
+                        "--transform","Affine[0.1]",
+                        "--metric",f"MI[{fixed_tmpl},{moved_brain},1,32]",
+                        "--convergence","1000x500x250x100",
+                        "--shrink-factors","8x4x2x1",
+                        "--smoothing-sigmas","3x2x1x0vox",
+                    ]
+                run_cmd(reg_cmd, check=True)
 
             # Collect transform paths
             transform_affine = Path(f"{out_prefix}0GenericAffine.mat")
             transform_warp = Path(f"{out_prefix}1Warp.nii.gz")
-            if not transform_affine.is_file() or not transform_warp.is_file():
+            # In affine/rigid modes there is no non-linear warp; fake an identity by reusing affine-only application
+            if args.reg_mode in ("affine","rigid"):
+                if not transform_affine.is_file():
+                    logging.error(f"[{sub_id}] Missing affine transform from registration")
+                    qc_stats["crop_status"] = "REGISTRATION_ERROR"
+                    write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
+                    write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
+                    continue
+                transform_warp = None
+            if not transform_affine.is_file() or (args.reg_mode=="syn" and not transform_warp.is_file()):
                 logging.error(f"[{sub_id}] Missing transform files from registration")
                 qc_stats["crop_status"] = "REGISTRATION_ERROR"
                 write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
@@ -684,7 +728,18 @@ def main():
             # ---------------------
             try:
                 logging.info(f"[{sub_id}] Applying transforms to static and masking with MNI brain mask")
-                ants_apply_transforms(static_path, template_path, fullres_warped_path, transform_affine, transform_warp)
+                if args.reg_mode in ("affine","rigid"):
+                    cmd = [
+                        "antsApplyTransforms","--dimensionality","3","--float","1",
+                        "--input", str(static_path),
+                        "--reference-image", str(template_path),
+                        "--output", str(fullres_warped_path),
+                        "--interpolation","Linear",
+                        "--transform", f"[{transform_affine},0]",
+                    ]
+                    run_cmd(cmd, check=True, capture_output=False)
+                else:
+                    ants_apply_transforms(static_path, template_path, fullres_warped_path, transform_affine, transform_warp)
                 if not fullres_warped_path.is_file():
                     raise RuntimeError("antsApplyTransforms did not produce full-res warped image")
 
