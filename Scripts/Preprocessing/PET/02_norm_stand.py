@@ -717,7 +717,7 @@ def main():
             transform_affine = Path(f"{out_prefix}0GenericAffine.mat")
             transform_warp = Path(f"{out_prefix}1Warp.nii.gz")
             # In affine/rigid modes there is no non-linear warp; fake an identity by reusing affine-only application
-            if args.reg_mode in ("affine","rigid"):
+            if args.reg_mode in ("affine","rigid","syn_light"):
                 if not transform_affine.is_file():
                     logging.error(f"[{sub_id}] Missing affine transform from registration")
                     qc_stats["crop_status"] = "REGISTRATION_ERROR"
@@ -737,7 +737,7 @@ def main():
             # ---------------------
             try:
                 logging.info(f"[{sub_id}] Applying transforms to static and masking with MNI brain mask")
-                if args.reg_mode in ("affine","rigid"):
+                if args.reg_mode in ("affine","rigid","syn_light"):
                     cmd = [
                         "antsApplyTransforms","--dimensionality","3","--float","1",
                         "--input", str(static_path),
