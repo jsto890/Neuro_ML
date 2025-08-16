@@ -141,7 +141,24 @@ def compute_sigma_voxels(fwhm_mm: float, voxel_sizes_mm: np.ndarray) -> np.ndarr
     if fwhm_mm <= 0:
         return np.array([0.0, 0.0, 0.0], dtype=float)
     sigma_mm = fwhm_mm / 2.355
-    return sigma_mm / voxel_sizes_mm
+    # Guard against zeros/invalid voxel sizes
+    safe_vx = np.array(voxel_sizes_mm, dtype=float)
+    safe_vx[~np.isfinite(safe_vx)] = 1.0
+    safe_vx = np.maximum(safe_vx, 1e-6)
+    return sigma_mm / safe_vx
+
+
+def get_voxel_sizes_mm(img: nib.Nifti1Image) -> np.ndarray:
+    """Robust per-axis voxel sizes in mm from a NIfTI image (fallback to affine if needed)."""
+    try:
+        zooms = img.header.get_zooms()[:3]
+        vx = np.array(zooms, dtype=float)
+    except Exception:
+        # Compute as column norms of affine (handles rotations)
+        vx = np.sqrt((img.affine[:3, :3] ** 2).sum(axis=0))
+    vx[~np.isfinite(vx)] = 1.0
+    vx = np.maximum(vx, 1e-6)
+    return vx
 
 
 def apply_brain_mask(img: nib.Nifti1Image, mask_img: nib.Nifti1Image) -> nib.Nifti1Image:
@@ -681,8 +698,8 @@ def main():
             if args.presmooth_fwhm and args.presmooth_fwhm > 0:
                 logging.info(f"[{sub_id}] Pre-smoothing static with FWHM={args.presmooth_fwhm:.2f} mm before registration")
                 static_data = static_img.get_fdata(dtype=np.float32)
-                # Approximate voxel sizes from affine
-                vx = np.array([abs(static_img.affine[0, 0]), abs(static_img.affine[1, 1]), abs(static_img.affine[2, 2])])
+                # Robust voxel sizes
+                vx = get_voxel_sizes_mm(static_img)
                 sigmas = compute_sigma_voxels(args.presmooth_fwhm, vx)
                 smoothed = gaussian_filter(static_data, sigma=sigmas[::-1])  # scipy uses z,y,x order; our vx is x,y,z
                 sm_img = nib.Nifti1Image(smoothed, static_img.affine, static_img.header)
@@ -916,7 +933,7 @@ def main():
                     logging.info(f"[{sub_id}] Applying Gaussian smoothing to SUVR with FWHM={args.smooth_fwhm:.2f} mm")
                     suvr_img = nib.load(str(suvr_path))
                     suvr_data = suvr_img.get_fdata(dtype=np.float32)
-                    vx = np.array([abs(suvr_img.affine[0, 0]), abs(suvr_img.affine[1, 1]), abs(suvr_img.affine[2, 2])])
+                    vx = get_voxel_sizes_mm(suvr_img)
                     sig = compute_sigma_voxels(args.smooth_fwhm, vx)
                     smoothed = gaussian_filter(suvr_data, sigma=sig[::-1])
                     suvr_smooth_img = nib.Nifti1Image(smoothed, suvr_img.affine, suvr_img.header)
