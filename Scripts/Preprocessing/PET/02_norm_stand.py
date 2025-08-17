@@ -161,6 +161,66 @@ def get_voxel_sizes_mm(img: nib.Nifti1Image) -> np.ndarray:
     return vx
 
 
+def is_affine_degenerate(affine: np.ndarray) -> bool:
+    """Return True if the 3x3 part of an affine is singular/degenerate or non-finite."""
+    try:
+        if affine is None or not np.all(np.isfinite(affine)):
+            return True
+        A = np.asarray(affine)[:3, :3]
+        # Zero/near-zero column norms indicate collapsed axes
+        col_norms = np.linalg.norm(A, axis=0)
+        if np.any(col_norms < 1e-6) or not np.all(np.isfinite(col_norms)):
+            return True
+        # Very small determinant or non-finite determinant indicates singularity
+        detA = float(np.linalg.det(A))
+        if not np.isfinite(detA) or abs(detA) < 1e-6:
+            return True
+        return False
+    except Exception:
+        return True
+
+
+def repair_affine_image(img: nib.Nifti1Image) -> nib.Nifti1Image:
+    """
+    If the image affine is degenerate (e.g., singular or with zero scale on an axis),
+    repair it by constructing a safe diagonal scaling from header zooms and preserving
+    translation. This avoids downstream tools (e.g., SynthStrip) crashing on singular matrices.
+    """
+    if not is_affine_degenerate(img.affine):
+        return img
+
+    try:
+        zooms = img.header.get_zooms()[:3]
+    except Exception:
+        zooms = (2.0, 2.0, 2.0)
+
+    safe_vx = np.array(zooms, dtype=float)
+    safe_vx[~np.isfinite(safe_vx)] = 2.0
+    # Enforce reasonable positive voxel sizes
+    safe_vx = np.maximum(np.abs(safe_vx), 0.5)
+
+    # Preserve axis flip signs from the original diagonal if present
+    original = np.asarray(img.affine)
+    diag = np.diag(original[:3, :3])
+    signs = np.sign(diag)
+    signs[signs == 0] = 1.0
+
+    new_affine = np.eye(4, dtype=float)
+    new_affine[0, 0] = signs[0] * safe_vx[0]
+    new_affine[1, 1] = signs[1] * safe_vx[1]
+    new_affine[2, 2] = signs[2] * safe_vx[2]
+    # Preserve translation to keep approximate spatial location
+    new_affine[:3, 3] = original[:3, 3]
+
+    repaired = nib.Nifti1Image(img.get_fdata(dtype=np.float32), new_affine, img.header)
+    try:
+        repaired.set_sform(new_affine, code=1)
+        repaired.set_qform(new_affine, code=1)
+    except Exception:
+        pass
+    return repaired
+
+
 def apply_brain_mask(img: nib.Nifti1Image, mask_img: nib.Nifti1Image) -> nib.Nifti1Image:
     """Multiply image by binary brain mask (nearest-neighbor resampled if needed)."""
     if img.shape != mask_img.shape or not np.allclose(img.affine, mask_img.affine, atol=1e-6):
@@ -347,6 +407,9 @@ def collapse_4d_to_static(raw_path: Path, out_static_path: Path) -> nib.Nifti1Im
         raise RuntimeError(f"Unsupported NIfTI dimensions ({data.ndim}D); expected 3D or 4D.")
 
     static_img = nib.Nifti1Image(static_arr.astype(np.float32), aff, hdr)
+    if is_affine_degenerate(static_img.affine):
+        logging.warning(f"[{raw_path.stem}] Detected degenerate affine; repairing header to prevent downstream failures.")
+        static_img = repair_affine_image(static_img)
     nib.save(static_img, str(out_static_path))
     if not out_static_path.is_file():
         raise RuntimeError(f"Failed to save static image to {out_static_path}")
@@ -639,6 +702,8 @@ def main():
             
             if len(raw_candidates) == 0:
                 logging.error(f"[{sub_id}] No suitable .nii file found; skipping.")
+                # mark as error to advance progress accounting
+                set_subject_status(cohort_name, group_name, sub_id, "ERROR")
                 continue
             elif len(raw_candidates) > 1:
                 logging.warning(f"[{sub_id}] Multiple .nii files found, using: {raw_candidates[0].name}")
@@ -1132,6 +1197,9 @@ def main():
                     qc_stats["provenance_manifest"] = str(out_sub_dir / f"{sub_id}_provenance.json")
             except Exception as e:
                 logging.warning(f"[{sub_id}] Failed to write manifest: {e}")
+
+            # Mark subject as successfully completed to update progress counters
+            set_subject_status(cohort_name, group_name, sub_id, "SUCCESS")
 
     logging.info("PET preprocessing pipeline completed")
 
