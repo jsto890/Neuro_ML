@@ -669,9 +669,8 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             return focal_loss.mean()
 
     criterion = FocalLoss(alpha=0.25, gamma=2)
-    # Use AdamW optimizer with OneCycleLR (cosine) schedule and warmup
-    initial_lr = max(args.learning_rate / 25.0, 1e-6)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=initial_lr, weight_decay=args.weight_decay)
+    # Use AdamW optimizer; constant LR for Simple3DCNN by default
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
 
     model.to(device)
     best_val_auc = 0.0
@@ -691,23 +690,12 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     # Store training history
     training_history = []
     
-    # Initialize LR scheduler (OneCycle) and mixed precision training
+    # Initialize mixed precision training (no scheduler by default)
     if device.startswith('cuda'):
         scaler = torch.amp.GradScaler()
     else:
         scaler = None
-    steps_per_epoch = max(len(train_loader), 1)
-    total_steps = max(steps_per_epoch * epochs, 1)
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer,
-        max_lr=args.learning_rate,
-        total_steps=total_steps,
-        pct_start=0.1,
-        anneal_strategy='cos',
-        div_factor=25.0,
-        final_div_factor=1e4,
-        three_phase=False,
-    )
+    scheduler = None
 
     for epoch in range(1, epochs + 1):
         # --- Training phase ---
@@ -734,7 +722,6 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
-                scheduler.step()
             else:
                 # Standard training for CPU
                 logits = model(smri)              # [B, 2]
@@ -742,7 +729,6 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 
                 loss.backward()
                 optimizer.step()
-                scheduler.step()
 
             running_loss += loss.item() * smri.size(0)
             preds = torch.argmax(logits, dim=1)
@@ -783,9 +769,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 'support': int(support[i])
             }
 
-        # Update learning rate based on validation AUC
-        old_lr = optimizer.param_groups[0]['lr']
-        scheduler.step(val_auc)
+        # Current LR (constant if no scheduler)
         new_lr = optimizer.param_groups[0]['lr']
         
         # Store epoch data
@@ -1545,16 +1529,16 @@ Examples:
     parser.add_argument("--data_root",   type=str, required=True,
                         help="Folder containing sMRI NIfTIs, e.g. data/preprocessed/sMRI")
     parser.add_argument("--epochs",      type=int, default=30)
-    parser.add_argument("--batch_size",  type=int, default=8,
+    parser.add_argument("--batch_size",  type=int, default=12,
                         help="Batch size (reduce to 4-6 if out of memory)")
     parser.add_argument("--num_workers", type=int, default=16)
-    parser.add_argument("--base_channels", type=int, default=32,
+    parser.add_argument("--base_channels", type=int, default=48,
                         help="Number of base channels for CNN models (default: 32)")
     parser.add_argument("--use_pretrained", action='store_true',
                         help="Use pretrained weights for ResNet, DenseNet, and EfficientNet models")
     parser.add_argument("--checkpoint_dir", type=str, default="~/reseng202500013-ndd-ml/data/checkpoints_ad_cn")
     parser.add_argument("--device",      type=str, default="cuda")
-    parser.add_argument("--learning_rate", type=float, default=1e-4)
+    parser.add_argument("--learning_rate", type=float, default=3e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-5)
     parser.add_argument("--k_folds",     type=int, default=5,
                         help="Number of folds for cross-validation")
