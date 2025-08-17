@@ -792,10 +792,8 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         }
         training_history.append(epoch_data)
         
-        # Print learning rate change if it occurred
+        # Print learning rate (constant if no scheduler)
         lr_change = ""
-        if new_lr != old_lr:
-            lr_change = f"  [LR reduced to {new_lr:.6f}]"
 
         print(f"Epoch {epoch}/{epochs}  "
               f"Train loss={epoch_loss:.4f}, Train acc={epoch_acc:.4f}  "
