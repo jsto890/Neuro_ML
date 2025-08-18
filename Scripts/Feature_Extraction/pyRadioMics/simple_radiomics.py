@@ -36,14 +36,58 @@ def load_labels_simple(labels_path):
     
     return subjects, labels
 
-def create_mask_from_image(image_path):
-    """Create a mask from non-zero regions of the image"""
+def find_mri_mask_path(image_path: str) -> str:
+    """Infer sMRIPrep brain mask path from the z-scored image path.
+
+    Expected image filename:
+      {subject_id}_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w_brain_zscore.nii.gz
+    Corresponding mask filename:
+      {subject_id}_space-MNI152NLin2009cAsym_res-2_desc-brain_mask.nii.gz
+    """
+    return image_path.replace(
+        "_desc-preproc_T1w_brain_zscore.nii.gz", "_desc-brain_mask.nii.gz"
+    )
+
+
+def load_image_and_mask(image_path: str):
+    """Load image and prefer the sMRIPrep brain mask; fallback to non-zero mask.
+
+    Returns (image, mask) or (None, None) on failure.
+    """
     try:
         image = sitk.ReadImage(image_path)
-        mask = sitk.NotEqual(image, 0)  # Non-zero region = ROI
+
+        # Prefer the sMRIPrep brain mask if present
+        mask_path = find_mri_mask_path(image_path)
+        if os.path.exists(mask_path):
+            mask = sitk.ReadImage(mask_path)
+            # Ensure mask is integer type expected by PyRadiomics
+            if mask.GetPixelID() != sitk.sitkUInt8:
+                mask = sitk.Cast(mask, sitk.sitkUInt8)
+        else:
+            # Fallback: derive a binary mask from image non-zeros
+            mask = sitk.NotEqual(image, 0)
+
+        # Sanity-check that the mask contains ROI voxels (label==1)
+        try:
+            import numpy as np  # local import to avoid global dependency when unused
+            mask_sum = np.asarray(sitk.GetArrayViewFromImage(mask)).sum()
+        except Exception:
+            # Conservative fallback if numpy view fails
+            stats = sitk.StatisticsImageFilter()
+            stats.Execute(mask)
+            mask_sum = stats.GetSum()
+
+        if mask_sum == 0:
+            logger.error(
+                f"Mask appears empty for image: {image_path}. "
+                f"Checked path: {mask_path}"
+            )
+            return None, None
+
         return image, mask
     except Exception as e:
-        logger.error(f"Error creating mask from {image_path}: {e}")
+        logger.error(f"Error loading image/mask from {image_path}: {e}")
         return None, None
 
 def find_mri_path(data_root, subject_id):
@@ -153,8 +197,8 @@ def extract_mri_radiomics(config_path, labels_path, output_dir, force_reprocess=
             continue
         
         try:
-            # Create mask and extract features
-            image, mask = create_mask_from_image(image_path)
+            # Load image and a valid brain mask (prefer sMRIPrep brain mask)
+            image, mask = load_image_and_mask(image_path)
             if image is None or mask is None:
                 logger.error(f"❌ Failed to create mask for {subject_id}")
                 failed += 1
