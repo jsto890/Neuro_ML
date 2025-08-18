@@ -752,10 +752,10 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             )
     current_eval_weights = 'raw'  # track which weights are used for eval
 
-    # --- EMA setup ---
-    use_ema = True
+    # --- EMA setup (disabled to match old behavior) ---
+    use_ema = False
     ema_decay = 0.999
-    ema_params = [p.detach().clone() for p in model.parameters()]
+    ema_params = [p.detach().clone() for p in model.parameters()] if use_ema else []
 
     for epoch in range(1, epochs + 1):
         # --- Training phase ---
@@ -780,9 +780,8 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                     loss = criterion(logits, labels)
                 
                 scaler.scale(loss).backward()
-                # unscale and clip
+                # unscale (no gradient clipping)
                 scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
             else:
@@ -791,25 +790,25 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 loss = criterion(logits, labels)
                 
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
 
-            # Update EMA after optimizer step with shape-safety
-            with torch.no_grad():
-                params_list = list(model.parameters())
-                need_reset_ema = False
-                if len(ema_params) != len(params_list):
-                    need_reset_ema = True
-                else:
-                    for p, e in zip(params_list, ema_params):
-                        if e.shape != p.data.shape:
-                            need_reset_ema = True
-                            break
-                if need_reset_ema:
-                    ema_params = [p.detach().clone() for p in params_list]
-                else:
-                    for p, e in zip(params_list, ema_params):
-                        e.mul_(ema_decay).add_(p.data, alpha=1.0 - ema_decay)
+            # Update EMA after optimizer step (disabled)
+            if use_ema:
+                with torch.no_grad():
+                    params_list = list(model.parameters())
+                    need_reset_ema = False
+                    if len(ema_params) != len(params_list):
+                        need_reset_ema = True
+                    else:
+                        for p, e in zip(params_list, ema_params):
+                            if e.shape != p.data.shape:
+                                need_reset_ema = True
+                                break
+                    if need_reset_ema:
+                        ema_params = [p.detach().clone() for p in params_list]
+                    else:
+                        for p, e in zip(params_list, ema_params):
+                            e.mul_(ema_decay).add_(p.data, alpha=1.0 - ema_decay)
 
             running_loss += loss.item() * smri.size(0)
             preds = torch.argmax(logits, dim=1)
