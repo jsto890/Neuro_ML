@@ -780,9 +780,8 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                     loss = criterion(logits, labels)
                 
                 scaler.scale(loss).backward()
-                # unscale and clip
+                # unscale (no gradient clipping)
                 scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
             else:
@@ -791,7 +790,6 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 loss = criterion(logits, labels)
                 
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
 
             # Update EMA after optimizer step (disabled)
