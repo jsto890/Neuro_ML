@@ -161,17 +161,14 @@ def validate_ml_readiness(input_dir, step_name):
     
     for subject in subjects[:5]:  # Check first 5 subjects
         subject_dir = os.path.join(input_dir, subject)
-        nii_files = [f for f in os.listdir(subject_dir) if f.endswith('.nii.gz')]
         
-        if not nii_files:
+        # Look for the postprocessed file specifically
+        expected_file = "6. postprocessed.nii.gz"
+        file_path = os.path.join(subject_dir, expected_file)
+        
+        if not os.path.exists(file_path):
+            print(f"   ❌ {subject}: {expected_file} not found")
             continue
-            
-        # Find the main processed file
-        expected_files = [f for f in nii_files if any(suffix in f for suffix in ['_RAS', '_registered', '_masked', '_finalised', '_postprocessed'])]
-        if not expected_files:
-            continue
-            
-        file_path = os.path.join(subject_dir, expected_files[0])
         
         try:
             img = nib.load(file_path)
@@ -181,29 +178,42 @@ def validate_ml_readiness(input_dir, step_name):
             shapes.append(data.shape)
             
             # Check intensity characteristics
-            non_zero_data = data[data > 0]
+            non_zero_data = data[data != 0]  # Include negative values for z-score data
             if len(non_zero_data) > 0:
                 intensity_ranges.append((np.min(non_zero_data), np.max(non_zero_data), np.mean(non_zero_data), np.std(non_zero_data)))
             
             # Check for ML readiness issues
             issues = []
             
-            # No negative values in SPECT
-            if np.any(data < 0):
-                issues.append("negative_values")
+            # Check for extreme negative values (z-score should be around 0±5)
+            if np.any(data < -6):
+                issues.append("extreme_negative_values")
             
-            # Reasonable brain coverage
+            # Check for extreme positive values
+            if np.any(data > 6):
+                issues.append("extreme_positive_values")
+            
+            # Reasonable brain coverage for SPECT (1-10%)
             coverage = np.count_nonzero(data) / data.size * 100
-            if coverage < 1 or coverage > 80:
+            if coverage < 1 or coverage > 15:
                 issues.append(f"coverage_{coverage:.1f}%")
             
             # No NaN or Inf values
             if np.any(np.isnan(data)) or np.any(np.isinf(data)):
                 issues.append("nan_or_inf")
             
+            # Check normalization quality (z-score should be ~0 mean, ~1 std)
+            if len(non_zero_data) > 0:
+                mean_val = np.mean(non_zero_data)
+                std_val = np.std(non_zero_data)
+                if abs(mean_val) > 1.0:  # Allow some deviation from 0
+                    issues.append(f"mean_{mean_val:.3f}")
+                if not (0.5 < std_val < 2.0):  # Allow some deviation from 1
+                    issues.append(f"std_{std_val:.3f}")
+            
             if not issues:
                 valid_subjects += 1
-                print(f"   ✅ {subject}: ML-ready")
+                print(f"   ✅ {subject}: ML-ready (shape={data.shape}, coverage={coverage:.1f}%, mean={np.mean(non_zero_data):.3f}, std={np.std(non_zero_data):.3f})")
             else:
                 print(f"   ⚠️ {subject}: Issues: {', '.join(issues)}")
                 
@@ -213,6 +223,8 @@ def validate_ml_readiness(input_dir, step_name):
     # Check consistency across subjects
     if len(set(shapes)) > 1:
         print(f"   ⚠️ Inconsistent shapes: {set(shapes)}")
+    else:
+        print(f"   ✅ All subjects have consistent shape: {shapes[0] if shapes else 'None'}")
     
     if len(intensity_ranges) > 0:
         means = [r[2] for r in intensity_ranges]

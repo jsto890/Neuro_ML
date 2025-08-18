@@ -143,6 +143,12 @@ for subject_path in subjects:
         norm_data = data.copy()
         norm_data[mask] = (data[mask] - global_mean) / global_std
         
+        # Handle outliers for ML readiness - clip extreme values
+        outlier_mask = np.abs(norm_data) > 5  # Clip values beyond ±5 standard deviations
+        if np.any(outlier_mask):
+            print(f"⚠️ {subject_id}: Clipping {np.sum(outlier_mask)} outlier voxels")
+            norm_data[outlier_mask] = np.sign(norm_data[outlier_mask]) * 5  # Clip to ±5
+        
         # Validate ML readiness
         if not validate_ml_readiness(norm_data, subject_id):
             print(f"❌ {subject_id}: Failed ML validation")
