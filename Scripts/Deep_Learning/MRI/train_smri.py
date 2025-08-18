@@ -670,8 +670,6 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             return focal_loss.mean()
 
     criterion = FocalLoss(alpha=0.25, gamma=2)
-    # Use AdamW optimizer; constant LR for Simple3DCNN by default
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
 
     model.to(device)
     best_val_auc = 0.0
@@ -703,6 +701,24 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     else:
         scaler = None
         autocast_context = contextlib.nullcontext
+
+    # Warm-up forward pass to initialize any dynamic layers (e.g., Simple3DCNN classifier)
+    # This ensures optimizer/EMA capture the correct parameter shapes
+    model.eval()
+    with torch.no_grad():
+        try:
+            sample_smri, _ = next(iter(train_loader))
+            sample_smri = sample_smri.to(device)
+            _ = model(sample_smri)
+        except StopIteration:
+            pass
+        except Exception:
+            # If warm-up fails for any reason, continue; model may not require it
+            pass
+    model.train()
+
+    # Use AdamW optimizer; constant LR for Simple3DCNN by default
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     # Plateau LR scheduler on validation AUC
     # Handle PyTorch versions where ReduceLROnPlateau does not accept 'verbose'
     try:
@@ -776,10 +792,22 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
 
-            # Update EMA after optimizer step
+            # Update EMA after optimizer step with shape-safety
             with torch.no_grad():
-                for p, e in zip(model.parameters(), ema_params):
-                    e.mul_(ema_decay).add_(p.data, alpha=1.0 - ema_decay)
+                params_list = list(model.parameters())
+                need_reset_ema = False
+                if len(ema_params) != len(params_list):
+                    need_reset_ema = True
+                else:
+                    for p, e in zip(params_list, ema_params):
+                        if e.shape != p.data.shape:
+                            need_reset_ema = True
+                            break
+                if need_reset_ema:
+                    ema_params = [p.detach().clone() for p in params_list]
+                else:
+                    for p, e in zip(params_list, ema_params):
+                        e.mul_(ema_decay).add_(p.data, alpha=1.0 - ema_decay)
 
             running_loss += loss.item() * smri.size(0)
             preds = torch.argmax(logits, dim=1)
