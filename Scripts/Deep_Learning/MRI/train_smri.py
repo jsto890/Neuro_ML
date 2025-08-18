@@ -703,6 +703,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         autocast_context = contextlib.nullcontext
 
     # Warm-up forward pass to initialize any dynamic layers (e.g., Simple3DCNN classifier)
+    # Run in eval mode to avoid affecting BatchNorm/Dropout statistics
     # This ensures optimizer/EMA capture the correct parameter shapes
     model.eval()
     with torch.no_grad():
@@ -715,6 +716,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         except Exception:
             # If warm-up fails for any reason, continue; model may not require it
             pass
+    # Ensure we start epoch loop in train mode
     model.train()
 
     # Use AdamW optimizer; constant LR for Simple3DCNN by default
