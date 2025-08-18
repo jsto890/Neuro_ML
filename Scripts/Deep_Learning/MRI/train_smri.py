@@ -727,8 +727,8 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode='max',
-            factor=0.5,
-            patience=5,
+            factor=args.lr_scheduler_factor,
+            patience=args.lr_scheduler_patience,
             threshold=1e-4,
             min_lr=1e-5,
             verbose=False,
@@ -738,8 +738,8 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer,
                 mode='max',
-                factor=0.5,
-                patience=5,
+                factor=args.lr_scheduler_factor,
+                patience=args.lr_scheduler_patience,
                 threshold=1e-4,
                 min_lr=1e-5,
             )
@@ -747,8 +747,8 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer,
                 mode='max',
-                factor=0.5,
-                patience=5,
+                factor=args.lr_scheduler_factor,
+                patience=args.lr_scheduler_patience,
             )
     current_eval_weights = 'raw'  # track which weights are used for eval
 
@@ -1212,7 +1212,27 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             label_mapping = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
             print(f"[INFO] Label mapping: {label_mapping}")
             
-            model = get_3d_model(model_name, num_classes=num_classes, in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained, dropout_p=0.25)
+            if model_name == "VisionTransformer3D":
+                model = get_3d_model(
+                    model_name,
+                    num_classes=num_classes,
+                    in_channels=1,
+                    base_channels=args.base_channels,
+                    use_pretrained=args.use_pretrained,
+                    dropout_p=0.0,
+                    vit_drop_rate=args.vit_drop_rate,
+                    vit_attn_drop_rate=args.vit_attn_drop_rate,
+                    vit_drop_path_rate=args.vit_drop_path_rate,
+                )
+            else:
+                model = get_3d_model(
+                    model_name,
+                    num_classes=num_classes,
+                    in_channels=1,
+                    base_channels=args.base_channels,
+                    use_pretrained=args.use_pretrained,
+                    dropout_p=(args.cnn_drop_rate if model_name == "Simple3DCNN" else 0.0),
+                )
             
             # Train
             (
@@ -1648,6 +1668,23 @@ Examples:
                         help="Optimize decision threshold for accuracy (default: True)")
     parser.add_argument("--test_strategy", type=str, default="best_fold", choices=["best_fold", "ensemble", "last_fold"],
                         help="Strategy for test evaluation: best_fold (default), ensemble, or last_fold")
+    # Training controls
+    parser.add_argument("--grad_clip_max_norm", type=float, default=0.0,
+                        help="Max norm for gradient clipping (<=0 disables clipping)")
+    parser.add_argument("--lr_scheduler_factor", type=float, default=0.5,
+                        help="ReduceLROnPlateau factor (e.g., 0.5 drops LR by 50%)")
+    parser.add_argument("--lr_scheduler_patience", type=int, default=5,
+                        help="ReduceLROnPlateau patience in epochs")
+    # Vision Transformer dropout controls
+    parser.add_argument("--vit_drop_rate", type=float, default=0.0,
+                        help="VisionTransformer3D embedding/MLP dropout rate")
+    parser.add_argument("--vit_attn_drop_rate", type=float, default=0.0,
+                        help="VisionTransformer3D attention dropout rate")
+    parser.add_argument("--vit_drop_path_rate", type=float, default=0.0,
+                        help="VisionTransformer3D stochastic depth (drop path) rate")
+    # Simple CNN dropout control
+    parser.add_argument("--cnn_drop_rate", type=float, default=0.0,
+                        help="Simple3DCNN dropout rate (applied to conv blocks and classifier)")
     
     # New arguments for model selection
     parser.add_argument("--model",       type=str, default=None,

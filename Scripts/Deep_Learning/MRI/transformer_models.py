@@ -67,8 +67,8 @@ class VisionTransformer3D(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches + 1, embed_dim))
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         
-        # Dropout removed to stabilize training
-        self.dropout = nn.Identity()
+        # Embedding dropout
+        self.dropout = nn.Dropout(drop_rate)
         
         # Transformer blocks
         self.blocks = nn.ModuleList([
@@ -196,11 +196,9 @@ class MultiHeadAttention3D(nn.Module):
         self.scale = head_dim ** -0.5
         
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
-        # Remove attention dropout
-        self.attn_drop = nn.Identity()
+        self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
-        # Remove projection dropout
-        self.proj_drop = nn.Identity()
+        self.proj_drop = nn.Dropout(proj_drop)
     
     def forward(self, x):
         B, N, C = x.shape
@@ -230,8 +228,7 @@ class MLP(nn.Module):
         self.fc1 = nn.Linear(in_features, hidden_features)
         self.act = act_layer()
         self.fc2 = nn.Linear(hidden_features, out_features)
-        # Remove MLP dropout
-        self.drop = nn.Identity()
+        self.drop = nn.Dropout(drop)
     
     def forward(self, x):
         x = self.fc1(x)
