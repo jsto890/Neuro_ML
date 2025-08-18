@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 import shutil
 from sklearn.model_selection import train_test_split
+import contextlib
 
 from dataset import SMRIDataset
 from models_smri import Simple3DCNN, get_3d_model
@@ -690,21 +691,47 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     # Store training history
     training_history = []
     
-    # Initialize mixed precision training (no scheduler by default)
+    # Initialize mixed precision training with compatibility across torch versions
+    autocast_context = None
     if device.startswith('cuda'):
-        scaler = torch.amp.GradScaler()
+        try:
+            scaler = torch.amp.GradScaler()
+            autocast_context = lambda: torch.amp.autocast(device_type='cuda')
+        except AttributeError:
+            scaler = torch.cuda.amp.GradScaler()
+            autocast_context = lambda: torch.cuda.amp.autocast()
     else:
         scaler = None
+        autocast_context = contextlib.nullcontext
     # Plateau LR scheduler on validation AUC
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode='max',
-        factor=0.5,
-        patience=5,
-        threshold=1e-4,
-        min_lr=1e-5,
-        verbose=False,
-    )
+    # Handle PyTorch versions where ReduceLROnPlateau does not accept 'verbose'
+    try:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='max',
+            factor=0.5,
+            patience=5,
+            threshold=1e-4,
+            min_lr=1e-5,
+            verbose=False,
+        )
+    except TypeError:
+        try:
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode='max',
+                factor=0.5,
+                patience=5,
+                threshold=1e-4,
+                min_lr=1e-5,
+            )
+        except TypeError:
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode='max',
+                factor=0.5,
+                patience=5,
+            )
     current_eval_weights = 'raw'  # track which weights are used for eval
 
     # --- EMA setup ---
@@ -730,7 +757,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             
             # Use mixed precision training if available
             if scaler is not None:
-                with torch.amp.autocast(device_type='cuda'):
+                with autocast_context():
                     logits = model(smri)              # [B, 2]
                     loss = criterion(logits, labels)
                 
