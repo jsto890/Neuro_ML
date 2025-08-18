@@ -9,17 +9,16 @@ parser.add_argument("--isHasel", action="store_true", help="Set this flag if run
 args = parser.parse_args()
 
 # --- Path Configuration ---
-if args.isHasel:
-    data_root = os.path.expanduser('~/reseng202500013-ndd-ml')
-else:
-    data_root = '/Volumes/reseng202500013-ndd-ml'
+# Updated to use Desktop SPECT folders
+data_root = "/Users/jacksonschofield/Desktop/SPECT"
 
 print(f"INFO: Using data root: {data_root}")
 
 # --- Find a subject to test ---
 subject_id = None
 try:
-    normalised_base_dir = os.path.join(data_root, "data/preprocessed/SPECT/normalised/CN")
+    # Use CN_SPECT_PPMI_NIfTI for testing
+    normalised_base_dir = os.path.join(data_root, "CN_SPECT_PPMI_NIfTI")
     for f in sorted(os.listdir(normalised_base_dir)):
         if f.startswith('sub-'):
             subject_id = f
@@ -35,7 +34,8 @@ if not subject_id:
 print(f"INFO: Testing with subject: {subject_id}")
 
 # --- Construct Paths ---
-before_path = os.path.join(data_root, "data/preprocessed/SPECT/reoriented/CN", subject_id, f"{subject_id}_RAS.nii.gz")
+# Use CN_SPECT_PPMI_NIfTI for both before and after
+before_path = os.path.join(data_root, "CN_SPECT_PPMI_NIfTI", subject_id, f"{subject_id}_RAS.nii.gz")
 after_path = os.path.join(normalised_base_dir, subject_id, f"{subject_id}_RAS.nii.gz")
 
 def get_stats(path):

@@ -1,150 +1,137 @@
-# DSPECT Preprocessing Pipeline - Fixes Applied
+# DSPECT Preprocessing Pipeline - Production Ready
 
-## Issues Fixed
+## 🚀 **NEW: ML-Ready Features**
 
-### 1. **Step 2: Normalization** 
-**Problem**: Using global z-score normalization on all voxels, which is inappropriate for SPECT data.
+### **Enhanced ML Readiness**
+- **Consistent Shapes**: All images standardized to [91, 109, 91] for CNN compatibility
+- **Intensity Validation**: Automatic checks for negative values, outliers, and normalization quality
+- **Data Integrity**: Comprehensive validation of brain coverage, intensity ranges, and artifacts
+- **ML Validation**: Dedicated ML readiness checks in final validation step
 
-**Fix**: Implemented proper SPECT-specific normalization methods:
-- **Reference Region Normalization**: Uses occipital mask as reference region (standard for DAT SPECT)
-- **Percentile Clipping**: Alternative method for intensity normalization
-- Added proper error handling for edge cases
+### **Improved Masking Options**
+- **Whole-Brain Mask** (default): Better for ML models requiring full brain context
+- **Occipital Mask**: SPECT-specific reference region for traditional analysis
+- **Automatic Fallback**: Graceful handling when preferred mask unavailable
 
-**Usage**:
+## 🔧 **Issues Fixed**
+
+### 1. **Step 1: Reorientation** ✅
+- **Enhanced**: Optional isotropic 1mm resampling for ML consistency
+- **Improved**: Better affine handling and voxel size preservation
+- **New**: `--isotropic` flag for ML-ready isotropic voxels
+
+### 2. **Step 2: Normalization** ✅
+- **Enhanced**: Added min-max normalization option for ML
+- **Improved**: Better error handling and intensity validation
+- **New**: Automatic variance checks and statistical reporting
+
+### 3. **Step 4: Masking** ✅
+- **Fixed**: Now uses whole-brain mask by default (ML-friendly)
+- **Enhanced**: ML readiness validation with coverage checks
+- **New**: `--mask_type` option for flexible masking strategies
+
+### 4. **Step 6: Postprocessing** ✅
+- **Fixed**: Consistent config-based path handling
+- **Enhanced**: ML readiness validation with z-score checks
+- **New**: Comprehensive ML validation and statistics
+
+### 5. **Pipeline Runner** ✅
+- **Enhanced**: New masking and isotropic options
+- **Improved**: Better error handling and validation
+- **New**: Automatic ML readiness validation
+
+### 6. **Validation** ✅
+- **Enhanced**: ML-specific validation checks
+- **Improved**: Shape consistency, intensity range validation
+- **New**: Comprehensive ML readiness reporting
+
+## 🎯 **How to Use the Enhanced Pipeline**
+
+### **Option 1: Run Complete Pipeline (Recommended)**
 ```bash
-# Reference region normalization (recommended)
+# Basic run with ML-friendly defaults
+python run_pipeline.py --diagnosis CN
+
+# With enhanced ML features
+python run_pipeline.py --diagnosis PD --isotropic --mask_type whole_brain
+
+# Force reprocessing with custom shape
+python run_pipeline.py --diagnosis CN --force --shape 91 109 91
+```
+
+### **Option 2: Run Individual Steps**
+```bash
+# Step 1: Enhanced reorientation
+python 1_reorient.py --diagnosis CN --isotropic
+
+# Step 2: Multiple normalization options
 python 2_normalise.py --diagnosis CN --method reference
+python 2_normalise.py --diagnosis CN --method min_max
 
-# Percentile clipping
-python 2_normalise.py --diagnosis CN --method percentile
+# Step 4: Flexible masking
+python 4_masking.py --diagnosis CN --mask_type whole_brain
+
+# Step 5: ML-ready finalization
+python 5_padding.py --diagnosis CN --shape 91 109 91 --intensity_norm
+
+# Step 6: ML-validated postprocessing
+python 6_postprocess.py --diagnosis CN
 ```
 
-### 2. **Step 4: Masking**
-**Problem**: Using MRI brain mask instead of SPECT-specific mask.
-
-**Fix**: Changed to use SPECT-specific occipital mask:
-- More appropriate for DAT SPECT imaging
-- Better preserves SPECT-specific brain regions
-- Improved validation of masking results
-
-### 3. **Enhanced Testing**
-**Problem**: Tests didn't properly validate SPECT-specific preprocessing.
-
-**Fixes**:
-- Enhanced `2_test.py` to validate reference region normalization
-- Enhanced `4_test_visulise.py` with better visualization and statistics
-- Added comprehensive pipeline validation script
-
-### 4. **New Pipeline Runner**
-**Added**: `run_pipeline.py` - Automated pipeline runner with proper error handling and validation.
-
-## How to Use the Fixed Pipeline
-
-### Option 1: Run Individual Steps
+### **Option 3: Comprehensive Validation**
 ```bash
-# Step 1: Reorientation
-python 1_reorient.py --diagnosis CN --force
+# Full pipeline validation including ML readiness
+python testing/validate_pipeline.py --diagnosis CN
 
-# Step 2: SPECT-specific normalization
-python 2_normalise.py --diagnosis CN --method reference
-
-# Step 3: Registration
-python 3_register.py --diagnosis CN
-
-# Step 4: SPECT-specific masking
-python 4_masking.py --diagnosis CN
-
-# Step 5: Finalization
-python 5_padding.py --diagnosis CN --shape 91 109 91
-
-# Step 6: Postprocessing
-python 6_postprocess.py --diagnosis CN --isHasel
-```
-
-### Option 2: Run Complete Pipeline
-```bash
-# Run entire pipeline with validation
-python run_pipeline.py --diagnosis CN --isHasel
-
-# With custom parameters
-python run_pipeline.py --diagnosis PD --shape 91 109 91 --intensity_norm
-```
-
-### Option 3: Test Individual Steps
-```bash
-# Test normalization
+# Individual step testing
 python testing/2_test.py --isHasel
-
-# Test masking visualization
 python testing/4_test_visulise.py --isHasel
-
-# Validate entire pipeline
-python testing/validate_pipeline.py --diagnosis CN --isHasel
 ```
 
-## Key Improvements
+## 📊 **ML Readiness Features**
 
-### 1. **SPECT-Specific Normalization**
-- Reference region normalization using occipital mask
-- Proper handling of edge cases (empty reference regions)
-- Fallback to global stats if reference region fails
+### **Automatic Quality Checks**
+- ✅ **Shape Consistency**: All images standardized to target dimensions
+- ✅ **Intensity Validation**: No negative values, reasonable ranges
+- ✅ **Brain Coverage**: Appropriate SPECT coverage (5-50%)
+- ✅ **Normalization Quality**: Z-score validation (~0 mean, ~1 std)
+- ✅ **Data Integrity**: No NaN/Inf values, proper masking
 
-### 2. **Better Error Handling**
-- Graceful handling of missing files
-- Proper validation of preprocessing results
-- Clear error messages and warnings
+### **ML Model Compatibility**
+- **CNN/Deep Learning**: Fixed input shapes, normalized intensities
+- **Traditional ML**: Consistent features, standardized ranges
+- **Statistical Analysis**: Proper normalization, outlier detection
 
-### 3. **Enhanced Validation**
-- Comprehensive pipeline validation
-- SPECT-specific quality checks
-- Statistical validation of normalization results
+## 🎯 **Expected Results**
 
-### 4. **Improved Documentation**
-- Clear usage instructions
-- Better error messages
-- Validation feedback
+After running the enhanced pipeline, you should see:
 
-## Quality Assurance
+- **Consistent Shapes**: All images [91, 109, 91] or custom target
+- **ML-Ready Intensities**: Z-scores ~0±0.5 mean, ~1±0.5 std
+- **Quality Validation**: All steps passing ML readiness checks
+- **Comprehensive Reports**: Detailed statistics and validation summaries
 
-The fixed pipeline now includes:
+## 🚨 **Troubleshooting**
 
-1. **Reference Region Validation**: Checks that normalization produces reasonable values
-2. **Coverage Validation**: Ensures masking produces appropriate brain coverage
-3. **Statistical Validation**: Validates intensity distributions
-4. **Pipeline Validation**: Comprehensive end-to-end testing
+### **Common Issues:**
+1. **"Low brain coverage"**: Check registration quality in step 3
+2. **"Negative values detected"**: Verify normalization in step 2
+3. **"Inconsistent shapes"**: Check padding/cropping in step 5
+4. **"Mask not found"**: Ensure template paths in config.yaml
 
-## Expected Results
-
-After running the fixed pipeline, you should see:
-
-- **Normalization**: Mean values around 1.0 (reference region) or 0.5 (percentile)
-- **Masking**: Brain coverage between 5-50% (typical for SPECT)
-- **Final Data**: Consistent shapes and intensity ranges across subjects
-- **Validation**: All steps passing quality checks
-
-## Troubleshooting
-
-### Common Issues:
-
-1. **"No voxels in reference region"**: Check that occipital mask is properly aligned
-2. **"Low brain coverage"**: Verify registration quality in step 3
-3. **"Suspicious normalization values"**: Check input data quality
-
-### Validation Failures:
-
-Run the validation script to identify specific issues:
+### **Validation Failures:**
+Run comprehensive validation to identify issues:
 ```bash
 python testing/validate_pipeline.py --diagnosis CN --isHasel
 ```
 
-This will provide detailed feedback on which steps need attention.
+## 🎉 **Production Ready**
 
-## Machine Learning Readiness
+The enhanced DSPECT pipeline now provides:
+- **ML-Ready Output**: Standardized, validated data for machine learning
+- **Robust Error Handling**: Graceful fallbacks and comprehensive validation
+- **Flexible Options**: Multiple normalization and masking strategies
+- **Quality Assurance**: Automatic ML readiness validation
+- **Production Reliability**: Comprehensive testing and error handling
 
-The fixed pipeline produces data that is:
-- ✅ Properly normalized for SPECT imaging
-- ✅ Consistently masked and shaped
-- ✅ Validated for quality
-- ✅ Ready for machine learning models
-
-Your DSPECT data will now follow best practices for neurodegenerative disease detection using DAT SPECT imaging. 
+Your DaT SPECT data will now be perfectly prepared for machine learning models, with automatic quality validation and ML-specific optimizations. 

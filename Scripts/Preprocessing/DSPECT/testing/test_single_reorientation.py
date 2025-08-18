@@ -60,8 +60,8 @@ def test_reorientation_fix():
     # Test subject
     subject = "sub-I359637_PPMI_SPECT_CN"
     
-    # Paths
-    raw_path = f"/Volumes/reseng202500013-ndd-ml/data/raw/SPECT/PPMI/CN/{subject}/{subject}.nii"
+    # Paths - Updated to use Desktop SPECT folders
+    raw_path = f"/Users/jacksonschofield/Desktop/SPECT/CN_SPECT_PPMI_NIfTI/{subject}/{subject}.nii"
     test_output_path = f"/tmp/test_reorientation_{subject}_RAS.nii.gz"
     
     print(f"Testing reorientation fix for {subject}")

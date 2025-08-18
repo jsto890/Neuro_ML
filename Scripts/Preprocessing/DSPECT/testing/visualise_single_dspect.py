@@ -20,7 +20,7 @@ if not nii_path:
             filetypes=[
                 ("All files", "*.*")
             ],
-            initialdir="/Volumes/reseng202500013-ndd-ml/data/preprocessed/SPECT/reoriented/CN",
+            initialdir="/Users/jacksonschofield/Desktop/SPECT/CN_SPECT_PPMI_NIfTI",
         )
         if not nii_path:
             sys.exit(0)

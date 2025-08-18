@@ -4,6 +4,7 @@ import nibabel as nib
 import numpy as np
 import yaml
 import argparse
+import shutil
 
 print("Hello World! Step 5 finalise script starting...")
 
@@ -27,8 +28,8 @@ config_path = os.path.join(project_root, 'config.yaml')
 with open(config_path, 'r') as f:
     config = yaml.safe_load(f)
 
-input_dir = os.path.join(fix_path(config['preprocessed_data']['spect_p']), 'masked', args.diagnosis)
-output_dir = os.path.join(fix_path(config['preprocessed_data']['spect_p']), 'finalised', args.diagnosis)
+input_dir = f"/Users/jacksonschofield/Desktop/SPECT/{args.diagnosis}_SPECT_PPMI_masked"
+output_dir = f"/Users/jacksonschofield/Desktop/SPECT/{args.diagnosis}_SPECT_PPMI_finalised"
 Path(output_dir).mkdir(parents=True, exist_ok=True)
 
 print(f"\n🔄 Processing {args.diagnosis} subjects")
@@ -65,15 +66,36 @@ def pad_or_crop(data, target_shape):
     return padded
 
 # --- Process subjects ---
-subjects = [d for d in os.listdir(input_dir) if d.startswith('sub-')]
+subjects = [d for d in os.listdir(input_dir) if d.startswith('Subject_')]
 failed_subjects = []
 
 for subject_id in subjects:
     subj_input_dir = os.path.join(input_dir, subject_id)
     subj_output_dir = os.path.join(output_dir, subject_id)
     Path(subj_output_dir).mkdir(parents=True, exist_ok=True)
-    input_nii = os.path.join(subj_input_dir, f"{subject_id}_masked.nii.gz")
-    output_nii = os.path.join(subj_output_dir, f"{subject_id}_finalised.nii.gz")
+    
+    # Copy only essential files (NIfTI + JSON, skip DICOM folders)
+    print(f"[COPY] {subject_id}: Copying essential files")
+    for item in os.listdir(subj_input_dir):
+        source_path = os.path.join(subj_input_dir, item)
+        dest_path = os.path.join(subj_output_dir, item)
+        
+        if os.path.isfile(source_path):
+            # Copy JSON files and the masked NIfTI
+            if item.endswith('.json') or item == "4. masked.nii.gz":
+                shutil.copy2(source_path, dest_path)
+                print(f"   [COPY] {item}")
+        elif os.path.isdir(source_path) and not item.startswith('Original_DICOM'):
+            # Copy only non-DICOM directories
+            if os.path.exists(dest_path):
+                shutil.rmtree(dest_path)
+            shutil.copytree(source_path, dest_path)
+            print(f"   [COPY] {item}/ (directory)")
+        else:
+            print(f"   [SKIP] {item} (DICOM folder - not needed)")
+    
+    input_nii = os.path.join(subj_input_dir, "4. masked.nii.gz")
+    output_nii = os.path.join(subj_output_dir, "5. finalised.nii.gz")
 
     try:
         img = nib.load(input_nii)
@@ -104,3 +126,6 @@ if failed_subjects:
         print(sid)
 else:
     print("\n✅ All subjects finalised successfully.")
+
+print(f"\n✅ Finalization complete! Output saved to: {output_dir}")
+print(f"📁 Each subject now has a dedicated folder with finalised data and all original files.")

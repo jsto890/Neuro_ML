@@ -9,17 +9,17 @@ parser.add_argument("--isHasel", action="store_true", help="Set this flag if run
 parser.add_argument("--shape", type=int, nargs=3, default=[91, 109, 91], help="Expected shape (default: 91 109 91)")
 args = parser.parse_args()
 
-if args.isHasel:
-    base_dir = os.path.expanduser('~/reseng202500013-ndd-ml')
-else:
-    base_dir = '/Volumes/reseng202500013-ndd-ml'
+# Updated to use Desktop SPECT folders
+base_dir = "/Users/jacksonschofield/Desktop/SPECT"
 
 def full_path(path):
+    # Simplified path handling for Desktop structure
     if path.startswith("~/") or path.startswith("/Volumes/"):
         return os.path.join(base_dir, os.path.relpath(os.path.expanduser(path), start=os.path.expanduser('~/reseng202500013-ndd-ml')))
     return path
 
-input_dir = os.path.join(full_path('~/reseng202500013-ndd-ml/data/preprocessed/SPECT/finalised'), args.diagnosis)
+# Use CN_SPECT_PPMI_NIfTI for testing
+input_dir = os.path.join(base_dir, "CN_SPECT_PPMI_NIfTI")
 subjects = [d for d in os.listdir(input_dir) if d.startswith('sub-')]
 
 print(f"Testing {len(subjects)} subjects in {input_dir}")
@@ -46,4 +46,4 @@ if failed:
     for sid in failed:
         print(sid)
 else:
-    print("\nAll subjects passed step 5 test!") 
+    print("\nAll subjects passed step 5 test!") /Users/jacksonschofield/Desktop/SPECT/PD_SPECT_PPMI_NIfTI

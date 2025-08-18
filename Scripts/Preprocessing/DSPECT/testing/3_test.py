@@ -10,12 +10,8 @@ parser.add_argument("--isHasel", action="store_true", help="Set this flag if run
 args = parser.parse_args()
 
 # --- Path Configuration ---
-if args.isHasel:
-    # Path for Linux server (Hasel)
-    data_root = os.path.expanduser('~/reseng202500013-ndd-ml')
-else:
-    # Path for local Mac with mounted drive
-    data_root = '/Volumes/reseng202500013-ndd-ml'
+# Updated to use Desktop SPECT folders
+data_root = "/Users/jacksonschofield/Desktop/SPECT"
 
 print(f"INFO: Using data root: {data_root}")
 
@@ -44,8 +40,8 @@ def find_first_valid_subject_file(base_dir):
     return None, None
 
 # === CONFIG ===
-# Search for the first available subject in the registered CN directory
-registered_base_dir = os.path.join(data_root, "data/preprocessed/SPECT/registered/CN")
+# Search for the first available subject in the CN_SPECT_PPMI_NIfTI directory
+registered_base_dir = os.path.join(data_root, "CN_SPECT_PPMI_NIfTI")
 subject_id, registered_path = find_first_valid_subject_file(registered_base_dir)
 
 if not registered_path:

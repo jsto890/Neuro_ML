@@ -18,9 +18,9 @@ parser.add_argument("--subject", type=str, default="sub-I10256370_PPMI_SPECT_CN"
                     help="Subject ID to test")
 args = parser.parse_args()
 
-# Paths
-raw_path = f"/Volumes/reseng202500013-ndd-ml/data/raw/SPECT/PPMI/CN/{args.subject}/{args.subject}.nii"
-reoriented_path = f"/Volumes/reseng202500013-ndd-ml/data/preprocessed/SPECT/reoriented/CN/{args.subject}/{args.subject}_RAS.nii.gz"
+# Paths - Updated to use Desktop SPECT folders
+raw_path = f"/Users/jacksonschofield/Desktop/SPECT/CN_SPECT_PPMI_NIfTI/{args.subject}/{args.subject}.nii"
+reoriented_path = f"/Users/jacksonschofield/Desktop/SPECT/CN_SPECT_PPMI_NIfTI/{args.subject}/{args.subject}_RAS.nii.gz"
 
 print(f"Testing reorientation fix for {args.subject}")
 print(f"Raw: {raw_path}")
