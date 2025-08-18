@@ -41,18 +41,21 @@ class Simple3DCNN(nn.Module):
             nn.Conv3d(1, base_channels, kernel_size=3, padding=1),
             nn.BatchNorm3d(base_channels),
             nn.ReLU(inplace=True),
+            nn.Dropout3d(p=self.dropout_p),
             nn.MaxPool3d(2),
             
             # Second conv block
             nn.Conv3d(base_channels, base_channels*2, kernel_size=3, padding=1),
             nn.BatchNorm3d(base_channels*2),
             nn.ReLU(inplace=True),
+            nn.Dropout3d(p=self.dropout_p),
             nn.MaxPool3d(2),
             
             # Third conv block
             nn.Conv3d(base_channels*2, base_channels*4, kernel_size=3, padding=1),
             nn.BatchNorm3d(base_channels*4),
             nn.ReLU(inplace=True),
+            nn.Dropout3d(p=self.dropout_p),
             nn.MaxPool3d(2)
         )
         
@@ -60,6 +63,7 @@ class Simple3DCNN(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(1, 256),
             nn.ReLU(inplace=True),
+            nn.Dropout(p=max(0.2, min(0.3, self.dropout_p + 0.05))),
             nn.Linear(256, num_classes)
         )
         
