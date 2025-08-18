@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pure_pet_standardise.py (saved as 04JUNE.py)
+pure_pet_standardise.py
 
 Automatically preprocess raw 4D/3D amyloid PET scans from ADNI:
  1. Locate the single <sub-ID>.nii (4D or 3D) in each subject folder.
@@ -141,7 +141,84 @@ def compute_sigma_voxels(fwhm_mm: float, voxel_sizes_mm: np.ndarray) -> np.ndarr
     if fwhm_mm <= 0:
         return np.array([0.0, 0.0, 0.0], dtype=float)
     sigma_mm = fwhm_mm / 2.355
-    return sigma_mm / voxel_sizes_mm
+    # Guard against zeros/invalid voxel sizes
+    safe_vx = np.array(voxel_sizes_mm, dtype=float)
+    safe_vx[~np.isfinite(safe_vx)] = 1.0
+    safe_vx = np.maximum(safe_vx, 1e-6)
+    return sigma_mm / safe_vx
+
+
+def get_voxel_sizes_mm(img: nib.Nifti1Image) -> np.ndarray:
+    """Robust per-axis voxel sizes in mm from a NIfTI image (fallback to affine if needed)."""
+    try:
+        zooms = img.header.get_zooms()[:3]
+        vx = np.array(zooms, dtype=float)
+    except Exception:
+        # Compute as column norms of affine (handles rotations)
+        vx = np.sqrt((img.affine[:3, :3] ** 2).sum(axis=0))
+    vx[~np.isfinite(vx)] = 1.0
+    vx = np.maximum(vx, 1e-6)
+    return vx
+
+
+def is_affine_degenerate(affine: np.ndarray) -> bool:
+    """Return True if the 3x3 part of an affine is singular/degenerate or non-finite."""
+    try:
+        if affine is None or not np.all(np.isfinite(affine)):
+            return True
+        A = np.asarray(affine)[:3, :3]
+        # Zero/near-zero column norms indicate collapsed axes
+        col_norms = np.linalg.norm(A, axis=0)
+        if np.any(col_norms < 1e-6) or not np.all(np.isfinite(col_norms)):
+            return True
+        # Very small determinant or non-finite determinant indicates singularity
+        detA = float(np.linalg.det(A))
+        if not np.isfinite(detA) or abs(detA) < 1e-6:
+            return True
+        return False
+    except Exception:
+        return True
+
+
+def repair_affine_image(img: nib.Nifti1Image) -> nib.Nifti1Image:
+    """
+    If the image affine is degenerate (e.g., singular or with zero scale on an axis),
+    repair it by constructing a safe diagonal scaling from header zooms and preserving
+    translation. This avoids downstream tools (e.g., SynthStrip) crashing on singular matrices.
+    """
+    if not is_affine_degenerate(img.affine):
+        return img
+
+    try:
+        zooms = img.header.get_zooms()[:3]
+    except Exception:
+        zooms = (2.0, 2.0, 2.0)
+
+    safe_vx = np.array(zooms, dtype=float)
+    safe_vx[~np.isfinite(safe_vx)] = 2.0
+    # Enforce reasonable positive voxel sizes
+    safe_vx = np.maximum(np.abs(safe_vx), 0.5)
+
+    # Preserve axis flip signs from the original diagonal if present
+    original = np.asarray(img.affine)
+    diag = np.diag(original[:3, :3])
+    signs = np.sign(diag)
+    signs[signs == 0] = 1.0
+
+    new_affine = np.eye(4, dtype=float)
+    new_affine[0, 0] = signs[0] * safe_vx[0]
+    new_affine[1, 1] = signs[1] * safe_vx[1]
+    new_affine[2, 2] = signs[2] * safe_vx[2]
+    # Preserve translation to keep approximate spatial location
+    new_affine[:3, 3] = original[:3, 3]
+
+    repaired = nib.Nifti1Image(img.get_fdata(dtype=np.float32), new_affine, img.header)
+    try:
+        repaired.set_sform(new_affine, code=1)
+        repaired.set_qform(new_affine, code=1)
+    except Exception:
+        pass
+    return repaired
 
 
 def apply_brain_mask(img: nib.Nifti1Image, mask_img: nib.Nifti1Image) -> nib.Nifti1Image:
@@ -330,6 +407,9 @@ def collapse_4d_to_static(raw_path: Path, out_static_path: Path) -> nib.Nifti1Im
         raise RuntimeError(f"Unsupported NIfTI dimensions ({data.ndim}D); expected 3D or 4D.")
 
     static_img = nib.Nifti1Image(static_arr.astype(np.float32), aff, hdr)
+    if is_affine_degenerate(static_img.affine):
+        logging.warning(f"[{raw_path.stem}] Detected degenerate affine; repairing header to prevent downstream failures.")
+        static_img = repair_affine_image(static_img)
     nib.save(static_img, str(out_static_path))
     if not out_static_path.is_file():
         raise RuntimeError(f"Failed to save static image to {out_static_path}")
@@ -412,6 +492,41 @@ def main():
         action="store_true",
         help="Write a per-subject JSON provenance manifest next to outputs."
     )
+    parser.add_argument(
+        "--suvr_ref_stat",
+        type=str,
+        choices=["mean", "median"],
+        default="mean",
+        help="Statistic to use for SUVR reference (mean or median) for cerebellum/global. Default: mean."
+    )
+    parser.add_argument(
+        "--skip_cropping",
+        action="store_true",
+        help="Skip COM-based cropping; keep outputs at template resolution."
+    )
+    parser.add_argument(
+        "--skip_if_exists",
+        action="store_true",
+        help="Skip a subject if its expected final output already exists (e.g., SUVR_s{int(smooth_fwhm)}.nii.gz when smoothing>0, otherwise SUVR.nii.gz)."
+    )
+    parser.add_argument(
+        "--subjects",
+        nargs="*",
+        default=None,
+        help="Optional list of subject directory names to process (e.g., sub-XXX ...). If omitted, process all."
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="If set, delete any existing output subject folder before processing to avoid using stale intermediates."
+    )
+    parser.add_argument(
+        "--reg_mode",
+        type=str,
+        choices=["syn", "syn_light", "affine", "rigid"],
+        default="syn",
+        help="Registration mode: SyN (syn), lighter/less-deformable SyN (syn_light), affine only (affine), or rigid only (rigid). Default: syn."
+    )
     args = parser.parse_args()
 
     # 2. Configure logging
@@ -428,6 +543,40 @@ def main():
     os.environ["OMP_NUM_THREADS"] = str(args.threads)
     os.environ["MKL_NUM_THREADS"] = str(args.threads)
 
+    # Helper: progress tracking utilities
+    def render_bar(completed: int, total: int, width: int = 24) -> str:
+        total = max(total, 1)
+        k = int(width * completed / total)
+        return "[" + ("#" * k) + ("." * (width - k)) + "]"
+
+    progress = {}
+    def write_progress_file():
+        try:
+            out_path = args.output_root / "progress.json"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "w") as f:
+                json.dump(progress, f, indent=2)
+        except Exception:
+            pass
+
+    def set_subject_status(cohort: str, group: str, subject: str, status: str):
+        grp = progress.setdefault(cohort, {}).setdefault(group, {
+            "total": 0, "completed": 0, "success": 0, "error": 0, "subjects": {}
+        })
+        prev = grp["subjects"].get(subject, {}).get("status")
+        if prev in ("SUCCESS", "ERROR"):
+            return
+        grp["subjects"][subject] = {"status": status}
+        if status in ("SUCCESS", "ERROR"):
+            grp["completed"] += 1
+            if status == "SUCCESS":
+                grp["success"] += 1
+            else:
+                grp["error"] += 1
+        write_progress_file()
+        # log concise progress line
+        logging.info(f"Progress [{cohort}/{group}] {render_bar(grp['completed'], grp['total'])} {grp['completed']}/{grp['total']} ok:{grp['success']} err:{grp['error']}")
+
     # 4. Validate / resolve templates
     if not args.input_root.is_dir():
         logging.error(f"Input root not found: {args.input_root}")
@@ -443,14 +592,14 @@ def main():
             logging.info("Using TemplateFlow brain mask: %s", brain_mask_path)
         except Exception as e:
             logging.error("TemplateFlow fetch failed: %s", e)
-        sys.exit(1)
+            sys.exit(1)
     else:
         if not args.lowres_template or not args.lowres_template.is_file():
             logging.error("Low-res template not found or not provided. Provide --lowres_template or use --use_templateflow.")
-        sys.exit(1)
+            sys.exit(1)
         if not args.brain_mask_template or not args.brain_mask_template.is_file():
             logging.error("Brain mask template not found or not provided. Provide --brain_mask_template or use --use_templateflow.")
-        sys.exit(1)
+            sys.exit(1)
         template_path = args.lowres_template
         brain_mask_path = args.brain_mask_template
 
@@ -513,22 +662,70 @@ def main():
         cohort_name = cohort_dir.name
         logging.info(f"Processing cohort: {cohort_name}")
 
-        for subject_dir in sorted(cohort_dir.iterdir()):
+        # Handle nested directory structure (ADNI/AD/sub-xxx vs direct ADNI/sub-xxx)
+        all_subject_dirs = []
+        for item in sorted(cohort_dir.iterdir()):
+            if not item.is_dir():
+                continue
+            # Check if this directory contains .nii files (subject dir) or subdirectories (group dir)
+            nii_files = list(item.glob("*.nii*"))
+            if nii_files:
+                # This is a subject directory
+                all_subject_dirs.append(item)
+                grp = progress.setdefault(cohort_name, {}).setdefault("subjects", {"total": 0, "completed": 0, "success": 0, "error": 0, "subjects": {}})
+                grp["total"] += 1
+            else:
+                # This might be a group directory, check for subdirectories
+                for subitem in item.iterdir():
+                    if subitem.is_dir():
+                        all_subject_dirs.append(subitem)
+                        grp = progress.setdefault(cohort_name, {}).setdefault(item.name, {"total": 0, "completed": 0, "success": 0, "error": 0, "subjects": {}})
+                        grp["total"] += 1
+        write_progress_file()
+        
+        for subject_dir in all_subject_dirs:
             if not subject_dir.is_dir():
                 continue
             sub_id = subject_dir.name
+            if args.subjects and sub_id not in set(args.subjects):
+                continue
             logging.info(f"--- Subject: {sub_id} ---")
-
-            # 7.1. Locate the single <sub-ID>.nii file in subject_dir
+            # infer group for progress accounting
+            group_name = subject_dir.parent.name if subject_dir.parent != cohort_dir else "subjects"
+            set_subject_status(cohort_name, group_name, sub_id, "RUNNING")
+            # 7.1. Locate .nii file in subject_dir (flexible pattern matching)
             raw_candidates = list(subject_dir.glob(f"{sub_id}.nii*"))
             if len(raw_candidates) == 0:
-                logging.error(f"[{sub_id}] No {sub_id}.nii file found; skipping.")
+                # Try any .nii file, but filter out processed files
+                all_nii = list(subject_dir.glob("*.nii*"))
+                raw_candidates = [f for f in all_nii if not any(x in f.name.lower() for x in ['static', 'warped', 'reg_', 'low_'])]
+            
+            if len(raw_candidates) == 0:
+                logging.error(f"[{sub_id}] No suitable .nii file found; skipping.")
+                # mark as error to advance progress accounting
+                set_subject_status(cohort_name, group_name, sub_id, "ERROR")
                 continue
+            elif len(raw_candidates) > 1:
+                logging.warning(f"[{sub_id}] Multiple .nii files found, using: {raw_candidates[0].name}")
+            
             raw_nifti = raw_candidates[0]
+            logging.info(f"[{sub_id}] Processing file: {raw_nifti.name}")
 
             # 7.2. Create output subject directory
             out_sub_dir = args.output_root / cohort_name / sub_id
+            if args.overwrite and out_sub_dir.exists():
+                logging.info(f"[{sub_id}] --overwrite set: removing existing {out_sub_dir}")
+                shutil.rmtree(out_sub_dir, ignore_errors=True)
             out_sub_dir.mkdir(parents=True, exist_ok=True)
+
+            # Optionally skip if final output already exists
+            if args.skip_if_exists:
+                expected = out_sub_dir / (f"{sub_id}_SUVR_s{int(round(args.smooth_fwhm))}.nii.gz" if (args.smooth_fwhm and args.smooth_fwhm>0) else f"{sub_id}_SUVR.nii.gz")
+                if expected.exists():
+                    logging.info(f"[{sub_id}] Skipping (final output exists): {expected}")
+                    # mark as success to advance progress
+                    set_subject_status(cohort_name, group_name, sub_id, "SUCCESS")
+                    continue
 
             # Initialize QC dict
             qc_stats = {key: "" for key in qc_header}
@@ -556,6 +753,7 @@ def main():
                 qc_stats["crop_status"] = "STATIC_ERROR"
                 write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
                 write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
+                set_subject_status(cohort_name, group_name, sub_id, "ERROR")
                 continue
 
             # ---------------------
@@ -565,8 +763,8 @@ def main():
             if args.presmooth_fwhm and args.presmooth_fwhm > 0:
                 logging.info(f"[{sub_id}] Pre-smoothing static with FWHM={args.presmooth_fwhm:.2f} mm before registration")
                 static_data = static_img.get_fdata(dtype=np.float32)
-                # Approximate voxel sizes from affine
-                vx = np.array([abs(static_img.affine[0, 0]), abs(static_img.affine[1, 1]), abs(static_img.affine[2, 2])])
+                # Robust voxel sizes
+                vx = get_voxel_sizes_mm(static_img)
                 sigmas = compute_sigma_voxels(args.presmooth_fwhm, vx)
                 smoothed = gaussian_filter(static_data, sigma=sigmas[::-1])  # scipy uses z,y,x order; our vx is x,y,z
                 sm_img = nib.Nifti1Image(smoothed, static_img.affine, static_img.header)
@@ -610,20 +808,67 @@ def main():
 
             moved_brain = Path(pet_brain_path)
             fixed_tmpl = template_path
-            used_method = "SyNQuick"
-            if not registration_syNQuick(moved_brain, fixed_tmpl, out_prefix, args.threads):
-                logging.info(f"[{sub_id}] SyNQuick unavailable/failed; using MI+SyN fallback")
-                used_method = "MI+SyN"
-                registration_MI_fallback(moved_brain, fixed_tmpl, out_prefix)
+            used_method = ""
+            if args.reg_mode in ("syn","syn_light"):
+                used_method = "SyNQuick"
+                if not registration_syNQuick(moved_brain, fixed_tmpl, out_prefix, args.threads):
+                    logging.info(f"[{sub_id}] SyNQuick unavailable/failed; using MI+SyN fallback")
+                    used_method = "MI+SyN"
+                    registration_MI_fallback(moved_brain, fixed_tmpl, out_prefix)
+                # If syn_light, down-weight/suppress the non-linear warp by converting to affine-only application
+                if args.reg_mode == "syn_light":
+                    # Remove warp if present to effectively apply only affine
+                    try:
+                        warp_path = Path(f"{out_prefix}1Warp.nii.gz")
+                        if warp_path.exists():
+                            warp_path.unlink()
+                    except Exception:
+                        pass
+            else:
+                # Affine or rigid only via antsRegistration
+                used_method = "AffineOnly" if args.reg_mode == "affine" else "RigidOnly"
+                reg_cmd = [
+                    "antsRegistration","--dimensionality","3","--float","1",
+                    "--output", f"[{out_prefix},{out_prefix}Warped.nii.gz]",
+                    "--interpolation","Linear",
+                    "--initial-moving-transform", f"[{fixed_tmpl},{moved_brain},1]",
+                ]
+                if args.reg_mode == "rigid":
+                    reg_cmd += [
+                        "--transform","Rigid[0.1]",
+                        "--metric",f"MI[{fixed_tmpl},{moved_brain},1,32]",
+                        "--convergence","1000x500x250x100",
+                        "--shrink-factors","8x4x2x1",
+                        "--smoothing-sigmas","3x2x1x0vox",
+                    ]
+                else:
+                    reg_cmd += [
+                        "--transform","Affine[0.1]",
+                        "--metric",f"MI[{fixed_tmpl},{moved_brain},1,32]",
+                        "--convergence","1000x500x250x100",
+                        "--shrink-factors","8x4x2x1",
+                        "--smoothing-sigmas","3x2x1x0vox",
+                    ]
+                run_cmd(reg_cmd, check=True)
 
             # Collect transform paths
             transform_affine = Path(f"{out_prefix}0GenericAffine.mat")
             transform_warp = Path(f"{out_prefix}1Warp.nii.gz")
-            if not transform_affine.is_file() or not transform_warp.is_file():
+            # In affine/rigid modes there is no non-linear warp; fake an identity by reusing affine-only application
+            if args.reg_mode in ("affine","rigid","syn_light"):
+                if not transform_affine.is_file():
+                    logging.error(f"[{sub_id}] Missing affine transform from registration")
+                    qc_stats["crop_status"] = "REGISTRATION_ERROR"
+                    write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
+                    write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
+                    continue
+                transform_warp = None
+            if not transform_affine.is_file() or (args.reg_mode=="syn" and not transform_warp.is_file()):
                 logging.error(f"[{sub_id}] Missing transform files from registration")
                 qc_stats["crop_status"] = "REGISTRATION_ERROR"
                 write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
                 write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
+                set_subject_status(cohort_name, group_name, sub_id, "ERROR")
                 continue
 
             # ---------------------
@@ -631,7 +876,18 @@ def main():
             # ---------------------
             try:
                 logging.info(f"[{sub_id}] Applying transforms to static and masking with MNI brain mask")
-                ants_apply_transforms(static_path, template_path, fullres_warped_path, transform_affine, transform_warp)
+                if args.reg_mode in ("affine","rigid","syn_light"):
+                    cmd = [
+                        "antsApplyTransforms","--dimensionality","3","--float","1",
+                        "--input", str(static_path),
+                        "--reference-image", str(template_path),
+                        "--output", str(fullres_warped_path),
+                        "--interpolation","Linear",
+                        "--transform", f"[{transform_affine},0]",
+                    ]
+                    run_cmd(cmd, check=True, capture_output=False)
+                else:
+                    ants_apply_transforms(static_path, template_path, fullres_warped_path, transform_affine, transform_warp)
                 if not fullres_warped_path.is_file():
                     raise RuntimeError("antsApplyTransforms did not produce full-res warped image")
 
@@ -656,12 +912,14 @@ def main():
                 qc_stats["crop_status"] = "APPLY_TRANSFORMS_ERROR"
                 write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
                 write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
+                set_subject_status(cohort_name, group_name, sub_id, "ERROR")
                 continue
             except Exception as e:
                 logging.error(f"[{sub_id}] Error during full-res apply: {e}")
                 qc_stats["crop_status"] = "APPLY_TRANSFORMS_ERROR"
                 write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
                 write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
+                set_subject_status(cohort_name, group_name, sub_id, "ERROR")
                 continue
 
             # ---------------------
@@ -676,21 +934,32 @@ def main():
                 brain_mask = (brain_mask_img.get_fdata() > 0)
 
                 suvr_reference = "cerebellum" if cereb_img is not None else "global"
-                ref_mean = None
+                ref_values = None
+                # Prefer cerebellum reference if available and aligned
                 if cereb_img is not None and ensure_matched_affine_and_shape(fullres_warped_img, cereb_img):
                     cereb_array = (cereb_img.get_fdata(dtype=np.float32) > 0)
                     if np.any(cereb_array):
                         ref_values = frw_data[cereb_array]
-                        ref_mean = float(np.mean(ref_values))
                     else:
                         suvr_reference = "global"
-                if ref_mean is None or np.isnan(ref_mean) or ref_mean <= 0:
-                    # Fallback to global brain mean
+                # Fallback to global brain reference
+                if ref_values is None:
                     ref_values = frw_data[brain_mask]
-                    ref_mean = float(np.mean(ref_values))
                     suvr_reference = "global"
 
-                suvr_array = frw_data / (ref_mean + 1e-8)
+                ref_mean_val = float(np.mean(ref_values)) if ref_values.size > 0 else float("nan")
+                ref_median_val = float(np.median(ref_values)) if ref_values.size > 0 else float("nan")
+                chosen_stat = args.suvr_ref_stat if hasattr(args, "suvr_ref_stat") else "mean"
+                ref_value = ref_mean_val if chosen_stat == "mean" else ref_median_val
+                # Guard against non-finite/zero reference
+                if not np.isfinite(ref_value) or ref_value <= 0:
+                    ref_values = frw_data[brain_mask]
+                    ref_mean_val = float(np.mean(ref_values)) if ref_values.size > 0 else float("nan")
+                    ref_median_val = float(np.median(ref_values)) if ref_values.size > 0 else float("nan")
+                    ref_value = ref_mean_val if chosen_stat == "mean" else ref_median_val
+                    suvr_reference = "global"
+
+                suvr_array = frw_data / (ref_value + 1e-8)
                 suvr_img = nib.Nifti1Image(suvr_array, fullres_warped_img.affine, fullres_warped_img.header)
                 nib.save(suvr_img, str(suvr_path))
                 if not suvr_path.is_file():
@@ -708,11 +977,15 @@ def main():
                 logging.debug(f"[{sub_id}] SUVR stats: {stats}")
                 qc_stats["registration_method"] = used_method
                 qc_stats["suvr_reference"] = suvr_reference
+                qc_stats["suvr_ref_stat"] = chosen_stat
+                qc_stats["reference_mean"] = ref_mean_val
+                qc_stats["reference_median"] = ref_median_val
             except Exception as e:
                 logging.error(f"[{sub_id}] Error during SUVR computation: {e}")
                 qc_stats["crop_status"] = "SUVR_ERROR"
                 write_qc_csv(qc_header, qc_stats, qc_csv_path, append=False)
                 write_qc_csv(qc_header, qc_stats, master_qc_path, append=True)
+                set_subject_status(cohort_name, group_name, sub_id, "ERROR")
                 continue
             
             # ---------------------
@@ -725,7 +998,7 @@ def main():
                     logging.info(f"[{sub_id}] Applying Gaussian smoothing to SUVR with FWHM={args.smooth_fwhm:.2f} mm")
                     suvr_img = nib.load(str(suvr_path))
                     suvr_data = suvr_img.get_fdata(dtype=np.float32)
-                    vx = np.array([abs(suvr_img.affine[0, 0]), abs(suvr_img.affine[1, 1]), abs(suvr_img.affine[2, 2])])
+                    vx = get_voxel_sizes_mm(suvr_img)
                     sig = compute_sigma_voxels(args.smooth_fwhm, vx)
                     smoothed = gaussian_filter(suvr_data, sigma=sig[::-1])
                     suvr_smooth_img = nib.Nifti1Image(smoothed, suvr_img.affine, suvr_img.header)
@@ -755,9 +1028,13 @@ def main():
                 logging.warning(f"[{sub_id}] Smoothing/Z-score step failed: {e}")
 
             # ---------------------
-            # STEP 7: Robust subject-based crop & affine update (unchanged)
+            # STEP 7: Robust subject-based crop & affine update (optional)
             # ---------------------
             try:
+                if args.skip_cropping:
+                    logging.info(f"[{sub_id}] Skipping cropping (keeping template resolution)")
+                    qc_stats["crop_status"] = "SKIPPED"
+                    raise RuntimeError("CROP_SKIPPED")
                 logging.info(f"[{sub_id}] Robust cropping/padding around subject COM to {tuple(args.crop_dims)}")
 
                 # 5.1 load SUVR
@@ -816,8 +1093,11 @@ def main():
                 logging.info(f"[{sub_id}] Cropping/padding successful")
 
             except Exception as e:
-                logging.error(f"[{sub_id}] Error during cropping/padding: {e}")
-                qc_stats["crop_status"] = "CROP_ERROR"
+                if str(e) == "CROP_SKIPPED":
+                    pass
+                else:
+                    logging.error(f"[{sub_id}] Error during cropping/padding: {e}")
+                    qc_stats["crop_status"] = "CROP_ERROR"
 
             # ---------------------
             # STEP 8: Compute QC gates and write QC Stats & Manifest
@@ -840,13 +1120,18 @@ def main():
                     qc_stats["qc_registration_pass"] = ""
 
                 try:
-                    qc_stats["qc_reference_mean"] = ref_mean
+                    chosen_stat = str(qc_stats.get("suvr_ref_stat", "mean"))
+                    # value actually used for SUVR scaling
+                    ref_val = float(qc_stats.get("reference_mean", float("nan")))
+                    if chosen_stat == "median":
+                        ref_val = float(qc_stats.get("reference_median", float("nan")))
+                    qc_stats["qc_reference_value"] = ref_val
                     # flag if <= 5th percentile of brain intensities
                     frw_img = nib.load(str(fullres_warped_path))
                     m = (resample_from_to(brain_img, frw_img, order=0).get_fdata() > 0)
                     vals = frw_img.get_fdata()[m]
                     p5 = float(np.percentile(vals, 5)) if vals.size > 0 else 0.0
-                    qc_stats["qc_reference_pass"] = (ref_mean is not None) and (ref_mean > 0) and (ref_mean > p5)
+                    qc_stats["qc_reference_pass"] = np.isfinite(ref_val) and (ref_val > 0) and (ref_val > p5)
                 except Exception:
                     qc_stats["qc_reference_pass"] = ""
 
@@ -880,7 +1165,10 @@ def main():
                         "brain_mask_path": str(brain_mask_path),
                         "cerebellum_mask_path": str(args.cerebellum_mask) if args.cerebellum_mask else None,
                         "suvr_reference": qc_stats.get("suvr_reference", None),
-                        "reference_mean": ref_mean,
+                        "suvr_ref_stat": qc_stats.get("suvr_ref_stat", None),
+                        "reference_mean": qc_stats.get("reference_mean", None),
+                        "reference_median": qc_stats.get("reference_median", None),
+                        "reference_value": qc_stats.get("qc_reference_value", None),
                         "smoothing_fwhm": qc_stats.get("smoothing_fwhm", 0.0),
                         "presmooth_fwhm": float(args.presmooth_fwhm),
                         "transforms": {
@@ -909,6 +1197,9 @@ def main():
                     qc_stats["provenance_manifest"] = str(out_sub_dir / f"{sub_id}_provenance.json")
             except Exception as e:
                 logging.warning(f"[{sub_id}] Failed to write manifest: {e}")
+
+            # Mark subject as successfully completed to update progress counters
+            set_subject_status(cohort_name, group_name, sub_id, "SUCCESS")
 
     logging.info("PET preprocessing pipeline completed")
 

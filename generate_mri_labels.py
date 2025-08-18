@@ -78,11 +78,15 @@ def main():
             print(f"[WARNING] Subject {subject_id} not found in imaging records, skipping")
             continue
         
-        # Get the disease label
-        disease = subject_record.iloc[0]['Disease']
+        # Get and normalize the disease label
+        disease_raw = subject_record.iloc[0]['Disease']
+        disease = str(disease_raw).strip().upper()
+        # Treat trailing 'a' variants (e.g., CNa, ADa, PDa) as their base class
+        if disease.endswith('A') and disease[:-1] in label_map:
+            disease = disease[:-1]
         
         if disease not in label_map:
-            print(f"[WARNING] Unknown disease '{disease}' for subject {subject_id}, skipping")
+            print(f"[WARNING] Unknown disease '{disease_raw}' normalized to '{disease}' for subject {subject_id}, skipping")
             continue
         
         label = label_map[disease]

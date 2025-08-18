@@ -33,34 +33,37 @@ class Simple3DCNN(nn.Module):
     Input:  [B, 1, D, H, W]  single‐channel sMRI
     Output: [B, num_classes] logits
     """
-    def __init__(self, num_classes=2, base_channels=16, classifier_dropout: float = 0.5):  # Reduced base channels
+    def __init__(self, num_classes=2, base_channels=16, dropout_p: float = 0.25):
         super().__init__()
-        self.classifier_dropout = float(classifier_dropout)
+        self.dropout_p = float(dropout_p)
         self.features = nn.Sequential(
             # First conv block
             nn.Conv3d(1, base_channels, kernel_size=3, padding=1),
             nn.BatchNorm3d(base_channels),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
+            nn.Dropout3d(p=self.dropout_p),
             nn.MaxPool3d(2),
             
             # Second conv block
             nn.Conv3d(base_channels, base_channels*2, kernel_size=3, padding=1),
             nn.BatchNorm3d(base_channels*2),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
+            nn.Dropout3d(p=self.dropout_p),
             nn.MaxPool3d(2),
             
             # Third conv block
             nn.Conv3d(base_channels*2, base_channels*4, kernel_size=3, padding=1),
             nn.BatchNorm3d(base_channels*4),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
+            nn.Dropout3d(p=self.dropout_p),
             nn.MaxPool3d(2)
         )
         
         # Initialize classifier with a placeholder
         self.classifier = nn.Sequential(
-            nn.Linear(1, 256),  # Reduced intermediate size
-            nn.ReLU(),
-            nn.Dropout(self.classifier_dropout),
+            nn.Linear(1, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=max(0.2, min(0.3, self.dropout_p + 0.05))),
             nn.Linear(256, num_classes)
         )
         
@@ -139,7 +142,7 @@ class SMRI_GradCAM_3DCNN(nn.Module):
         return logits, fmap
 
 # --- Model Factory Function ---
-def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use_pretrained=False):
+def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use_pretrained=False, dropout_p: float = 0.25):
     """
     Returns a 3D CNN model instance by name.
     Supported: 'Simple3DCNN', 'ResNet18_3D', 'DenseNet121_3D', 'EfficientNetB0_3D',
@@ -155,7 +158,7 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
     model_name = model_name.lower()
     
     if model_name == "simple3dcnn":
-        return Simple3DCNN(num_classes=num_classes, base_channels=base_channels)
+        return Simple3DCNN(num_classes=num_classes, base_channels=base_channels, dropout_p=dropout_p)
     
     elif model_name == "resnet18_3d":
         if resnet is None:
