@@ -695,7 +695,22 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         scaler = torch.amp.GradScaler()
     else:
         scaler = None
-    scheduler = None
+    # Plateau LR scheduler on validation AUC
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode='max',
+        factor=0.5,
+        patience=5,
+        threshold=1e-4,
+        min_lr=1e-5,
+        verbose=False,
+    )
+    current_eval_weights = 'raw'  # track which weights are used for eval
+
+    # --- EMA setup ---
+    use_ema = True
+    ema_decay = 0.999
+    ema_params = [p.detach().clone() for p in model.parameters()]
 
     for epoch in range(1, epochs + 1):
         # --- Training phase ---
@@ -720,6 +735,9 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                     loss = criterion(logits, labels)
                 
                 scaler.scale(loss).backward()
+                # unscale and clip
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
             else:
@@ -728,7 +746,13 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 loss = criterion(logits, labels)
                 
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
+
+            # Update EMA after optimizer step
+            with torch.no_grad():
+                for p, e in zip(model.parameters(), ema_params):
+                    e.mul_(ema_decay).add_(p.data, alpha=1.0 - ema_decay)
 
             running_loss += loss.item() * smri.size(0)
             preds = torch.argmax(logits, dim=1)
@@ -743,7 +767,20 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             final_train_acc = epoch_acc
 
         # --- Validation phase with threshold optimization ---
+        # Evaluate with EMA weights for smoother performance
+        if use_ema:
+            raw_params = [p.detach().clone() for p in model.parameters()]
+            with torch.no_grad():
+                for p, e in zip(model.parameters(), ema_params):
+                    p.copy_(e)
+            current_eval_weights = 'ema'
         val_results = evaluate_model_with_threshold_optimization(model, val_loader, device, optimize_threshold_flag=args.optimize_threshold, label_mapping=label_mapping)
+        # Restore raw weights after eval
+        if use_ema:
+            with torch.no_grad():
+                for p, r in zip(model.parameters(), raw_params):
+                    p.copy_(r)
+            current_eval_weights = 'raw'
         
         val_auc = val_results['default_auc']
         val_acc = val_results['optimal_accuracy']  # Use optimized accuracy
@@ -769,7 +806,8 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 'support': int(support[i])
             }
 
-        # Current LR (constant if no scheduler)
+        # Step plateau scheduler on val AUC
+        scheduler.step(val_auc)
         new_lr = optimizer.param_groups[0]['lr']
         
         # Store epoch data
@@ -1118,7 +1156,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             label_mapping = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
             print(f"[INFO] Label mapping: {label_mapping}")
             
-            model = get_3d_model(model_name, num_classes=num_classes, in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            model = get_3d_model(model_name, num_classes=num_classes, in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained, dropout_p=0.25)
             
             # Train
             (
@@ -1391,21 +1429,21 @@ def ensemble_evaluate_models(model_name, model_dir, test_loader, device, args, f
         if model_name == "Simple3DCNN":
             classifier_weight = state_dict['classifier.0.weight']
             actual_input_size = classifier_weight.shape[1]
-            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained, dropout_p=0.25)
             model.classifier[0] = nn.Linear(actual_input_size, 256)
             model._initialized = True
             model.load_state_dict(state_dict)
         elif model_name == "SwinUNETRClassifier":
             classifier_weight = state_dict['classifier.0.weight']
             actual_input_size = classifier_weight.shape[1]
-            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained, dropout_p=0.25)
             model.classifier[0] = nn.Linear(actual_input_size, 512)
             model._initialized = True
             model.load_state_dict(state_dict)
         elif model_name == "FullSwinUNETRClassifier":
             classifier_weight = state_dict['classifier.0.weight']
             actual_input_size = classifier_weight.shape[1]
-            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
+            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained, dropout_p=0.25)
             model.classifier[0] = nn.Linear(actual_input_size, 512)
             model._initialized = True
             model.load_state_dict(state_dict)
