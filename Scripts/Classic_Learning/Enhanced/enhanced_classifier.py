@@ -131,6 +131,8 @@ class EnhancedRadiomicsClassifier:
             self.subject_ids = self.data['subject_id'].values
             self.y = self.data['label'].values
             self.feature_names = [col for col in self.data.columns if col not in ['subject_id', 'label']]
+            # Preserve full list for per-fold resets in outer CV
+            self._original_feature_names = list(self.feature_names)
             self.X = self.data[self.feature_names].values
             
             self.logger.info(f"Data shape: {self.X.shape}")
@@ -706,6 +708,12 @@ class EnhancedRadiomicsClassifier:
 
         for fold_idx, (train_pool_idx, test_idx) in enumerate(skf.split(self.X, self.y), start=1):
             self.logger.info(f"\n{'='*60}\nStarting OUTER FOLD {fold_idx}/{k_folds}\n{'='*60}")
+
+            # Reset per-fold feature name state to the full original list to avoid progressive shrink
+            if hasattr(self, '_original_feature_names'):
+                self.feature_names = list(self._original_feature_names)
+            # Reset selection cache
+            self.selected_features = None
 
             X_train_pool = self.X[train_pool_idx]
             y_train_pool = self.y[train_pool_idx]
