@@ -146,6 +146,8 @@ class RadiomicsClassifier:
             self.y = self.data['label'].values
             self.feature_names = [col for col in self.data.columns if col not in ['subject_id', 'label']]
             self.X = self.data[self.feature_names].values
+            # Preserve original feature names for per-fold resets
+            self._original_feature_names = list(self.feature_names)
             
             self.logger.info(f"Data shape: {self.X.shape}")
             self.logger.info(f"Labels: {np.unique(self.y)} (counts: {np.bincount(self.y)})")
@@ -217,6 +219,10 @@ class RadiomicsClassifier:
         self.logger.info("Stage 3: Preprocessing data (training data only)...")
         
         try:
+            # Reset fold-specific transformers/selectors to avoid cross-fold state
+            self.variance_selector = VarianceThreshold(threshold=0.01)
+            self.scaler = StandardScaler()
+            self.feature_selector = None
             X_train, y_train, _ = self.splits['train']
             X_test, y_test, _ = self.splits['test']
             has_val = 'val' in self.splits
@@ -603,6 +609,10 @@ class RadiomicsClassifier:
 
         for fold_idx, (train_pool_idx, test_idx) in enumerate(skf.split(self.X, self.y), start=1):
             self.logger.info(f"\n{'='*60}\nStarting OUTER FOLD {fold_idx}/{k_folds}\n{'='*60}")
+
+            # Reset feature names to original for this fold
+            if hasattr(self, '_original_feature_names'):
+                self.feature_names = list(self._original_feature_names)
 
             # Build raw splits for this fold (no preprocessing yet)
             X_train_pool = self.X[train_pool_idx]
