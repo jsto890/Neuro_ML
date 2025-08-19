@@ -16,6 +16,7 @@ import sys
 import json
 import pickle
 import logging
+import warnings
 import argparse
 import numpy as np
 import pandas as pd
@@ -28,6 +29,7 @@ from sklearn.preprocessing import RobustScaler, StandardScaler, PolynomialFeatur
 from sklearn.feature_selection import RFECV, SelectKBest, f_classif, mutual_info_classif
 from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.svm import SVC
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score, 
@@ -37,6 +39,9 @@ from sklearn.metrics import (
 from sklearn.feature_selection import VarianceThreshold
 import matplotlib.pyplot as plt
 import seaborn as sns
+# Silence frequent SVM convergence warnings
+warnings.filterwarnings("ignore", category=ConvergenceWarning, module="sklearn.svm._base")
+
 
 # Advanced ML libraries
 try:
@@ -537,7 +542,7 @@ class ImprovedOptimizedRadiomicsClassifier:
                     'tol': Real(1e-4, 1e-2, prior='log-uniform')  # Increased tolerance
                 }
                 
-                # Bayesian optimization with fewer iterations
+                # Bayesian optimization with fewer iterations (silence repetitive CV fit logs)
                 bayes_search = BayesSearchCV(
                     estimator=base_svm,
                     search_spaces=search_spaces,
@@ -545,7 +550,7 @@ class ImprovedOptimizedRadiomicsClassifier:
                     cv=5,
                     scoring='roc_auc',  # Changed to roc_auc
                     n_jobs=-1,
-                    verbose=1,
+                    verbose=0,
                     random_state=self.random_state
                 )
                 
@@ -579,13 +584,14 @@ class ImprovedOptimizedRadiomicsClassifier:
                     'tol': [1e-3]
                 }
                 
+                # Grid search (silence repetitive CV fit logs)
                 grid_search = GridSearchCV(
                     estimator=base_svm,
                     param_grid=param_grid,
                     cv=5,
                     scoring='roc_auc',
                     n_jobs=-1,
-                    verbose=1
+                    verbose=0
                 )
                 
                 grid_search.fit(X_train, y_train)
