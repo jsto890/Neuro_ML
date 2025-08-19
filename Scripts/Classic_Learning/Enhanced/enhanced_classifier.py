@@ -301,11 +301,10 @@ class EnhancedRadiomicsClassifier:
             'class_weight': ['balanced']
         }
         # Calibrated LinearSVC (probabilistic)
-        linsvc_base = LinearSVC(max_iter=10000)
-        linsvc_calibrated = CalibratedClassifierCV(base_estimator=linsvc_base, cv=5, method='sigmoid')
+        linsvc_calibrated = CalibratedClassifierCV(estimator=LinearSVC(max_iter=10000), cv=5, method='sigmoid')
         linsvc_params = {
-            'base_estimator__C': [0.1, 1.0, 10.0],
-            'base_estimator__loss': ['squared_hinge']
+            'estimator__C': [0.1, 1.0, 10.0],
+            'estimator__loss': ['squared_hinge']
         }
         
         # Gradient Boosting
