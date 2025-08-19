@@ -237,6 +237,10 @@ class ImprovedOptimizedRadiomicsClassifier:
                 self.data = self.data[self.data[label_col].isin([0, 1])]
                 self.logger.info(f"Filtered to binary classification: {len(self.data)} samples")
 
+            # Save full copies for outer CV resets
+            self.full_data_df = self.data.copy()
+            self.full_label_col = label_col
+
             # Extract features and labels; drop non-feature identity columns
             non_feature_cols = [label_col]
             if 'subject_id' in self.data.columns:
@@ -890,7 +894,12 @@ class ImprovedOptimizedRadiomicsClassifier:
 
         outer_results = []
 
-        for fold_idx, (train_pool_idx, test_idx) in enumerate(skf.split(self.X, self.y), start=1):
+        # Use full dataset indices for each fold to avoid cumulative state affecting shapes
+        X_full = self.full_data_df.drop(columns=[c for c in [self.full_label_col, 'subject_id'] if c in self.full_data_df.columns]).values
+        y_full = self.full_data_df[self.full_label_col].values
+        ids_full = self.full_data_df['subject_id'].values if 'subject_id' in self.full_data_df.columns else np.arange(len(self.full_data_df))
+
+        for fold_idx, (train_pool_idx, test_idx) in enumerate(skf.split(X_full, y_full), start=1):
             self.logger.info(f"\n{'='*60}\nStarting OUTER FOLD {fold_idx}/{k_folds}\n{'='*60}")
 
             # Reset per-fold artifacts to avoid cross-fold state
@@ -899,13 +908,13 @@ class ImprovedOptimizedRadiomicsClassifier:
             self.feature_engineering_results = {}
 
             # Build raw splits
-            X_train_pool = self.X[train_pool_idx]
-            y_train_pool = self.y[train_pool_idx]
-            ids_train_pool = self.subject_ids[train_pool_idx]
+            X_train_pool = X_full[train_pool_idx]
+            y_train_pool = y_full[train_pool_idx]
+            ids_train_pool = ids_full[train_pool_idx]
 
-            X_test_raw = self.X[test_idx]
-            y_test_raw = self.y[test_idx]
-            ids_test_raw = self.subject_ids[test_idx]
+            X_test_raw = X_full[test_idx]
+            y_test_raw = y_full[test_idx]
+            ids_test_raw = ids_full[test_idx]
 
             # Train/Val split in train pool (optional)
             if val_ratio and val_ratio > 0:
