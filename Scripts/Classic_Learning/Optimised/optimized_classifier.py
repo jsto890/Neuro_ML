@@ -1038,11 +1038,70 @@ class ImprovedOptimizedRadiomicsClassifier:
                         summary[f'{metric}_mean'] = float(mean(values))
             (self.output_dir / 'outer_cv_summary.json').write_text(json.dumps(summary, indent=2, cls=NumpyEncoder))
             self.logger.info(f"Outer CV summary saved to {self.output_dir / 'outer_cv_summary.json'}")
+            # Create PNG summary plot with means, SD and 95% CI
+            try:
+                self._save_outer_cv_summary_plot(outer_results, output_path=self.output_dir / 'outer_cv_summary.png')
+                self.logger.info(f"Outer CV summary plot saved to {self.output_dir / 'outer_cv_summary.png'}")
+            except Exception as plot_err:
+                self.logger.error(f"Failed to write outer CV summary plot: {plot_err}")
         except Exception as e:
             self.logger.error(f"Failed to write outer CV summary: {e}")
 
         self.logger.info("Improved Optimized Outer Stratified K-Fold evaluation complete")
         return True
+
+    def _save_outer_cv_summary_plot(self, outer_results, output_path):
+        """Create a PNG summarizing per-fold test metrics with SD and 95% CI.
+
+        Error bars show 95% CI; points show individual fold scores.
+        """
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        metrics = ['accuracy', 'precision', 'recall', 'f1', 'auc']
+        values_by_metric = {}
+        for m in metrics:
+            vals = [float(d[m]) for d in outer_results if d.get(m) is not None]
+            if len(vals) == 0:
+                vals = [0.0]
+            values_by_metric[m] = np.array(vals, dtype=float)
+
+        means = [values_by_metric[m].mean() for m in metrics]
+        stds = [values_by_metric[m].std(ddof=1) if len(values_by_metric[m]) > 1 else 0.0 for m in metrics]
+        ns = [len(values_by_metric[m]) for m in metrics]
+        cis = []
+        for m, s, n in zip(means, stds, ns):
+            if n > 1:
+                se = s / np.sqrt(n)
+                ci = 1.96 * se
+            else:
+                ci = 0.0
+            cis.append(ci)
+
+        x = np.arange(len(metrics))
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.bar(x, means, yerr=cis, capsize=6, color='#4C78A8', alpha=0.85, label='Mean (95% CI)')
+
+        # Overlay fold points
+        for i, m in enumerate(metrics):
+            y_points = values_by_metric[m]
+            jitter = (np.random.rand(len(y_points)) - 0.5) * 0.15
+            ax.scatter(np.full_like(y_points, x[i]) + jitter, y_points, color='#F58518', alpha=0.7, s=30, label='Fold scores' if i == 0 else None)
+
+        # Annotate SD below bars
+        for i, s in enumerate(stds):
+            ax.text(x[i], max(0.01, means[i]) - 0.05, f"SD={s:.3f}", ha='center', va='top', fontsize=9, rotation=0)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels([m.upper() for m in metrics])
+        ax.set_ylim(0.0, 1.05)
+        ax.set_ylabel('Score')
+        ax.set_title('Outer CV Test Metrics (per script run)')
+        ax.legend()
+        ax.grid(True, axis='y', alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)
 
 def main():
     """Main function to run the improved optimized pipeline."""
