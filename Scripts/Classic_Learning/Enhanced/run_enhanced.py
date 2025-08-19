@@ -12,6 +12,7 @@ This script runs the enhanced radiomics classification pipeline with:
 """
 
 import os
+import argparse
 import sys
 from pathlib import Path
 
@@ -23,11 +24,31 @@ from Scripts.Classic_Learning.Enhanced.enhanced_classifier import EnhancedRadiom
 def main():
     """Run the enhanced radiomics classification pipeline."""
     
-    # Default paths
-    input_path = os.path.expanduser("~/reseng202500013-ndd-ml/data/radiomics_MRI_mri_labels.csv")
-    output_dir = os.path.expanduser("~/reseng202500013-ndd-ml/data/enhanced_classical_results")
-    random_state = 42
-    binary_only = True
+    parser = argparse.ArgumentParser(description='Enhanced Radiomics Classification Pipeline')
+    parser.add_argument('--input', default='~/reseng202500013-ndd-ml/data/radiomics_MRI_mri_labels.csv',
+                        help='Path to radiomics CSV file')
+    parser.add_argument('--output-dir', default='~/reseng202500013-ndd-ml/data/enhanced_classical_results',
+                        help='Output directory for results')
+    parser.add_argument('--random-state', type=int, default=42,
+                        help='Random seed for reproducibility')
+    parser.add_argument('--binary-only', action='store_true', default=True,
+                        help='Use only binary classification (labels 0 and 1)')
+    parser.add_argument('--multi-class', action='store_true', default=False,
+                        help='Use multi-class classification (all labels)')
+    parser.add_argument('--outer-k-folds', type=int, default=0,
+                        help='If >1, run outer Stratified K-Fold with this many folds (e.g., 5)')
+    parser.add_argument('--val-ratio', type=float, default=0.0,
+                        help='Validation ratio within the training pool per outer fold (0.0 to disable)')
+
+    args = parser.parse_args()
+
+    # Binary vs multi-class handling
+    binary_only = not args.multi_class
+
+    # Expand user paths
+    input_path = os.path.expanduser(args.input)
+    output_dir = os.path.expanduser(args.output_dir)
+    random_state = args.random_state
     
     # Check if input file exists
     if not os.path.exists(input_path):
@@ -46,7 +67,12 @@ def main():
     
     # Initialize and run pipeline
     classifier = EnhancedRadiomicsClassifier(input_path, output_dir, random_state, binary_only)
-    success = classifier.run_pipeline()
+
+    if args.outer_k_folds and args.outer_k_folds > 1:
+        print(f"Running Outer Stratified K-Fold: {args.outer_k_folds} folds | Val ratio: {args.val_ratio}")
+        success = classifier.run_outer_cv(k_folds=args.outer_k_folds, val_ratio=args.val_ratio)
+    else:
+        success = classifier.run_pipeline()
     
     if success:
         print("\n" + "=" * 60)

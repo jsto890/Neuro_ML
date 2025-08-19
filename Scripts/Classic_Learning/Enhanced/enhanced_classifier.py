@@ -603,6 +603,210 @@ class EnhancedRadiomicsClassifier:
         
         return True
 
+    def _preprocess_splits_train_only(self):
+        """Preprocess Train/Val/Test with transformers fit on Train only to avoid leakage.
+
+        Steps:
+        - SimpleImputer (median) fit on Train, transform Val/Test
+        - VarianceThreshold fit on Train, transform Val/Test
+        - SelectKBest (mutual_info, f_classif) fit on Train, union of selected features applied to all splits
+        - RobustScaler fit on Train, transform Val/Test
+        """
+        self.logger.info("Preprocessing splits (fit on Train only)...")
+        try:
+            X_train, y_train, ids_train = self.splits['train']
+            has_val = 'val' in self.splits
+            X_val, y_val, ids_val = self.splits['val'] if has_val else (None, None, None)
+            X_test, y_test, ids_test = self.splits['test']
+
+            # 1) Imputation on Train, apply to Val/Test
+            imputer = SimpleImputer(strategy='median')
+            X_train_imp = imputer.fit_transform(X_train)
+            X_val_imp = imputer.transform(X_val) if has_val else None
+            X_test_imp = imputer.transform(X_test)
+
+            # 2) Variance threshold on Train, apply to Val/Test
+            variance_selector = VarianceThreshold(threshold=0.01)
+            X_train_var = variance_selector.fit_transform(X_train_imp)
+            X_val_var = variance_selector.transform(X_val_imp) if has_val else None
+            X_test_var = variance_selector.transform(X_test_imp)
+
+            kept_mask = variance_selector.get_support()
+            feature_names_after_var = [f for f, keep in zip(self.feature_names, kept_mask) if keep]
+
+            # 3) Advanced selection on Train only (MI + F-stat), union of features
+            k_mi = min(50, X_train_var.shape[1]) if X_train_var.shape[1] > 0 else 0
+            k_f = min(50, X_train_var.shape[1]) if X_train_var.shape[1] > 0 else 0
+
+            if k_mi > 0:
+                mi_selector = SelectKBest(score_func=mutual_info_classif, k=k_mi)
+                mi_selector.fit(X_train_var, y_train)
+                mi_mask = mi_selector.get_support()
+                mi_features = [f for f, m in zip(feature_names_after_var, mi_mask) if m]
+            else:
+                mi_features = []
+
+            if k_f > 0:
+                f_selector = SelectKBest(score_func=f_classif, k=k_f)
+                f_selector.fit(X_train_var, y_train)
+                f_mask = f_selector.get_support()
+                f_features = [f for f, m in zip(feature_names_after_var, f_mask) if m]
+            else:
+                f_features = []
+
+            combined_features = list(set(mi_features + f_features)) if (mi_features or f_features) else feature_names_after_var
+            # Map combined feature names to indices in X_train_var order
+            name_to_index = {name: idx for idx, name in enumerate(feature_names_after_var)}
+            selected_indices = [name_to_index[name] for name in combined_features if name in name_to_index]
+
+            X_train_sel = X_train_var[:, selected_indices] if selected_indices else X_train_var
+            X_val_sel = (X_val_var[:, selected_indices] if selected_indices else X_val_var) if has_val else None
+            X_test_sel = X_test_var[:, selected_indices] if selected_indices else X_test_var
+
+            self.selected_features = combined_features if selected_indices else feature_names_after_var
+
+            # 4) Scale with RobustScaler fit on Train
+            self.scaler = RobustScaler()
+            X_train_scaled = self.scaler.fit_transform(X_train_sel)
+            X_val_scaled = self.scaler.transform(X_val_sel) if has_val else None
+            X_test_scaled = self.scaler.transform(X_test_sel)
+
+            # Store back
+            self.feature_names = self.selected_features
+            new_splits = {
+                'train': (X_train_scaled, y_train, ids_train),
+                'test': (X_test_scaled, y_test, ids_test)
+            }
+            if has_val:
+                new_splits['val'] = (X_val_scaled, y_val, ids_val)
+            self.splits = new_splits
+
+            self.logger.info(f"Preprocessing complete. Final features: {len(self.feature_names)}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error preprocessing splits: {e}")
+            return False
+
+    def run_outer_cv(self, k_folds: int = 5, val_ratio: float = 0.2):
+        """Run outer Stratified K-Fold evaluation with per-fold Train/Val split.
+
+        Preprocessing and model selection are fit exclusively on Train to avoid leakage.
+        """
+        self.logger.info("Starting Enhanced Outer Stratified K-Fold evaluation")
+
+        # Stage 0: Load data once
+        if not self.load_data():
+            self.logger.error("Failed to load data for outer CV")
+            return False
+
+        # Prepare outer folds (~20% test when k_folds=5)
+        skf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=self.random_state)
+
+        outer_results = []
+
+        for fold_idx, (train_pool_idx, test_idx) in enumerate(skf.split(self.X, self.y), start=1):
+            self.logger.info(f"\n{'='*60}\nStarting OUTER FOLD {fold_idx}/{k_folds}\n{'='*60}")
+
+            X_train_pool = self.X[train_pool_idx]
+            y_train_pool = self.y[train_pool_idx]
+            ids_train_pool = self.subject_ids[train_pool_idx]
+
+            X_test_raw = self.X[test_idx]
+            y_test_raw = self.y[test_idx]
+            ids_test_raw = self.subject_ids[test_idx]
+
+            # Inner Train/Val split of train pool
+            if val_ratio and val_ratio > 0:
+                X_train_raw, X_val_raw, y_train_raw, y_val_raw, ids_train_raw, ids_val_raw = train_test_split(
+                    X_train_pool,
+                    y_train_pool,
+                    ids_train_pool,
+                    test_size=val_ratio,
+                    random_state=self.random_state,
+                    stratify=y_train_pool
+                )
+                # Set raw splits
+                self.splits = {
+                    'train': (X_train_raw, y_train_raw, ids_train_raw),
+                    'val': (X_val_raw, y_val_raw, ids_val_raw),
+                    'test': (X_test_raw, y_test_raw, ids_test_raw)
+                }
+            else:
+                self.splits = {
+                    'train': (X_train_pool, y_train_pool, ids_train_pool),
+                    'test': (X_test_raw, y_test_raw, ids_test_raw)
+                }
+
+            # Fold-specific output directory
+            original_output_dir = self.output_dir
+            fold_output_dir = original_output_dir / f"outercv_fold_{fold_idx}"
+            self.output_dir = fold_output_dir
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            self.setup_logging()
+
+            # Preprocess with fit-on-train only
+            if not self._preprocess_splits_train_only():
+                self.logger.error(f"Fold {fold_idx}: preprocessing failed")
+                # restore and continue
+                self.output_dir = original_output_dir
+                self.setup_logging()
+                continue
+
+            # Proceed with modeling stages (no leakage)
+            stages = [
+                ("Model Definition", self.define_models),
+                ("Model Training", self.train_models),
+                ("Model Evaluation", self.evaluate_models),
+                ("Ensemble Creation", self.create_ensemble),
+                ("Saving Artifacts", self.save_artifacts)
+            ]
+
+            fold_success = True
+            for stage_name, stage_func in stages:
+                self.logger.info(f"\n{'='*50}")
+                self.logger.info(f"Starting {stage_name}")
+                self.logger.info(f"{'='*50}")
+                if not stage_func():
+                    self.logger.error(f"Fold {fold_idx} failed at {stage_name}")
+                    fold_success = False
+                    break
+
+            if fold_success and 'Ensemble' in self.results:
+                test_metrics = self.results['Ensemble']['test']
+                outer_results.append({
+                    'fold': fold_idx,
+                    'accuracy': float(test_metrics.get('accuracy', 0.0)),
+                    'precision': float(test_metrics.get('precision', 0.0)),
+                    'recall': float(test_metrics.get('recall', 0.0)),
+                    'f1': float(test_metrics.get('f1', 0.0)),
+                    'auc': float(test_metrics.get('auc', 0.0))
+                })
+
+            # restore output dir
+            self.output_dir = original_output_dir
+            self.setup_logging()
+
+        # Save outer CV summary
+        try:
+            import json
+            from statistics import mean
+            summary = {
+                'k_folds': k_folds,
+                'val_ratio': val_ratio,
+                'random_state': self.random_state,
+                'folds': outer_results
+            }
+            if outer_results:
+                for metric in ['accuracy', 'precision', 'recall', 'f1', 'auc']:
+                    summary[f'{metric}_mean'] = float(mean([f[metric] for f in outer_results]))
+            (self.output_dir / 'outer_cv_summary.json').write_text(json.dumps(summary, indent=2))
+            self.logger.info(f"Outer CV summary saved to {self.output_dir / 'outer_cv_summary.json'}")
+        except Exception as e:
+            self.logger.error(f"Failed to write outer CV summary: {e}")
+
+        self.logger.info("Enhanced Outer Stratified K-Fold evaluation complete")
+        return True
+
 def main():
     parser = argparse.ArgumentParser(description='Enhanced Radiomics Classification Pipeline')
     parser.add_argument('--input', 

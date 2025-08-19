@@ -136,6 +136,14 @@ class ImprovedOptimizedRadiomicsClassifier:
         self.feature_importance = {}
         self.results = {}
         self.feature_engineering_results = {}
+        # Store transformers/selectors for leak-free transform of Val/Test
+        self.variance_threshold_transformer = None
+        self.polynomial_features_transformer = None
+        self.var_feature_names: List[str] = []
+        self.engineered_feature_names: List[str] = []
+        self.top_feature_indices: List[int] = []
+        self.mi_selector = None
+        self.rfecv_selector = None
         
         # Setup logging
         self.setup_logging()
@@ -324,6 +332,13 @@ class ImprovedOptimizedRadiomicsClassifier:
             self.y = y_clean
             self.subject_ids = subject_ids_clean
             self.feature_names = engineered_feature_names
+
+            # Persist transformers and feature name maps for Val/Test transform
+            self.variance_threshold_transformer = variance_threshold
+            self.polynomial_features_transformer = poly
+            self.var_feature_names = var_feature_names
+            self.engineered_feature_names = engineered_feature_names
+            self.top_feature_indices = top_feature_indices if found_top_features else []
             
             # Store feature engineering results
             self.feature_engineering_results = {
@@ -355,6 +370,36 @@ class ImprovedOptimizedRadiomicsClassifier:
         except Exception as e:
             self.logger.error(f"Error in improved feature engineering: {e}")
             return False
+
+    def transform_with_engineering(self, X_raw: np.ndarray) -> np.ndarray:
+        """Apply fitted variance thresholding, polynomial features, optional statistical features,
+        and scaling to new data (Val/Test). Assumes improved_feature_engineering has been run.
+        """
+        try:
+            if self.variance_threshold_transformer is None or self.polynomial_features_transformer is None:
+                raise RuntimeError("Engineering transformers are not fitted")
+
+            # 1) Variance threshold transform
+            X_var = self.variance_threshold_transformer.transform(X_raw)
+
+            # 2) Polynomial transform
+            X_poly = self.polynomial_features_transformer.transform(X_var)
+
+            # 3) Statistical features for top features (if available)
+            if self.top_feature_indices:
+                top_data = X_var[:, self.top_feature_indices]
+                texture_mean = np.mean(top_data, axis=1, keepdims=True)
+                texture_std = np.std(top_data, axis=1, keepdims=True)
+                X_engineered = np.hstack([X_poly, texture_mean, texture_std])
+            else:
+                X_engineered = X_poly
+
+            # 4) Scaling
+            X_scaled = self.scaler.transform(X_engineered)
+            return X_scaled
+        except Exception as e:
+            self.logger.error(f"Error transforming with engineering: {e}")
+            raise
     
     def improved_feature_selection(self):
         """Stage 2: Improved feature selection with cross-validation."""
@@ -392,6 +437,10 @@ class ImprovedOptimizedRadiomicsClassifier:
             # Update data
             self.X = X_final
             self.feature_names = final_feature_names
+
+            # Store selectors for transforming Val/Test
+            self.mi_selector = mi_selector
+            self.rfecv_selector = rfecv
             
             # Store feature selection results
             self.feature_engineering_results['feature_selection'] = {
@@ -409,6 +458,14 @@ class ImprovedOptimizedRadiomicsClassifier:
         except Exception as e:
             self.logger.error(f"Error in feature selection: {e}")
             return False
+
+    def transform_with_selection(self, X_engineered_scaled: np.ndarray) -> np.ndarray:
+        """Apply fitted MI and RFECV selectors to new data (Val/Test)."""
+        if self.mi_selector is None or self.rfecv_selector is None:
+            raise RuntimeError("Selection transformers are not fitted")
+        X_mi = self.mi_selector.transform(X_engineered_scaled)
+        X_final = self.rfecv_selector.transform(X_mi)
+        return X_final
     
     def split_data(self, test_size=0.2, val_size=0.2):
         """Stage 3: Split data with stratification."""
@@ -807,6 +864,169 @@ class ImprovedOptimizedRadiomicsClassifier:
         self.logger.info(f"Results saved to: {self.output_dir}")
         self.logger.info(f"{'='*50}")
         
+        return True
+
+    def run_outer_cv(self, k_folds: int = 5, val_ratio: float = 0.2):
+        """Run outer Stratified K-Fold evaluation with per-fold Train/Val split.
+
+        Ensures all preprocessing/feature engineering/selection and model tuning
+        are fit strictly on the training data of each fold to avoid leakage.
+        """
+        self.logger.info("Starting Improved Optimized Outer Stratified K-Fold evaluation")
+
+        # Stage 0: Load data once
+        if not self.load_data():
+            self.logger.error("Failed to load data for outer CV")
+            return False
+
+        from sklearn.model_selection import StratifiedKFold, train_test_split
+        skf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=self.random_state)
+
+        outer_results = []
+
+        for fold_idx, (train_pool_idx, test_idx) in enumerate(skf.split(self.X, self.y), start=1):
+            self.logger.info(f"\n{'='*60}\nStarting OUTER FOLD {fold_idx}/{k_folds}\n{'='*60}")
+
+            # Reset per-fold artifacts to avoid cross-fold state
+            self.feature_importance = {}
+            self.results = {}
+            self.feature_engineering_results = {}
+
+            # Build raw splits
+            X_train_pool = self.X[train_pool_idx]
+            y_train_pool = self.y[train_pool_idx]
+            ids_train_pool = self.subject_ids[train_pool_idx]
+
+            X_test_raw = self.X[test_idx]
+            y_test_raw = self.y[test_idx]
+            ids_test_raw = self.subject_ids[test_idx]
+
+            # Train/Val split in train pool (optional)
+            if val_ratio and val_ratio > 0:
+                X_train_raw, X_val_raw, y_train_raw, y_val_raw, ids_train_raw, ids_val_raw = train_test_split(
+                    X_train_pool,
+                    y_train_pool,
+                    ids_train_pool,
+                    test_size=val_ratio,
+                    random_state=self.random_state,
+                    stratify=y_train_pool
+                )
+                # Temporarily store raw splits before engineering
+                self.splits = {
+                    'train': (X_train_raw, y_train_raw, ids_train_raw),
+                    'val': (X_val_raw, y_val_raw, ids_val_raw),
+                    'test': (X_test_raw, y_test_raw, ids_test_raw)
+                }
+            else:
+                self.splits = {
+                    'train': (X_train_pool, y_train_pool, ids_train_pool),
+                    'test': (X_test_raw, y_test_raw, ids_test_raw)
+                }
+
+            # Use fold-specific output directory
+            original_output_dir = self.output_dir
+            fold_output_dir = original_output_dir / f"outercv_fold_{fold_idx}"
+            self.output_dir = fold_output_dir
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            self.setup_logging()
+
+            # Perform improved feature engineering and selection ONLY on Train
+            try:
+                # Set raw train as current data for engineering
+                X_train_raw, y_train_raw, ids_train_raw = self.splits['train']
+                self.X, self.y, self.subject_ids = X_train_raw, y_train_raw, ids_train_raw
+
+                # 1) Fit engineering on Train
+                if not self.improved_feature_engineering():
+                    raise RuntimeError("Feature engineering failed")
+
+                # Engineered Train
+                X_train_engineered = self.X
+                y_train_engineered = self.y
+                ids_train_engineered = self.subject_ids
+
+                # 2) Transform Val/Test with fitted engineering
+                has_val = 'val' in self.splits
+                if has_val:
+                    X_val_raw, y_val_raw, ids_val_raw = self.splits['val']
+                X_test_raw, y_test_raw, ids_test_raw = self.splits['test']
+
+                X_val_engineered = self.transform_with_engineering(X_val_raw) if has_val else None
+                X_test_engineered = self.transform_with_engineering(X_test_raw)
+
+                # 3) Fit feature selection on engineered Train only
+                self.X, self.y = X_train_engineered, y_train_engineered
+                if not self.improved_feature_selection():
+                    raise RuntimeError("Feature selection failed")
+
+                # 4) Transform Val/Test with fitted selection
+                X_train_selected = self.X
+                X_val_selected = self.transform_with_selection(X_val_engineered) if has_val else None
+                X_test_selected = self.transform_with_selection(X_test_engineered)
+
+                # Update splits to selected datasets
+                new_splits = {
+                    'train': (X_train_selected, y_train_engineered, ids_train_engineered),
+                    'test': (X_test_selected, y_test_raw, ids_test_raw)
+                }
+                if has_val:
+                    new_splits['val'] = (X_val_selected, y_val_raw, ids_val_raw)
+                self.splits = new_splits
+
+                # 5) Hyperparameter optimization, ensemble, evaluation, save
+                if not self.optimize_svm_hyperparameters():
+                    raise RuntimeError("SVM optimization failed")
+                if not self.create_improved_ensemble():
+                    raise RuntimeError("Ensemble creation failed")
+                if not self.evaluate_improved_models():
+                    raise RuntimeError("Evaluation failed")
+                if not self.save_improved_artifacts():
+                    raise RuntimeError("Saving artifacts failed")
+
+                # Collect test metrics for this fold (Optimized_SVM preferred)
+                if 'Optimized_SVM' in self.results:
+                    test_metrics = self.results['Optimized_SVM']['test']
+                else:
+                    test_metrics = self.results.get('Improved_Ensemble', {}).get('test', {})
+
+                outer_results.append({
+                    'fold': fold_idx,
+                    'accuracy': float(test_metrics.get('accuracy', 0.0)),
+                    'precision': float(test_metrics.get('precision', 0.0)),
+                    'recall': float(test_metrics.get('recall', 0.0)),
+                    'f1': float(test_metrics.get('f1', 0.0)),
+                    'auc': float(test_metrics.get('auc', 0.0)),
+                    'mcc': float(test_metrics.get('mcc', 0.0)) if 'mcc' in test_metrics else None
+                })
+
+            except Exception as e:
+                self.logger.error(f"Fold {fold_idx} failed: {e}")
+
+            # Restore output dir
+            self.output_dir = original_output_dir
+            self.setup_logging()
+
+        # Save outer CV summary
+        try:
+            import json
+            from statistics import mean
+            summary = {
+                'k_folds': k_folds,
+                'val_ratio': val_ratio,
+                'random_state': self.random_state,
+                'folds': outer_results
+            }
+            if outer_results:
+                for metric in ['accuracy', 'precision', 'recall', 'f1', 'auc']:
+                    values = [f[metric] for f in outer_results if f.get(metric) is not None]
+                    if values:
+                        summary[f'{metric}_mean'] = float(mean(values))
+            (self.output_dir / 'outer_cv_summary.json').write_text(json.dumps(summary, indent=2, cls=NumpyEncoder))
+            self.logger.info(f"Outer CV summary saved to {self.output_dir / 'outer_cv_summary.json'}")
+        except Exception as e:
+            self.logger.error(f"Failed to write outer CV summary: {e}")
+
+        self.logger.info("Improved Optimized Outer Stratified K-Fold evaluation complete")
         return True
 
 def main():
