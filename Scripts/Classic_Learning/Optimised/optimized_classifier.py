@@ -205,46 +205,52 @@ class ImprovedOptimizedRadiomicsClassifier:
             # Validate data quality
             if len(self.data) < 10:
                 raise ValueError(f"Insufficient data: only {len(self.data)} samples")
-            
             if len(self.data.columns) < 5:
                 raise ValueError(f"Insufficient features: only {len(self.data.columns)} columns")
-            
-            # Remove diagnostic columns (keep only radiomics features)
-            diagnostic_cols = [col for col in self.data.columns if any(x in col.lower() for x in ['diagnosis', 'label', 'class', 'target'])]
+
+            # Remove PyRadiomics diagnostics_* metadata columns only (keep 'label' and other fields)
+            diagnostic_cols = [col for col in self.data.columns if col.startswith('diagnostics_')]
             if diagnostic_cols:
                 self.data = self.data.drop(columns=diagnostic_cols)
-                self.logger.info(f"Removed {len(diagnostic_cols)} diagnostic columns")
-            
-            # Handle binary classification
-            if self.binary_only:
-                # Find label column
-                label_col = None
+                self.logger.info(f"Removed {len(diagnostic_cols)} diagnostics_* columns")
+
+            # Determine label column
+            label_col = 'label' if 'label' in self.data.columns else None
+            if label_col is None:
                 for col in self.data.columns:
                     if any(x in col.lower() for x in ['label', 'class', 'target', 'diagnosis']):
                         label_col = col
                         break
-                
-                if label_col is None:
-                    raise ValueError("No label column found")
-                
-                # Get unique labels
-                unique_labels = self.data[label_col].unique()
+            if label_col is None:
+                raise ValueError("No label column found")
+
+            # Ensure integer labels
+            try:
+                self.data[label_col] = self.data[label_col].astype(int)
+            except Exception:
+                pass
+
+            # Filter to binary classes if requested
+            unique_labels = self.data[label_col].unique()
             self.logger.info(f"Unique labels: {unique_labels}")
-            
-                # Filter to binary (0, 1)
-            if len(unique_labels) > 2:
-                # Keep only classes 0 and 1
+            if self.binary_only and len(unique_labels) > 2:
                 self.data = self.data[self.data[label_col].isin([0, 1])]
                 self.logger.info(f"Filtered to binary classification: {len(self.data)} samples")
-                
-                # Extract features and labels
+
+            # Extract features and labels; drop non-feature identity columns
+            non_feature_cols = [label_col]
+            if 'subject_id' in self.data.columns:
+                non_feature_cols.append('subject_id')
+
             self.y = self.data[label_col].values
-            self.X = self.data.drop(columns=[label_col]).values
-            self.feature_names = self.data.drop(columns=[label_col]).columns.tolist()
-            self.subject_ids = np.arange(len(self.data))
-                # Log final data shape
+            self.X = self.data.drop(columns=non_feature_cols).values
+            self.feature_names = self.data.drop(columns=non_feature_cols).columns.tolist()
+            self.subject_ids = self.data['subject_id'].values if 'subject_id' in self.data.columns else np.arange(len(self.data))
+
+            # Log final data shape
+            counts = {int(lbl): int((self.y == lbl).sum()) for lbl in np.unique(self.y)}
             self.logger.info(f"Data shape: {self.X.shape}")
-            self.logger.info(f"Labels: {np.unique(self.y)} (counts: {[np.sum(self.y == label) for label in np.unique(self.y)]})")
+            self.logger.info(f"Labels: {sorted(list(np.unique(self.y)))} (counts: {counts})")
             
             return True
             
