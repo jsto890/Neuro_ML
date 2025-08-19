@@ -25,9 +25,12 @@ from sklearn.model_selection import (
     StratifiedKFold, GridSearchCV, cross_val_score,
     train_test_split, RandomizedSearchCV
 )
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier
+from sklearn.linear_model import LogisticRegression, SGDClassifier
+from sklearn.svm import SVC, LinearSVC
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
 from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.feature_selection import (
     SelectKBest, f_classif, mutual_info_classif, 
@@ -36,11 +39,25 @@ from sklearn.feature_selection import (
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     roc_auc_score, confusion_matrix, classification_report,
-    roc_curve, precision_recall_curve
+    roc_curve, precision_recall_curve, matthews_corrcoef
 )
 from sklearn.impute import SimpleImputer
 import warnings
 warnings.filterwarnings('ignore')
+import os
+
+# Optional advanced libraries
+try:
+    from xgboost import XGBClassifier
+    XGBOOST_AVAILABLE = True
+except Exception:
+    XGBOOST_AVAILABLE = False
+
+try:
+    from lightgbm import LGBMClassifier
+    LIGHTGBM_AVAILABLE = True
+except Exception:
+    LIGHTGBM_AVAILABLE = False
 
 class EnhancedRadiomicsClassifier:
     """Enhanced radiomics classifier with multiple algorithms and advanced feature engineering."""
@@ -249,7 +266,7 @@ class EnhancedRadiomicsClassifier:
         """Define multiple models with regularization-focused parameters."""
         self.logger.info("Defining models with regularization...")
         
-        # Regularized Random Forest
+        # Random Forest (regularized)
         rf_params = {
             'n_estimators': [50, 100],
             'max_depth': [3, 5, 7],
@@ -259,23 +276,39 @@ class EnhancedRadiomicsClassifier:
             'class_weight': ['balanced']
         }
         
-        # Regularized Logistic Regression
+        # Logistic Regression (L2)
         lr_params = {
             'C': [0.01, 0.1, 1.0, 10.0],
             'penalty': ['l1', 'l2'],
             'solver': ['liblinear'],
             'class_weight': ['balanced']
         }
+        # Logistic Regression Elastic-Net (predict_proba supported via saga)
+        lr_en_params = {
+            'C': [0.1, 1.0, 10.0],
+            'l1_ratio': [0.1, 0.5, 0.9],
+            'penalty': ['elasticnet'],
+            'solver': ['saga'],
+            'class_weight': ['balanced'],
+            'max_iter': [2000]
+        }
         
-        # Regularized SVM
+        # SVM (kernel)
         svm_params = {
             'C': [0.1, 1.0, 10.0],
             'kernel': ['rbf', 'linear'],
             'gamma': ['scale', 'auto'],
             'class_weight': ['balanced']
         }
+        # Calibrated LinearSVC (probabilistic)
+        linsvc_base = LinearSVC(max_iter=10000)
+        linsvc_calibrated = CalibratedClassifierCV(base_estimator=linsvc_base, cv=5, method='sigmoid')
+        linsvc_params = {
+            'base_estimator__C': [0.1, 1.0, 10.0],
+            'base_estimator__loss': ['squared_hinge']
+        }
         
-        # Regularized Gradient Boosting
+        # Gradient Boosting
         gb_params = {
             'n_estimators': [50, 100],
             'max_depth': [3, 5],
@@ -285,12 +318,93 @@ class EnhancedRadiomicsClassifier:
             'min_samples_leaf': [2, 4]
         }
         
+        # Extra Trees
+        et_params = {
+            'n_estimators': [100, 200],
+            'max_depth': [None, 10],
+            'min_samples_split': [2, 10],
+            'min_samples_leaf': [1, 2],
+            'max_features': ['sqrt', 'log2']
+        }
+
+        # KNN (features are scaled earlier)
+        knn_params = {
+            'n_neighbors': [3, 5, 7, 9],
+            'weights': ['uniform', 'distance'],
+            'p': [1, 2]
+        }
+
+        # Gaussian Naive Bayes
+        gnb_params = {
+            'var_smoothing': [1e-9, 1e-8, 1e-7]
+        }
+
+        # SGDClassifier as probabilistic linear baseline
+        sgd_params = {
+            'loss': ['log_loss'],
+            'alpha': [1e-4, 1e-3, 1e-2],
+            'penalty': ['l2', 'elasticnet'],
+            'max_iter': [2000]
+        }
+
+        # XGBoost (if available)
+        if XGBOOST_AVAILABLE:
+            xgb_model = XGBClassifier(
+                random_state=self.random_state,
+                eval_metric='logloss',
+                n_jobs=-1,
+                tree_method='hist'
+            )
+            xgb_params = {
+                'n_estimators': [100, 200],
+                'max_depth': [3, 5, 7],
+                'learning_rate': [0.01, 0.1],
+                'subsample': [0.8, 1.0],
+                'colsample_bytree': [0.8, 1.0],
+                'reg_alpha': [0.0, 0.1],
+                'reg_lambda': [1.0, 2.0]
+            }
+        else:
+            xgb_model, xgb_params = None, None
+
+        # LightGBM (if available)
+        if LIGHTGBM_AVAILABLE:
+            lgbm_model = LGBMClassifier(
+                random_state=self.random_state,
+                n_jobs=-1
+            )
+            lgbm_params = {
+                'n_estimators': [100, 200],
+                'num_leaves': [31, 63],
+                'learning_rate': [0.01, 0.1],
+                'subsample': [0.8, 1.0],
+                'colsample_bytree': [0.8, 1.0],
+                'reg_alpha': [0.0, 0.1],
+                'reg_lambda': [1.0, 2.0]
+            }
+        else:
+            lgbm_model, lgbm_params = None, None
+        
         self.models = {
             'RandomForest': (RandomForestClassifier(random_state=self.random_state), rf_params),
+            'ExtraTrees': (ExtraTreesClassifier(random_state=self.random_state), et_params),
             'LogisticRegression': (LogisticRegression(random_state=self.random_state), lr_params),
+            'LogRegElasticNet': (LogisticRegression(random_state=self.random_state), lr_en_params),
             'SVM': (SVC(random_state=self.random_state, probability=True), svm_params),
-            'GradientBoosting': (GradientBoostingClassifier(random_state=self.random_state), gb_params)
+            'LinearSVC_Calibrated': (linsvc_calibrated, linsvc_params),
+            'GradientBoosting': (GradientBoostingClassifier(random_state=self.random_state), gb_params),
+            'KNN': (KNeighborsClassifier(), knn_params),
+            'GaussianNB': (GaussianNB(), gnb_params),
+            'SGDClassifier': (SGDClassifier(random_state=self.random_state), sgd_params)
         }
+        if XGBOOST_AVAILABLE and xgb_model is not None:
+            self.models['XGBoost'] = (xgb_model, xgb_params)
+        else:
+            self.logger.info("XGBoost not available. Skipping.")
+        if LIGHTGBM_AVAILABLE and lgbm_model is not None:
+            self.models['LightGBM'] = (lgbm_model, lgbm_params)
+        else:
+            self.logger.info("LightGBM not available. Skipping.")
         
         self.logger.info(f"Defined {len(self.models)} models")
         return True
@@ -705,6 +819,8 @@ class EnhancedRadiomicsClassifier:
         skf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=self.random_state)
 
         outer_results = []
+        # Collect per-model test results across folds
+        per_model_results = {}
 
         for fold_idx, (train_pool_idx, test_idx) in enumerate(skf.split(self.X, self.y), start=1):
             self.logger.info(f"\n{'='*60}\nStarting OUTER FOLD {fold_idx}/{k_folds}\n{'='*60}")
@@ -790,6 +906,38 @@ class EnhancedRadiomicsClassifier:
                     'auc': float(test_metrics.get('auc', 0.0))
                 })
 
+                # Aggregate per-model results for summary PNGs
+                for model_name, results in self.results.items():
+                    # Each entry has splits; we want test split
+                    if 'test' not in results:
+                        continue
+                    test_res = results['test']
+                    y_true = test_res.get('true_labels')
+                    y_pred = test_res.get('predictions')
+                    # Compute MCC if not present
+                    mcc = None
+                    try:
+                        if y_true is not None and y_pred is not None:
+                            mcc = float(matthews_corrcoef(y_true, y_pred))
+                    except Exception:
+                        mcc = None
+                    # Compute confusion matrix
+                    try:
+                        cm = confusion_matrix(y_true, y_pred)
+                    except Exception:
+                        cm = None
+
+                    entry = {
+                        'accuracy': float(test_res.get('accuracy', 0.0)),
+                        'precision': float(test_res.get('precision', 0.0)),
+                        'recall': float(test_res.get('recall', 0.0)),
+                        'f1': float(test_res.get('f1', 0.0)),
+                        'auc': float(test_res.get('auc', 0.0)),
+                        'mcc': mcc,
+                        'cm': cm
+                    }
+                    per_model_results.setdefault(model_name, []).append(entry)
+
             # restore output dir
             self.output_dir = original_output_dir
             self.setup_logging()
@@ -815,6 +963,16 @@ class EnhancedRadiomicsClassifier:
                 self.logger.info(f"Outer CV summary plot saved to {self.output_dir / 'outer_cv_summary.png'}")
             except Exception as plot_err:
                 self.logger.error(f"Failed to write outer CV summary plot: {plot_err}")
+
+            # Create per-model summary PNGs
+            try:
+                for model_name, fold_list in per_model_results.items():
+                    safe_name = model_name.lower().replace(' ', '_')
+                    out_path = self.output_dir / f'model_{safe_name}_summary.png'
+                    self._save_per_model_summary_plot(model_name, fold_list, output_path=out_path)
+                self.logger.info("Per-model summary plots saved")
+            except Exception as e:
+                self.logger.error(f"Failed to write per-model summary plots: {e}")
         except Exception as e:
             self.logger.error(f"Failed to write outer CV summary: {e}")
 
@@ -871,6 +1029,94 @@ class EnhancedRadiomicsClassifier:
         ax.legend()
         ax.grid(True, axis='y', alpha=0.3)
         fig.tight_layout()
+        fig.savefig(output_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+
+    def _save_per_model_summary_plot(self, model_name, folds, output_path):
+        """Summarize a single model across outer folds with metrics and confusion matrix.
+
+        folds: list of dicts with keys: accuracy, precision, recall, f1, auc, mcc, cm
+        """
+        import numpy as np
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+
+        metrics = ['accuracy', 'precision', 'recall', 'f1', 'auc', 'mcc']
+        values_by_metric = {}
+        for m in metrics:
+            vals = [float(d[m]) for d in folds if d.get(m) is not None]
+            if len(vals) == 0:
+                vals = [0.0]
+            values_by_metric[m] = np.array(vals, dtype=float)
+
+        means = [values_by_metric[m].mean() for m in metrics]
+        stds = [values_by_metric[m].std(ddof=1) if len(values_by_metric[m]) > 1 else 0.0 for m in metrics]
+        ns = [len(values_by_metric[m]) for m in metrics]
+        cis = []
+        for mean_val, std_val, n in zip(means, stds, ns):
+            if n > 1:
+                se = std_val / np.sqrt(n)
+                ci = 1.96 * se
+            else:
+                ci = 0.0
+            cis.append(ci)
+
+        # Aggregate confusion matrix by summing across folds
+        cms = [d['cm'] for d in folds if d.get('cm') is not None]
+        if cms:
+            try:
+                agg_cm = np.sum(np.stack(cms, axis=0), axis=0)
+            except Exception:
+                agg_cm = cms[0]
+        else:
+            agg_cm = np.array([[0, 0], [0, 0]])
+
+        fig, axes = plt.subplots(2, 2, figsize=(12, 9))
+        fig.suptitle(f'Model Summary: {model_name}', fontsize=14)
+
+        # Bar chart with 95% CI
+        x = np.arange(len(metrics))
+        ax0 = axes[0, 0]
+        ax0.bar(x, means, yerr=cis, capsize=6, color='#4C78A8', alpha=0.9)
+        ax0.set_xticks(x)
+        ax0.set_xticklabels([m.upper() for m in metrics], rotation=0)
+        ax0.set_ylim(0.0, 1.05)
+        ax0.set_ylabel('Score')
+        ax0.set_title('Mean (95% CI) across folds')
+        ax0.grid(True, axis='y', alpha=0.3)
+
+        # Overlay individual fold points
+        for i, m in enumerate(metrics):
+            pts = values_by_metric[m]
+            jitter = (np.random.rand(len(pts)) - 0.5) * 0.15
+            ax0.scatter(np.full_like(pts, x[i]) + jitter, pts, color='#F58518', alpha=0.7, s=30)
+
+        # SD annotations
+        for i, s in enumerate(stds):
+            ax0.text(x[i], max(0.01, means[i]) - 0.05, f"SD={s:.3f}", ha='center', va='top', fontsize=9)
+
+        # Confusion matrix heatmap (aggregated)
+        ax1 = axes[0, 1]
+        sns.heatmap(agg_cm, annot=True, fmt='d', cmap='Blues', cbar=False, ax=ax1)
+        ax1.set_title('Aggregated Confusion Matrix (Test)')
+        ax1.set_xlabel('Predicted')
+        ax1.set_ylabel('Actual')
+
+        # Text panel with exact means/SD/CIs
+        ax2 = axes[1, 0]
+        ax2.axis('off')
+        lines = [
+            f"{m.upper()}: mean={means[i]:.3f}, sd={stds[i]:.3f}, 95% CI=±{cis[i]:.3f}" for i, m in enumerate(metrics)
+        ]
+        ax2.text(0.0, 1.0, "\n".join(lines), fontsize=11, va='top')
+
+        # Placeholder for ROC would require storing probabilities and labels per fold;
+        # keep final axis empty or future extension
+        ax3 = axes[1, 1]
+        ax3.axis('off')
+        ax3.text(0.5, 0.5, 'See per-fold plots for ROC curves', ha='center', va='center', fontsize=10, alpha=0.6)
+
+        fig.tight_layout(rect=[0, 0.03, 1, 0.95])
         fig.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close(fig)
 
