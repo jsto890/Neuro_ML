@@ -14,11 +14,13 @@ import os
 import sys
 import argparse
 from pathlib import Path
+from datetime import datetime
 
 # Add the current directory to Python path
 sys.path.append(str(Path(__file__).parent))
 
 from Scripts.Classic_Learning.Classic.radiomics_classifier import RadiomicsClassifier
+
 
 def main():
     parser = argparse.ArgumentParser(description='Run Radiomics Classical Learning Pipeline')
@@ -55,7 +57,10 @@ def main():
     
     # Expand user paths
     input_path = os.path.expanduser(args.input)
-    output_dir = os.path.expanduser(args.output_dir)
+    base_output_dir = Path(os.path.expanduser(args.output_dir))
+    # Create timestamped run directory
+    run_dir = base_output_dir / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    run_dir.mkdir(parents=True, exist_ok=True)
     config_path = os.path.expanduser(args.config) if args.config else None
     
     # Check if input file exists
@@ -68,13 +73,13 @@ def main():
     
     print("Starting Radiomics Classical Learning Pipeline")
     print(f"Input: {input_path}")
-    print(f"Output: {output_dir}")
+    print(f"Output: {str(run_dir)}")
     print(f"Random seed: {args.random_state}")
     print(f"Classification: {'Binary (0,1)' if binary_only else 'Multi-class'}")
     print("=" * 60)
     
     # Initialize classifier
-    classifier = RadiomicsClassifier(input_path, output_dir, args.random_state, binary_only)
+    classifier = RadiomicsClassifier(input_path, str(run_dir), args.random_state, binary_only)
 
     # Choose standard pipeline or outer CV
     if args.outer_k_folds and args.outer_k_folds > 1:
@@ -86,7 +91,7 @@ def main():
     if success:
         print("\n" + "=" * 60)
         print("Pipeline completed successfully!")
-        print(f"Results saved to: {output_dir}")
+        print(f"Results saved to: {str(run_dir)}")
         print("\nGenerated files:")
         print(f"  • random_forest_model.pkl - Trained model")
         print(f"  • scaler.pkl - Feature scaler")

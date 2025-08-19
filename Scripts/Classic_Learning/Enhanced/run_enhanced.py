@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Enhanced Radiomics Classification Pipeline Runner
-================================================
+===============================================
 
 This script runs the enhanced radiomics classification pipeline with:
 - Multiple algorithms (Random Forest, SVM, Logistic Regression, Gradient Boosting)
@@ -15,6 +15,7 @@ import os
 import argparse
 import sys
 from pathlib import Path
+from datetime import datetime
 
 # Add the current directory to Python path
 sys.path.append(str(Path(__file__).parent))
@@ -47,7 +48,10 @@ def main():
 
     # Expand user paths
     input_path = os.path.expanduser(args.input)
-    output_dir = os.path.expanduser(args.output_dir)
+    base_output_dir = Path(os.path.expanduser(args.output_dir))
+    # Create timestamped run directory
+    run_dir = base_output_dir / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    run_dir.mkdir(parents=True, exist_ok=True)
     random_state = args.random_state
     
     # Check if input file exists
@@ -60,13 +64,13 @@ def main():
     
     print("Starting Enhanced Radiomics Classification Pipeline")
     print(f"Input: {input_path}")
-    print(f"Output: {output_dir}")
+    print(f"Output: {str(run_dir)}")
     print(f"Random seed: {random_state}")
     print(f"Classification: {'Binary (0,1)' if binary_only else 'Multi-class'}")
     print("=" * 60)
     
     # Initialize and run pipeline
-    classifier = EnhancedRadiomicsClassifier(input_path, output_dir, random_state, binary_only)
+    classifier = EnhancedRadiomicsClassifier(input_path, str(run_dir), random_state, binary_only)
 
     if args.outer_k_folds and args.outer_k_folds > 1:
         print(f"Running Outer Stratified K-Fold: {args.outer_k_folds} folds | Val ratio: {args.val_ratio}")
@@ -77,7 +81,7 @@ def main():
     if success:
         print("\n" + "=" * 60)
         print("Enhanced pipeline completed successfully!")
-        print(f"Results saved to: {output_dir}")
+        print(f"Results saved to: {str(run_dir)}")
         print("\nGenerated files:")
         print(f"  • randomforest_model.pkl - Random Forest model")
         print(f"  • logisticregression_model.pkl - Logistic Regression model")

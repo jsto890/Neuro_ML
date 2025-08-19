@@ -15,6 +15,7 @@ import os
 import sys
 import argparse
 from pathlib import Path
+from datetime import datetime
 
 # Add the current directory to Python path
 sys.path.append(str(Path(__file__).parent))
@@ -43,7 +44,10 @@ def main():
 
     # Expand user paths
     input_path = os.path.expanduser(args.input)
-    output_dir = os.path.expanduser(args.output_dir)
+    base_output_dir = Path(os.path.expanduser(args.output_dir))
+    # Create timestamped run directory
+    run_dir = base_output_dir / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    run_dir.mkdir(parents=True, exist_ok=True)
     random_state = args.random_state
     binary_only = not args.multi_class
     
@@ -57,7 +61,7 @@ def main():
     
     print("Starting Optimized Radiomics Classification Pipeline")
     print(f"Input: {input_path}")
-    print(f"Output: {output_dir}")
+    print(f"Output: {str(run_dir)}")
     print(f"Random seed: {random_state}")
     print(f"Classification: {'Binary (0,1)' if binary_only else 'Multi-class'}")
     print("=" * 60)
@@ -65,7 +69,7 @@ def main():
     # Initialize and run pipeline
     # Note: the exported class in optimized_classifier.py is ImprovedOptimizedRadiomicsClassifier
     from optimized_classifier import ImprovedOptimizedRadiomicsClassifier as OptimizedRadiomicsClassifierActual
-    classifier = OptimizedRadiomicsClassifierActual(input_path, output_dir, random_state, binary_only)
+    classifier = OptimizedRadiomicsClassifierActual(input_path, str(run_dir), random_state, binary_only)
 
     if args.outer_k_folds and args.outer_k_folds > 1:
         print(f"Running Outer Stratified K-Fold: {args.outer_k_folds} folds | Val ratio: {args.val_ratio}")
@@ -76,7 +80,7 @@ def main():
     if success:
         print("\n" + "=" * 60)
         print("Optimized pipeline completed successfully!")
-        print(f"Results saved to: {output_dir}")
+        print(f"Results saved to: {str(run_dir)}")
         print("\nGenerated files:")
         print(f"  • optimized_svm_model.pkl - Fine-tuned SVM model")
         print(f"  • optimized_ensemble_model.pkl - Ensemble model")
