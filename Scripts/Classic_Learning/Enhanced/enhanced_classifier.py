@@ -352,7 +352,8 @@ class EnhancedRadiomicsClassifier:
                 random_state=self.random_state,
                 eval_metric='logloss',
                 n_jobs=-1,
-                tree_method='hist'
+                tree_method='hist',
+                verbosity=0
             )
             xgb_params = {
                 'n_estimators': [100, 200],
@@ -370,7 +371,9 @@ class EnhancedRadiomicsClassifier:
         if LIGHTGBM_AVAILABLE:
             lgbm_model = LGBMClassifier(
                 random_state=self.random_state,
-                n_jobs=-1
+                n_jobs=-1,
+                verbosity=-1,
+                force_col_wise=True
             )
             lgbm_params = {
                 'n_estimators': [100, 200],
@@ -425,7 +428,14 @@ class EnhancedRadiomicsClassifier:
                     random_state=self.random_state, verbose=0
                 )
                 
-                search.fit(X_train, y_train)
+                # Suppress verbose library-level stdout for certain learners
+                if (LIGHTGBM_AVAILABLE and 'LightGBM' in name) or (XGBOOST_AVAILABLE and 'XGBoost' in name):
+                    import contextlib, os, sys
+                    with open(os.devnull, 'w') as devnull:
+                        with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+                            search.fit(X_train, y_train)
+                else:
+                    search.fit(X_train, y_train)
                 self.best_models[name] = search.best_estimator_
                 
                 self.logger.info(f"{name} - Best CV score: {search.best_score_:.4f}")
