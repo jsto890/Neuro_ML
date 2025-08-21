@@ -28,6 +28,31 @@ from evaluate_model import evaluate_model, calculate_metrics, create_evaluation_
 plt.style.use('default')
 sns.set_palette("husl")
 
+def compute_summary_stats(values):
+    """Compute mean, std, 95% CI, min, max, range for a list of numeric values."""
+    arr = np.array(values, dtype=float)
+    n = len(arr)
+    if n == 0:
+        return {'mean': 0.0, 'std': 0.0, 'ci95': 0.0, 'ci95_lower': 0.0, 'ci95_upper': 0.0, 'min': 0.0, 'max': 0.0, 'range': 0.0, 'n': 0}
+    mean = float(np.mean(arr))
+    std = float(np.std(arr, ddof=1)) if n > 1 else 0.0
+    se = std / np.sqrt(n) if n > 1 else 0.0
+    ci = 1.96 * se if n > 1 else 0.0
+    min_v = float(np.min(arr))
+    max_v = float(np.max(arr))
+    rng = max_v - min_v
+    return {
+        'mean': mean,
+        'std': std,
+        'ci95': ci,
+        'ci95_lower': mean - ci,
+        'ci95_upper': mean + ci,
+        'min': min_v,
+        'max': max_v,
+        'range': rng,
+        'n': int(n)
+    }
+
 def filter_labels(csv_path, labels):
     """Filter the CSV file to only include specified labels."""
     df = pd.read_csv(csv_path)
@@ -565,6 +590,152 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_
               f"MCC: {fold_result['final_mcc']:.4f}")
     print("="*60)
     
+    return summary
+
+def create_test_summary_plots(fold_test_metrics, output_dir="./deep_learning_plots", model_name="Model", classification_description=None):
+    """Create comprehensive test summary plots aggregated across folds and save JSON stats.
+
+    fold_test_metrics: list of dicts with keys {'fold': int, 'metrics': dict}
+    The metrics dict should contain: 'accuracy', 'precision', 'recall', 'f1_score', 'auc', 'mcc', 'confusion_matrix'
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    if not fold_test_metrics:
+        print(f"No test metrics provided for {model_name}; skipping test summary plots.")
+        return None
+
+    folds = [d['fold'] for d in fold_test_metrics]
+    accs = [d['metrics']['accuracy'] for d in fold_test_metrics]
+    precs = [d['metrics']['precision'] for d in fold_test_metrics]
+    recalls = [d['metrics']['recall'] for d in fold_test_metrics]
+    f1s = [d['metrics']['f1_score'] for d in fold_test_metrics]
+    aucs = [d['metrics']['auc'] for d in fold_test_metrics]
+    mccs = [d['metrics']['mcc'] for d in fold_test_metrics]
+    thresholds = [d['threshold_used'] for d in fold_test_metrics if d.get('threshold_used') is not None]
+
+    # Average confusion matrix
+    cms = [np.array(d['metrics']['confusion_matrix']) for d in fold_test_metrics if 'confusion_matrix' in d['metrics'] and d['metrics']['confusion_matrix'] is not None]
+    avg_cm = None
+    if cms:
+        try:
+            avg_cm = np.mean(np.stack(cms, axis=0), axis=0)
+        except Exception:
+            # Fallback: sum then divide
+            avg_cm = sum(cms) / len(cms)
+
+    # Create plots (2x3 grid)
+    fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+    title_suffix = f" - {classification_description} Classification" if classification_description else ""
+    fig.suptitle(f'Test Performance Summary - {model_name}{title_suffix}', fontsize=16, fontweight='bold')
+
+    # 1. Test AUC by Fold
+    ax1 = axes[0, 0]
+    bars = ax1.bar(folds, aucs, alpha=0.8, color='skyblue', edgecolor='black')
+    for bar, v in zip(bars, aucs):
+        ax1.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01, f'{v:.3f}', ha='center', va='bottom')
+    ax1.set_xlabel('Fold')
+    ax1.set_ylabel('AUC')
+    ax1.set_ylim(0, 1)
+    ax1.set_title('Test AUC by Fold')
+    ax1.grid(True, alpha=0.3)
+
+    # 2. Test Accuracy by Fold
+    ax2 = axes[0, 1]
+    bars = ax2.bar(folds, accs, alpha=0.8, color='lightcoral', edgecolor='black')
+    for bar, v in zip(bars, accs):
+        ax2.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01, f'{v:.3f}', ha='center', va='bottom')
+    ax2.set_xlabel('Fold')
+    ax2.set_ylabel('Accuracy')
+    ax2.set_ylim(0, 1)
+    ax2.set_title('Test Accuracy by Fold')
+    ax2.grid(True, alpha=0.3)
+
+    # 3. Test F1-Score by Fold
+    ax3 = axes[0, 2]
+    bars = ax3.bar(folds, f1s, alpha=0.8, color='orange', edgecolor='black')
+    for bar, v in zip(bars, f1s):
+        ax3.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01, f'{v:.3f}', ha='center', va='bottom')
+    ax3.set_xlabel('Fold')
+    ax3.set_ylabel('F1-Score')
+    ax3.set_ylim(0, 1)
+    ax3.set_title('Test F1-Score by Fold')
+    ax3.grid(True, alpha=0.3)
+
+    # 4. Test Precision and Recall by Fold (grouped)
+    ax4 = axes[1, 0]
+    x = np.arange(len(folds))
+    width = 0.35
+    ax4.bar(x - width/2, precs, width, label='Precision', alpha=0.8, color='lightgreen', edgecolor='black')
+    ax4.bar(x + width/2, recalls, width, label='Recall', alpha=0.8, color='lightblue', edgecolor='black')
+    ax4.set_xticks(x)
+    ax4.set_xticklabels(folds)
+    ax4.set_xlabel('Fold')
+    ax4.set_ylabel('Score')
+    ax4.set_ylim(0, 1)
+    ax4.set_title('Test Precision and Recall by Fold')
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+
+    # 5. Average Confusion Matrix
+    ax5 = axes[1, 1]
+    if avg_cm is not None:
+        sns.heatmap(avg_cm, annot=True, fmt='.1f', cmap='Blues', xticklabels=['CN', 'AD'], yticklabels=['CN', 'AD'], ax=ax5)
+        ax5.set_title('Average Confusion Matrix (Test)')
+        ax5.set_xlabel('Predicted')
+        ax5.set_ylabel('Actual')
+    else:
+        ax5.text(0.5, 0.5, 'No confusion matrix data', ha='center', va='center', transform=ax5.transAxes)
+        ax5.set_title('Confusion Matrix (No Data)')
+
+    # 6. Mean ± 95% CI for all metrics
+    ax6 = axes[1, 2]
+    metric_names = ['Accuracy', 'Precision', 'Recall', 'F1', 'AUC', 'MCC']
+    metric_values = [accs, precs, recalls, f1s, aucs, mccs]
+    stats = [compute_summary_stats(vals) for vals in metric_values]
+    means = [s['mean'] for s in stats]
+    cis = [s['ci95'] for s in stats]
+    bars = ax6.bar(metric_names, means, yerr=cis, capsize=4, alpha=0.8, color='mediumpurple', edgecolor='black')
+    ax6.set_ylim(0, 1)
+    ax6.set_ylabel('Score')
+    ax6.set_title('Test Metrics: Mean ± 95% CI')
+    for bar, mean in zip(bars, means):
+        ax6.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01, f'{mean:.3f}', ha='center', va='bottom')
+    ax6.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(output_path / f'{model_name}_test_analysis.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # Build summary JSON
+    summary = {
+        'model_name': model_name,
+        'total_folds': len(folds),
+        'metrics': {
+            'accuracy': compute_summary_stats(accs),
+            'precision': compute_summary_stats(precs),
+            'recall': compute_summary_stats(recalls),
+            'f1_score': compute_summary_stats(f1s),
+            'auc': compute_summary_stats(aucs),
+            'mcc': compute_summary_stats(mccs)
+        },
+        'average_confusion_matrix': (avg_cm.tolist() if avg_cm is not None else None),
+        'parameters': {
+            'threshold': (compute_summary_stats(thresholds) if thresholds else None)
+        }
+    }
+
+    with open(output_path / f'{model_name}_test_summary.json', 'w') as f:
+        json.dump(summary, f, indent=2)
+
+    # Print concise summary
+    print("\n" + "="*60)
+    print(f"DEEP LEARNING TEST SUMMARY - {model_name}")
+    print("="*60)
+    for name, stat in summary['metrics'].items():
+        print(f"{name.capitalize():<10}: {stat['mean']:.4f}  (95% CI ± {stat['ci95']:.4f}; range {stat['min']:.4f}-{stat['max']:.4f})")
+    print("="*60)
+
     return summary
 
 def create_threshold_optimization_plot(threshold_results, output_dir, model_name="Model", fold_num=1):
@@ -1165,6 +1336,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
 
         fold_results = []
         folds_data = []
+        fold_test_metrics = []
 
         for fold_idx, (train_pool_idx, test_idx) in enumerate(outer_splits, start=1):
             print(f"\nFOLD {fold_idx}/{k_folds} [{model_name}]")
@@ -1287,6 +1459,18 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
             print(f"Fold {fold_idx} test evaluation saved to: {test_eval_dir}")
 
+            # Store test metrics for aggregation
+            safe_metrics = {
+                'accuracy': float(metrics['accuracy']),
+                'precision': float(metrics['precision']),
+                'recall': float(metrics['recall']),
+                'f1_score': float(metrics['f1_score']),
+                'auc': float(metrics['auc']),
+                'mcc': float(metrics['mcc']),
+                'confusion_matrix': metrics['confusion_matrix'].tolist() if hasattr(metrics.get('confusion_matrix', None), 'tolist') else metrics.get('confusion_matrix')
+            }
+            fold_test_metrics.append({'fold': fold_idx, 'metrics': safe_metrics, 'threshold_used': float(test_threshold) if test_threshold is not None else None})
+
             # Collect results
             fold_results.append({
                 'fold': fold_idx,
@@ -1329,10 +1513,22 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         
         evaluation_dir = os.path.join(model_dir, "evaluation_plots")
         create_training_plots(folds_data, evaluation_dir, model_name)
+        # Create aggregated test plots and summary
+        classification_description = get_label_description(args.labels)
+        test_summary = create_test_summary_plots(fold_test_metrics, evaluation_dir, model_name, classification_description=classification_description)
         folds_data_filename = f"{model_name}_folds_data.json"
         folds_data_path = os.path.join(model_dir, folds_data_filename)
         with open(folds_data_path, "w") as f:
             json.dump(folds_data, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+        # Compute validation stats across folds for this model
+        val_stats = {
+            'auc': compute_summary_stats([r['best_val_auc'] for r in fold_results]),
+            'accuracy': compute_summary_stats([r['best_val_acc'] for r in fold_results]),
+            'precision': compute_summary_stats([r['best_precision_macro'] for r in fold_results]),
+            'recall': compute_summary_stats([r['best_recall_macro'] for r in fold_results]),
+            'f1': compute_summary_stats([r['best_f1_macro'] for r in fold_results])
+        }
+
         run_summary = {
             'timestamp': timestamp,
             'run_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1348,6 +1544,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'average_mcc': avg_mcc,
             'average_threshold': avg_threshold,
             'average_accuracy_improvement': avg_accuracy_improvement,
+            'validation_stats': val_stats,
+            'test_summary': test_summary,
             'total_folds': len(fold_results),
             'training_params': {
                 'epochs': args.epochs,
@@ -1376,6 +1574,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'avg_recall_macro': float(avg_recall_macro),
             'avg_f1_macro': float(avg_f1_macro),
             'avg_mcc': float(avg_mcc),
+            'val_stats': val_stats,
+            'test_stats': (test_summary['metrics'] if isinstance(test_summary, dict) and 'metrics' in test_summary else None),
             'fold_results': fold_results
         })
         print(f"\n{model_name} results saved to: {model_dir}")
@@ -1401,32 +1601,78 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     avg_precisions = [r['avg_precision_macro'] for r in all_model_results]
     avg_recalls = [r['avg_recall_macro'] for r in all_model_results]
     avg_f1s = [r['avg_f1_macro'] for r in all_model_results]
+    # Also prepare test metric means if available
+    test_auc_means = []
+    test_auc_cis = []
+    for r in all_model_results:
+        ts = r.get('test_stats')
+        if ts and 'auc' in ts:
+            test_auc_means.append(ts['auc'].get('mean', None))
+            test_auc_cis.append(ts['auc'].get('ci95', 0.0))
+        else:
+            test_auc_means.append(None)
+            test_auc_cis.append(0.0)
     
     # Create a larger figure for more metrics
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-    
-    # Plot 1: AUC and Accuracy
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 7))
+
+    # Pull per-model validation stats for error bars
+    val_auc_means = []
+    val_auc_cis = []
+    val_acc_means = []
+    val_acc_cis = []
+    prec_means = []
+    prec_cis = []
+    rec_means = []
+    rec_cis = []
+    f1_means = []
+    f1_cis = []
+    for r in all_model_results:
+        if 'val_stats' in r and r['val_stats']:
+            val_auc_means.append(r['val_stats']['auc']['mean'])
+            val_auc_cis.append(r['val_stats']['auc']['ci95'])
+            val_acc_means.append(r['val_stats']['accuracy']['mean'])
+            val_acc_cis.append(r['val_stats']['accuracy']['ci95'])
+            prec_means.append(r['val_stats']['precision']['mean'])
+            prec_cis.append(r['val_stats']['precision']['ci95'])
+            rec_means.append(r['val_stats']['recall']['mean'])
+            rec_cis.append(r['val_stats']['recall']['ci95'])
+            f1_means.append(r['val_stats']['f1']['mean'])
+            f1_cis.append(r['val_stats']['f1']['ci95'])
+        else:
+            val_auc_means.append(0.0)
+            val_auc_cis.append(0.0)
+            val_acc_means.append(0.0)
+            val_acc_cis.append(0.0)
+            prec_means.append(0.0)
+            prec_cis.append(0.0)
+            rec_means.append(0.0)
+            rec_cis.append(0.0)
+            f1_means.append(0.0)
+            f1_cis.append(0.0)
+
+    # Plot 1: Validation AUC and Accuracy with 95% CI error bars
     x = np.arange(len(model_names))
     width = 0.35
-    ax1.bar(x - width/2, avg_aucs, width, label='Avg Val AUC', alpha=0.8, color='skyblue')
-    ax1.bar(x + width/2, avg_accs, width, label='Avg Val Acc', alpha=0.8, color='lightcoral')
+    ax1.bar(x - width/2, val_auc_means, width, yerr=val_auc_cis, capsize=4, label='Val AUC (mean ± 95% CI)', alpha=0.85, color='skyblue', edgecolor='black')
+    ax1.bar(x + width/2, val_acc_means, width, yerr=val_acc_cis, capsize=4, label='Val Acc (mean ± 95% CI)', alpha=0.85, color='lightcoral', edgecolor='black')
     ax1.set_xticks(x)
     ax1.set_xticklabels(model_names, rotation=20)
     ax1.set_ylabel('Score')
     ax1.set_ylim(0, 1)
-    ax1.set_title(f'AUC and Accuracy Comparison\n{get_label_description(args.labels)} Classification')
+    ax1.set_title(f'Validation AUC and Accuracy Comparison\n{get_label_description(args.labels)} Classification')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
-    
-    # Plot 2: Precision, Recall, F1
-    ax2.bar(x - width, avg_precisions, width, label='Precision', alpha=0.8, color='lightgreen')
-    ax2.bar(x, avg_recalls, width, label='Recall', alpha=0.8, color='lightblue')
-    ax2.bar(x + width, avg_f1s, width, label='F1 Score', alpha=0.8, color='orange')
+
+    # Plot 2: Validation Precision, Recall, F1 with error bars
+    ax2.bar(x - width, prec_means, width, yerr=prec_cis, capsize=4, label='Precision', alpha=0.85, color='lightgreen', edgecolor='black')
+    ax2.bar(x, rec_means, width, yerr=rec_cis, capsize=4, label='Recall', alpha=0.85, color='lightblue', edgecolor='black')
+    ax2.bar(x + width, f1_means, width, yerr=f1_cis, capsize=4, label='F1 Score', alpha=0.85, color='orange', edgecolor='black')
     ax2.set_xticks(x)
     ax2.set_xticklabels(model_names, rotation=20)
     ax2.set_ylabel('Score')
     ax2.set_ylim(0, 1)
-    ax2.set_title(f'Precision, Recall, F1 Comparison\n{get_label_description(args.labels)} Classification')
+    ax2.set_title(f'Validation Precision, Recall, F1 Comparison\n{get_label_description(args.labels)} Classification')
     ax2.legend()
     ax2.grid(True, alpha=0.3)
     
@@ -1437,12 +1683,26 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     print(f"Summary comparison plot saved to: {summary_plot_path}")
     
     # Save overall comparison summary
+    # Extend comparison summary with mean, 95% CI and range per model for validation and test (if available)
+    model_detailed_stats = {}
+    for r in all_model_results:
+        name = r['model_name']
+        # Validation stats already computed per model
+        val_stats = r.get('val_stats', None)
+        # Optional test stats (from aggregated test summary)
+        test_stats = r.get('test_stats', None)
+        model_detailed_stats[name] = {
+            'validation': val_stats,
+            'test': test_stats
+        }
+
     comparison_summary = {
         'run_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         'run_folder': run_folder,
         'classification_task': get_label_description(args.labels),
         'models_tested': model_names,
         'comparison_results': all_model_results,
+        'per_model_stats': model_detailed_stats,
         'best_model_by_auc': model_names[np.argmax(avg_aucs)],
         'best_model_by_acc': model_names[np.argmax(avg_accs)],
         'best_model_by_f1': model_names[np.argmax(avg_f1s)],
