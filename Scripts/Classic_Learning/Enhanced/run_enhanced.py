@@ -44,6 +44,8 @@ def main():
                         help='If >1, run outer Stratified K-Fold with this many folds (e.g., 5)')
     parser.add_argument('--val-ratio', type=float, default=0.0,
                         help='Validation ratio within the training pool per outer fold (0.0 to disable)')
+    parser.add_argument('--ml-threads', type=int, default=None,
+                        help='Max threads per model for LightGBM/XGBoost (default=min(4, CPU cores))')
 
     args = parser.parse_args()
 
@@ -74,7 +76,7 @@ def main():
     print("=" * 60)
     
     # Initialize and run pipeline
-    classifier = EnhancedRadiomicsClassifier(input_path, str(run_dir), random_state, binary_only)
+    classifier = EnhancedRadiomicsClassifier(input_path, str(run_dir), random_state, binary_only, ml_threads=args.ml_threads)
 
     if args.outer_k_folds and args.outer_k_folds > 1:
         print(f"Running Outer Stratified K-Fold: {args.outer_k_folds} folds | Val ratio: {args.val_ratio}")

@@ -62,7 +62,7 @@ except Exception:
 class EnhancedRadiomicsClassifier:
     """Enhanced radiomics classifier with multiple algorithms and advanced feature engineering."""
     
-    def __init__(self, input_path, output_dir, random_state=42, binary_only=True):
+    def __init__(self, input_path, output_dir, random_state=42, binary_only=True, ml_threads=None):
         """
         Initialize the Enhanced Radiomics Classifier.
         
@@ -71,11 +71,13 @@ class EnhancedRadiomicsClassifier:
             output_dir (str): Output directory for results
             random_state (int): Random seed for reproducibility
             binary_only (bool): If True, only use labels 0 and 1
+            ml_threads (int|None): Max threads for LightGBM/XGBoost. If None, defaults to min(4, CPU cores).
         """
         self.input_path = input_path
         self.output_dir = Path(output_dir)
         self.random_state = random_state
         self.binary_only = binary_only
+        self.ml_threads = ml_threads
         
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -348,10 +350,12 @@ class EnhancedRadiomicsClassifier:
 
         # XGBoost (if available)
         if XGBOOST_AVAILABLE:
+            # Cap internal threads to avoid oversubscription
+            max_threads = self.ml_threads if self.ml_threads is not None else min(4, (os.cpu_count() or 4))
             xgb_model = XGBClassifier(
                 random_state=self.random_state,
                 eval_metric='logloss',
-                n_jobs=-1,
+                n_jobs=max_threads,
                 tree_method='hist',
                 verbosity=0
             )
@@ -369,9 +373,11 @@ class EnhancedRadiomicsClassifier:
 
         # LightGBM (if available)
         if LIGHTGBM_AVAILABLE:
+            # Cap internal threads to avoid oversubscription
+            max_threads = self.ml_threads if self.ml_threads is not None else min(4, (os.cpu_count() or 4))
             lgbm_model = LGBMClassifier(
                 random_state=self.random_state,
-                n_jobs=-1,
+                n_jobs=max_threads,
                 verbosity=-1,
                 force_col_wise=True
             )
@@ -422,9 +428,14 @@ class EnhancedRadiomicsClassifier:
                 self.logger.info(f"Training {name}...")
                 
                 # Use RandomizedSearchCV for faster search
+                # Avoid nested parallelism with multi-threaded learners (LightGBM/XGBoost)
+                # by limiting the search parallelism to a single job for those models.
+                search_n_jobs = -1
+                if ('LightGBM' in name) or ('XGBoost' in name):
+                    search_n_jobs = 1
                 search = RandomizedSearchCV(
-                    model, param_grid, n_iter=20, cv=5, 
-                    scoring='roc_auc', n_jobs=-1, 
+                    model, param_grid, n_iter=20, cv=5,
+                    scoring='roc_auc', n_jobs=search_n_jobs,
                     random_state=self.random_state, verbose=0
                 )
                 
