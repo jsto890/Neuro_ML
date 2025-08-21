@@ -550,7 +550,8 @@ class EnhancedRadiomicsClassifier:
             axes[0, 0].bar(model_names, test_accuracies, color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'])
             axes[0, 0].set_title('Model Comparison - Test Accuracy')
             axes[0, 0].set_ylabel('Accuracy')
-            axes[0, 0].tick_params(axis='x', rotation=45, ha='right')
+            axes[0, 0].tick_params(axis='x', rotation=45)
+            axes[0, 0].set_xticklabels(model_names, ha='right')
             
             # 2. ROC Curves
             for name in model_names:
