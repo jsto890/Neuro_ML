@@ -652,10 +652,17 @@ class EnhancedRadiomicsClassifier:
             
             # 2. ROC Curves
             for name in model_names:
-                fpr, tpr, _ = roc_curve(
-                    self.results[name]['test']['true_labels'],
-                    self.results[name]['test']['probabilities']
-                )
+                y_true = self.results[name]['test']['true_labels']
+                y_probs = self.results[name]['test']['probabilities']
+                
+                # Convert labels to {0,1} for roc_curve if they're not consecutive
+                if set(np.unique(y_true)) != {0, 1}:
+                    y_true_binary = (y_true == y_true.max()).astype(int)
+                    self.logger.debug(f"Converting labels {np.unique(y_true)} to {np.unique(y_true_binary)} for ROC curve")
+                else:
+                    y_true_binary = y_true
+                
+                fpr, tpr, _ = roc_curve(y_true_binary, y_probs)
                 auc_score = self.results[name]['test']['auc']
                 axes[0, 1].plot(fpr, tpr, label=f'{name} (AUC = {auc_score:.3f})')
             
@@ -1240,8 +1247,14 @@ class EnhancedRadiomicsClassifier:
         ax3 = axes[1, 1]
         if ensemble_rocs and len(ensemble_rocs) > 0:
             for i, (y_true, y_prob) in enumerate(ensemble_rocs):
-                fpr, tpr, _ = roc_curve(y_true, y_prob)
-                auc_score = roc_auc_score(y_true, y_prob)
+                # Convert labels to {0,1} for roc_curve if they're not consecutive
+                if set(np.unique(y_true)) != {0, 1}:
+                    y_true_binary = (y_true == y_true.max()).astype(int)
+                else:
+                    y_true_binary = y_true
+                
+                fpr, tpr, _ = roc_curve(y_true_binary, y_prob)
+                auc_score = roc_auc_score(y_true_binary, y_prob)
                 ax3.plot(fpr, tpr, label=f'Fold {i+1} (AUC = {auc_score:.3f})', alpha=0.8, linewidth=2)
             
             ax3.plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Random')
