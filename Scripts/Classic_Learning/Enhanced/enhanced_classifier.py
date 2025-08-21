@@ -61,7 +61,7 @@ except Exception:
 class EnhancedRadiomicsClassifier:
     """Enhanced radiomics classifier with multiple algorithms and advanced feature engineering."""
     
-    def __init__(self, input_path, output_dir, random_state=42, binary_only=True, ml_threads=None):
+    def __init__(self, input_path, output_dir, random_state=42, binary_only=True, binary_labels=(0, 1), ml_threads=None):
         """
         Initialize the Enhanced Radiomics Classifier.
         
@@ -69,13 +69,15 @@ class EnhancedRadiomicsClassifier:
             input_path (str): Path to radiomics CSV file
             output_dir (str): Output directory for results
             random_state (int): Random seed for reproducibility
-            binary_only (bool): If True, only use labels 0 and 1
+            binary_only (bool): If True, only use specified binary labels
+            binary_labels (tuple): Labels to use for binary classification (default: (0, 1))
             ml_threads (int|None): Max threads for LightGBM/XGBoost. If None, defaults to min(4, CPU cores).
         """
         self.input_path = input_path
         self.output_dir = Path(output_dir)
         self.random_state = random_state
         self.binary_only = binary_only
+        self.binary_labels = binary_labels
         self.ml_threads = ml_threads
         
         # Create output directory
@@ -138,12 +140,12 @@ class EnhancedRadiomicsClassifier:
             # Filter for binary classification if requested
             if self.binary_only:
                 initial_count = len(self.data)
-                self.data = self.data[self.data['label'].isin([0, 1])]
+                self.data = self.data[self.data['label'].isin(self.binary_labels)]
                 final_count = len(self.data)
-                self.logger.info(f"Filtered to binary classification: {initial_count} → {final_count} samples")
+                self.logger.info(f"Filtered to binary classification (labels {self.binary_labels}): {initial_count} → {final_count} samples")
                 
                 if final_count == 0:
-                    raise ValueError("No samples remaining after binary filtering")
+                    raise ValueError(f"No samples remaining after binary filtering for labels {self.binary_labels}")
             
             # Extract components
             self.subject_ids = self.data['subject_id'].values

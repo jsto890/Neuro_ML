@@ -40,6 +40,8 @@ def main():
                         help='Use only binary classification (labels 0 and 1)')
     parser.add_argument('--multi-class', action='store_true', default=False,
                         help='Use multi-class classification (all labels)')
+    parser.add_argument('--binary-labels', nargs=2, type=int, default=[0, 1],
+                        help='Two labels to use for binary classification (default: 0 1)')
     parser.add_argument('--outer-k-folds', type=int, default=0,
                         help='If >1, run outer Stratified K-Fold with this many folds (e.g., 5)')
     parser.add_argument('--val-ratio', type=float, default=0.0,
@@ -72,11 +74,12 @@ def main():
     print(f"Input: {input_path}")
     print(f"Output: {str(run_dir)}")
     print(f"Random seed: {random_state}")
-    print(f"Classification: {'Binary (0,1)' if binary_only else 'Multi-class'}")
+    print(f"Classification: {'Binary ' + str(args.binary_labels) if binary_only else 'Multi-class'}")
     print("=" * 60)
     
     # Initialize and run pipeline
-    classifier = EnhancedRadiomicsClassifier(input_path, str(run_dir), random_state, binary_only, ml_threads=args.ml_threads)
+    classifier = EnhancedRadiomicsClassifier(input_path, str(run_dir), random_state, binary_only, 
+                                           binary_labels=tuple(args.binary_labels), ml_threads=args.ml_threads)
 
     if args.outer_k_folds and args.outer_k_folds > 1:
         print(f"Running Outer Stratified K-Fold: {args.outer_k_folds} folds | Val ratio: {args.val_ratio}")
