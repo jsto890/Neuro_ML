@@ -912,7 +912,8 @@ class EnhancedRadiomicsClassifier:
                     'precision': float(test_metrics.get('precision', 0.0)),
                     'recall': float(test_metrics.get('recall', 0.0)),
                     'f1': float(test_metrics.get('f1', 0.0)),
-                    'auc': float(test_metrics.get('auc', 0.0))
+                    'auc': float(test_metrics.get('auc', 0.0)),
+                    'mcc': float(matthews_corrcoef(test_metrics.get('true_labels'), test_metrics.get('predictions'))) if (test_metrics.get('true_labels') is not None and test_metrics.get('predictions') is not None) else None
                 })
 
                 # Aggregate per-model results for summary PNGs
@@ -962,13 +963,34 @@ class EnhancedRadiomicsClassifier:
                 'folds': outer_results
             }
             if outer_results:
-                for metric in ['accuracy', 'precision', 'recall', 'f1', 'auc']:
-                    summary[f'{metric}_mean'] = float(mean([f[metric] for f in outer_results]))
+                for metric in ['accuracy', 'precision', 'recall', 'f1', 'auc', 'mcc']:
+                    vals = [f[metric] for f in outer_results if f.get(metric) is not None]
+                    if len(vals) > 0:
+                        summary[f'{metric}_mean'] = float(mean(vals))
             (self.output_dir / 'outer_cv_summary.json').write_text(json.dumps(summary, indent=2))
             self.logger.info(f"Outer CV summary saved to {self.output_dir / 'outer_cv_summary.json'}")
             # Create PNG summary plot with means, SD and 95% CI
             try:
-                self._save_outer_cv_summary_plot(outer_results, output_path=self.output_dir / 'outer_cv_summary.png')
+                # Compute aggregated confusion matrix for the Ensemble across folds (if available)
+                ensemble_cms = []
+                try:
+                    if 'Ensemble' in per_model_results:
+                        for entry in per_model_results.get('Ensemble', []):
+                            cm = entry.get('cm')
+                            if cm is not None:
+                                ensemble_cms.append(cm)
+                except Exception:
+                    ensemble_cms = []
+
+                agg_cm = None
+                if len(ensemble_cms) > 0:
+                    try:
+                        import numpy as np
+                        agg_cm = np.sum(np.stack(ensemble_cms, axis=0), axis=0)
+                    except Exception:
+                        agg_cm = ensemble_cms[0]
+
+                self._save_outer_cv_summary_plot(outer_results, output_path=self.output_dir / 'outer_cv_summary.png', ensemble_agg_cm=agg_cm)
                 self.logger.info(f"Outer CV summary plot saved to {self.output_dir / 'outer_cv_summary.png'}")
             except Exception as plot_err:
                 self.logger.error(f"Failed to write outer CV summary plot: {plot_err}")
@@ -988,13 +1010,17 @@ class EnhancedRadiomicsClassifier:
         self.logger.info("Enhanced Outer Stratified K-Fold evaluation complete")
         return True
 
-    def _save_outer_cv_summary_plot(self, outer_results, output_path):
-        """Create a PNG summarizing per-fold test metrics with SD and 95% CI.
-
-        Error bars show 95% CI; points show individual fold scores.
+    def _save_outer_cv_summary_plot(self, outer_results, output_path, ensemble_agg_cm=None):
+        """Create a PNG summarizing outer CV results with:
+        - Mean and 95% CI per metric, with per-fold points and numeric annotations
+        - Aggregated confusion matrix across folds for the Ensemble (if provided)
+        - Table of per-fold metric values
+        - Text panel with mean, SD and CI for quick reading
         """
         import numpy as np
         import matplotlib.pyplot as plt
+        import seaborn as sns
+        import pandas as pd
 
         metrics = ['accuracy', 'precision', 'recall', 'f1', 'auc']
         values_by_metric = {}
@@ -1008,36 +1034,92 @@ class EnhancedRadiomicsClassifier:
         stds = [values_by_metric[m].std(ddof=1) if len(values_by_metric[m]) > 1 else 0.0 for m in metrics]
         ns = [len(values_by_metric[m]) for m in metrics]
         cis = []
-        for m, s, n in zip(means, stds, ns):
+        for mean_val, std_val, n in zip(means, stds, ns):
             if n > 1:
-                se = s / np.sqrt(n)
+                se = std_val / np.sqrt(n)
                 ci = 1.96 * se
             else:
                 ci = 0.0
             cis.append(ci)
 
+        # Build per-fold table data
+        rows = []
+        for i, fold_dict in enumerate(outer_results, start=1):
+            rows.append([
+                f"Fold {i}",
+                f"{fold_dict.get('accuracy', 0.0):.3f}",
+                f"{fold_dict.get('precision', 0.0):.3f}",
+                f"{fold_dict.get('recall', 0.0):.3f}",
+                f"{fold_dict.get('f1', 0.0):.3f}",
+                f"{fold_dict.get('auc', 0.0):.3f}"
+            ])
+        table_df = pd.DataFrame(rows, columns=['Fold', 'ACC', 'PREC', 'REC', 'F1', 'AUC'])
+
+        # Layout: 2x2 grid
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig.suptitle('Outer CV Fold Comparison', fontsize=16)
+
+        # Top-left: bar chart with 95% CI and points
         x = np.arange(len(metrics))
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.bar(x, means, yerr=cis, capsize=6, color='#4C78A8', alpha=0.85, label='Mean (95% CI)')
+        ax0 = axes[0, 0]
+        bars = ax0.bar(x, means, yerr=cis, capsize=6, color='#4C78A8', alpha=0.85, label='Mean (95% CI)')
 
         # Overlay fold points
         for i, m in enumerate(metrics):
             y_points = values_by_metric[m]
             jitter = (np.random.rand(len(y_points)) - 0.5) * 0.15
-            ax.scatter(np.full_like(y_points, x[i]) + jitter, y_points, color='#F58518', alpha=0.7, s=30, label='Fold scores' if i == 0 else None)
+            ax0.scatter(np.full_like(y_points, x[i]) + jitter, y_points, color='#F58518', alpha=0.8, s=30, label='Fold scores' if i == 0 else None)
 
-        # Annotate SD below bars
-        for i, s in enumerate(stds):
-            ax.text(x[i], max(0.01, means[i]) - 0.05, f"SD={s:.3f}", ha='center', va='top', fontsize=9, rotation=0)
+        # Annotate mean values above bars and SD below
+        for i, (b, mean_val, sd_val) in enumerate(zip(bars, means, stds)):
+            ax0.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.02, f"{mean_val:.3f}", ha='center', va='bottom', fontsize=10, fontweight='bold')
+            ax0.text(b.get_x() + b.get_width() / 2, max(0.01, mean_val) - 0.06, f"SD={sd_val:.3f}", ha='center', va='top', fontsize=9)
 
-        ax.set_xticks(x)
-        ax.set_xticklabels([m.upper() for m in metrics])
-        ax.set_ylim(0.0, 1.05)
-        ax.set_ylabel('Score')
-        ax.set_title('Outer CV Test Metrics (per script run)')
-        ax.legend()
-        ax.grid(True, axis='y', alpha=0.3)
-        fig.tight_layout()
+        ax0.set_xticks(x)
+        ax0.set_xticklabels([m.upper() for m in metrics])
+        ax0.set_ylim(0.0, 1.05)
+        ax0.set_ylabel('Score')
+        ax0.set_title('Test Metrics (Means, 95% CI, and Fold Scores)')
+        ax0.legend()
+        ax0.grid(True, axis='y', alpha=0.3)
+
+        # Top-right: Aggregated confusion matrix (if provided)
+        ax1 = axes[0, 1]
+        if ensemble_agg_cm is not None:
+            sns.heatmap(ensemble_agg_cm, annot=True, fmt='d', cmap='Blues', cbar=False, ax=ax1)
+            ax1.set_title('Aggregated Confusion Matrix (Ensemble, Test)')
+            ax1.set_xlabel('Predicted')
+            ax1.set_ylabel('Actual')
+        else:
+            ax1.axis('off')
+            ax1.text(0.5, 0.5, 'Aggregated confusion matrix unavailable', ha='center', va='center', fontsize=11, alpha=0.7)
+
+        # Bottom-left: Per-fold values table
+        ax2 = axes[1, 0]
+        ax2.axis('off')
+        table = ax2.table(cellText=table_df.values, colLabels=table_df.columns, loc='center')
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+        table.scale(1.1, 1.2)
+        ax2.set_title('Per-fold Test Metrics', pad=10)
+
+        # Bottom-right: Text panel with summary stats and, if binary, CM stats
+        ax3 = axes[1, 1]
+        ax3.axis('off')
+        lines = []
+        for i, m in enumerate(metrics):
+            lines.append(f"{m.upper()}: mean={means[i]:.3f}, sd={stds[i]:.3f}, 95% CI=±{cis[i]:.3f}")
+        if ensemble_agg_cm is not None and isinstance(ensemble_agg_cm, np.ndarray) and ensemble_agg_cm.shape == (2, 2):
+            tn, fp, fn, tp = ensemble_agg_cm[0, 0], ensemble_agg_cm[0, 1], ensemble_agg_cm[1, 0], ensemble_agg_cm[1, 1]
+            total = ensemble_agg_cm.sum()
+            acc = (tp + tn) / total if total > 0 else 0.0
+            prevalence = (tp + fn) / total if total > 0 else 0.0
+            lines.append("")
+            lines.append(f"Aggregated CM (binary): TN={int(tn)}, FP={int(fp)}, FN={int(fn)}, TP={int(tp)}")
+            lines.append(f"Aggregated accuracy={acc:.3f}, prevalence={prevalence:.3f}")
+        ax3.text(0.0, 1.0, "\n".join(lines), fontsize=11, va='top')
+
+        fig.tight_layout(rect=[0, 0.03, 1, 0.95])
         fig.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close(fig)
 
