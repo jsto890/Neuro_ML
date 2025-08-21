@@ -548,7 +548,7 @@ class EnhancedRadiomicsClassifier:
             axes[0, 0].bar(model_names, test_accuracies, color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'])
             axes[0, 0].set_title('Model Comparison - Test Accuracy')
             axes[0, 0].set_ylabel('Accuracy')
-            axes[0, 0].tick_params(axis='x', rotation=45)
+            axes[0, 0].tick_params(axis='x', rotation=45, ha='right')
             
             # 2. ROC Curves
             for name in model_names:
@@ -615,7 +615,7 @@ class EnhancedRadiomicsClassifier:
             axes[1, 2].set_title('Train vs Test Accuracy')
             axes[1, 2].set_ylabel('Accuracy')
             axes[1, 2].set_xticks(x)
-            axes[1, 2].set_xticklabels(model_names, rotation=45)
+            axes[1, 2].set_xticklabels(model_names, rotation=45, ha='right')
             axes[1, 2].legend()
             axes[1, 2].grid(True, alpha=0.3)
             
@@ -933,6 +933,10 @@ class EnhancedRadiomicsClassifier:
                         'mcc': mcc,
                         'cm': cm
                     }
+                    # Store ROC data only for Ensemble to plot per-fold ROC curves
+                    if model_name == 'Ensemble':
+                        entry['y_true'] = y_true
+                        entry['y_prob'] = test_res.get('probabilities')
                     per_model_results.setdefault(model_name, []).append(entry)
 
             # restore output dir
@@ -958,58 +962,60 @@ class EnhancedRadiomicsClassifier:
             self.logger.info(f"Outer CV summary saved to {self.output_dir / 'outer_cv_summary.json'}")
             # Create PNG summary plot with means, SD and 95% CI
             try:
-                # Compute aggregated confusion matrix for the Ensemble across folds (if available)
+                # Compute averaged confusion matrix and collect ROC data for the Ensemble across folds (if available)
+                ensemble_entries = per_model_results.get('Ensemble', []) if 'Ensemble' in per_model_results else []
                 ensemble_cms = []
+                ensemble_rocs = []
                 try:
-                    if 'Ensemble' in per_model_results:
-                        for entry in per_model_results.get('Ensemble', []):
-                            cm = entry.get('cm')
-                            if cm is not None:
-                                ensemble_cms.append(cm)
+                    for entry in ensemble_entries:
+                        cm = entry.get('cm')
+                        if cm is not None:
+                            ensemble_cms.append(cm)
+                        y_true = entry.get('y_true')
+                        y_prob = entry.get('y_prob')
+                        if y_true is not None and y_prob is not None:
+                            ensemble_rocs.append((y_true, y_prob))
                 except Exception:
-                    ensemble_cms = []
+                    pass
 
-                agg_cm = None
+                avg_cm = None
                 if len(ensemble_cms) > 0:
                     try:
                         import numpy as np
-                        agg_cm = np.sum(np.stack(ensemble_cms, axis=0), axis=0)
+                        avg_cm = np.mean(np.stack(ensemble_cms, axis=0), axis=0)
                     except Exception:
-                        agg_cm = ensemble_cms[0]
+                        avg_cm = ensemble_cms[0]
 
-                self._save_outer_cv_summary_plot(outer_results, output_path=self.output_dir / 'outer_cv_summary.png', ensemble_agg_cm=agg_cm)
+                self._save_outer_cv_summary_plot(
+                    outer_results,
+                    output_path=self.output_dir / 'outer_cv_summary.png',
+                    ensemble_avg_cm=avg_cm,
+                    ensemble_rocs=ensemble_rocs
+                )
                 self.logger.info(f"Outer CV summary plot saved to {self.output_dir / 'outer_cv_summary.png'}")
             except Exception as plot_err:
                 self.logger.error(f"Failed to write outer CV summary plot: {plot_err}")
 
-            # Create per-model summary PNGs
-            try:
-                for model_name, fold_list in per_model_results.items():
-                    safe_name = model_name.lower().replace(' ', '_')
-                    out_path = self.output_dir / f'model_{safe_name}_summary.png'
-                    self._save_per_model_summary_plot(model_name, fold_list, output_path=out_path)
-                self.logger.info("Per-model summary plots saved")
-            except Exception as e:
-                self.logger.error(f"Failed to write per-model summary plots: {e}")
+            # Per-model summary PNGs removed as requested
         except Exception as e:
             self.logger.error(f"Failed to write outer CV summary: {e}")
 
         self.logger.info("Enhanced Outer Stratified K-Fold evaluation complete")
         return True
 
-    def _save_outer_cv_summary_plot(self, outer_results, output_path, ensemble_agg_cm=None):
+    def _save_outer_cv_summary_plot(self, outer_results, output_path, ensemble_avg_cm=None, ensemble_rocs=None):
         """Create a PNG summarizing outer CV results with:
         - Mean and 95% CI per metric, with per-fold points and numeric annotations
-        - Aggregated confusion matrix across folds for the Ensemble (if provided)
-        - Table of per-fold metric values
-        - Text panel with mean, SD and CI for quick reading
+        - Averaged confusion matrix across folds for the Ensemble (if provided)
+        - Color heatmap table of per-fold metric values
+        - ROC curves for the 5 ensemble models
         """
         import numpy as np
         import matplotlib.pyplot as plt
         import seaborn as sns
         import pandas as pd
 
-        metrics = ['accuracy', 'precision', 'recall', 'f1', 'auc']
+        metrics = ['accuracy', 'precision', 'recall', 'f1', 'auc', 'mcc']
         values_by_metric = {}
         for m in metrics:
             vals = [float(d[m]) for d in outer_results if d.get(m) is not None]
@@ -1038,13 +1044,14 @@ class EnhancedRadiomicsClassifier:
                 f"{fold_dict.get('precision', 0.0):.3f}",
                 f"{fold_dict.get('recall', 0.0):.3f}",
                 f"{fold_dict.get('f1', 0.0):.3f}",
-                f"{fold_dict.get('auc', 0.0):.3f}"
+                f"{fold_dict.get('auc', 0.0):.3f}",
+                f"{fold_dict.get('mcc', 0.0):.3f}"
             ])
-        table_df = pd.DataFrame(rows, columns=['Fold', 'ACC', 'PREC', 'REC', 'F1', 'AUC'])
+        table_df = pd.DataFrame(rows, columns=['Fold', 'ACC', 'PREC', 'REC', 'F1', 'AUC', 'MCC'])
 
         # Layout: 2x2 grid
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        fig.suptitle('Outer CV Fold Comparison', fontsize=16)
+        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('K Fold Ensemble Model Comparison', fontsize=18)
 
         # Top-left: bar chart with 95% CI and points
         x = np.arange(len(metrics))
@@ -1063,48 +1070,54 @@ class EnhancedRadiomicsClassifier:
             ax0.text(b.get_x() + b.get_width() / 2, max(0.01, mean_val) - 0.06, f"SD={sd_val:.3f}", ha='center', va='top', fontsize=9)
 
         ax0.set_xticks(x)
-        ax0.set_xticklabels([m.upper() for m in metrics])
+        ax0.set_xticklabels([m.upper() for m in metrics], ha='right')
         ax0.set_ylim(0.0, 1.05)
         ax0.set_ylabel('Score')
         ax0.set_title('Test Metrics (Means, 95% CI, and Fold Scores)')
         ax0.legend()
         ax0.grid(True, axis='y', alpha=0.3)
 
-        # Top-right: Aggregated confusion matrix (if provided)
+        # Top-right: Averaged confusion matrix (if provided)
         ax1 = axes[0, 1]
-        if ensemble_agg_cm is not None:
-            sns.heatmap(ensemble_agg_cm, annot=True, fmt='d', cmap='Blues', cbar=False, ax=ax1)
-            ax1.set_title('Aggregated Confusion Matrix (Ensemble, Test)')
+        if ensemble_avg_cm is not None:
+            sns.heatmap(ensemble_avg_cm, annot=True, fmt='.1f', cmap='Blues', cbar=True, ax=ax1)
+            ax1.set_title('Averaged Confusion Matrix (Ensemble, Test)')
             ax1.set_xlabel('Predicted')
             ax1.set_ylabel('Actual')
         else:
             ax1.axis('off')
-            ax1.text(0.5, 0.5, 'Aggregated confusion matrix unavailable', ha='center', va='center', fontsize=11, alpha=0.7)
+            ax1.text(0.5, 0.5, 'Averaged confusion matrix unavailable', ha='center', va='center', fontsize=11, alpha=0.7)
 
-        # Bottom-left: Per-fold values table
+        # Bottom-left: Per-fold values table as color heatmap
         ax2 = axes[1, 0]
-        ax2.axis('off')
-        table = ax2.table(cellText=table_df.values, colLabels=table_df.columns, loc='center')
-        table.auto_set_font_size(False)
-        table.set_fontsize(9)
-        table.scale(1.1, 1.2)
-        ax2.set_title('Per-fold Test Metrics', pad=10)
+        # Convert table data to numeric for heatmap
+        heatmap_data = table_df.iloc[:, 1:].astype(float).values
+        heatmap_labels = table_df.iloc[:, 0].values
+        
+        sns.heatmap(heatmap_data, 
+                    xticklabels=table_df.columns[1:], 
+                    yticklabels=heatmap_labels,
+                    annot=True, fmt='.3f', cmap='YlOrRd', 
+                    cbar=True, ax=ax2)
+        ax2.set_title('Per-fold Test Metrics (Color Heatmap)', pad=10)
 
-        # Bottom-right: Text panel with summary stats and, if binary, CM stats
+        # Bottom-right: ROC curves for the 5 ensemble models
         ax3 = axes[1, 1]
-        ax3.axis('off')
-        lines = []
-        for i, m in enumerate(metrics):
-            lines.append(f"{m.upper()}: mean={means[i]:.3f}, sd={stds[i]:.3f}, 95% CI=±{cis[i]:.3f}")
-        if ensemble_agg_cm is not None and isinstance(ensemble_agg_cm, np.ndarray) and ensemble_agg_cm.shape == (2, 2):
-            tn, fp, fn, tp = ensemble_agg_cm[0, 0], ensemble_agg_cm[0, 1], ensemble_agg_cm[1, 0], ensemble_agg_cm[1, 1]
-            total = ensemble_agg_cm.sum()
-            acc = (tp + tn) / total if total > 0 else 0.0
-            prevalence = (tp + fn) / total if total > 0 else 0.0
-            lines.append("")
-            lines.append(f"Aggregated CM (binary): TN={int(tn)}, FP={int(fp)}, FN={int(fn)}, TP={int(tp)}")
-            lines.append(f"Aggregated accuracy={acc:.3f}, prevalence={prevalence:.3f}")
-        ax3.text(0.0, 1.0, "\n".join(lines), fontsize=11, va='top')
+        if ensemble_rocs and len(ensemble_rocs) > 0:
+            for i, (y_true, y_prob) in enumerate(ensemble_rocs):
+                fpr, tpr, _ = roc_curve(y_true, y_prob)
+                auc_score = roc_auc_score(y_true, y_prob)
+                ax3.plot(fpr, tpr, label=f'Fold {i+1} (AUC = {auc_score:.3f})', alpha=0.8, linewidth=2)
+            
+            ax3.plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Random')
+            ax3.set_xlabel('False Positive Rate')
+            ax3.set_ylabel('True Positive Rate')
+            ax3.set_title('ROC Curves - Ensemble Models (5 Folds)')
+            ax3.legend(fontsize=9)
+            ax3.grid(True, alpha=0.3)
+        else:
+            ax3.axis('off')
+            ax3.text(0.5, 0.5, 'ROC curves unavailable', ha='center', va='center', fontsize=11, alpha=0.7)
 
         fig.tight_layout(rect=[0, 0.03, 1, 0.95])
         fig.savefig(output_path, dpi=300, bbox_inches='tight')
