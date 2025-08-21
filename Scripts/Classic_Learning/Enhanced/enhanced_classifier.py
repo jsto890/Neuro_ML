@@ -515,14 +515,23 @@ class EnhancedRadiomicsClassifier:
                         recall = recall_score(y_split_original, y_pred_original, average='weighted')
                         f1 = f1_score(y_split_original, y_pred_original, average='weighted')
                         
-                        # For ROC AUC, we need to handle non-consecutive labels
+                        # For ROC AUC, handle both binary and multiclass scenarios
                         try:
-                            auc = roc_auc_score(y_split_original, y_pred_proba)
-                        except ValueError:
-                            # If labels are not {0,1}, convert to {0,1} for AUC calculation
-                            y_binary = (y_split_original == y_split_original.max()).astype(int)
-                            auc = roc_auc_score(y_binary, y_pred_proba)
-                            self.logger.debug(f"Converted labels {y_split_original} to {y_binary} for AUC calculation")
+                            if len(np.unique(y_split_original)) == 2:
+                                # Binary classification - handle non-consecutive labels
+                                if set(np.unique(y_split_original)) != {0, 1}:
+                                    y_binary = (y_split_original == y_split_original.max()).astype(int)
+                                    auc = roc_auc_score(y_binary, y_pred_proba)
+                                    self.logger.debug(f"Binary: converted labels {np.unique(y_split_original)} to {np.unique(y_binary)} for AUC")
+                                else:
+                                    auc = roc_auc_score(y_split_original, y_pred_proba)
+                            else:
+                                # Multiclass classification - use one-vs-rest
+                                auc = roc_auc_score(y_split_original, y_pred_proba, multi_class='ovr', average='weighted')
+                                self.logger.debug(f"Multiclass: using OVR AUC with {len(np.unique(y_split_original))} classes")
+                        except Exception as e:
+                            self.logger.warning(f"Could not compute AUC: {e}, setting to 0.0")
+                            auc = 0.0
                         
                         results[split_name] = {
                             'accuracy': accuracy,
@@ -594,14 +603,23 @@ class EnhancedRadiomicsClassifier:
                     recall = recall_score(y_split_original, ensemble_preds_original, average='weighted')
                     f1 = f1_score(y_split_original, ensemble_preds_original, average='weighted')
                     
-                    # For ROC AUC, we need to handle non-consecutive labels
+                    # For ROC AUC, handle both binary and multiclass scenarios
                     try:
-                        auc = roc_auc_score(y_split_original, ensemble_probs)
-                    except ValueError:
-                        # If labels are not {0,1}, convert to {0,1} for AUC calculation
-                        y_binary = (y_split_original == y_split_original.max()).astype(int)
-                        auc = roc_auc_score(y_binary, ensemble_probs)
-                        self.logger.debug(f"Converted labels {y_split_original} to {y_binary} for AUC calculation")
+                        if len(np.unique(y_split_original)) == 2:
+                            # Binary classification - handle non-consecutive labels
+                            if set(np.unique(y_split_original)) != {0, 1}:
+                                y_binary = (y_split_original == y_split_original.max()).astype(int)
+                                auc = roc_auc_score(y_binary, ensemble_probs)
+                                self.logger.debug(f"Binary: converted labels {np.unique(y_split_original)} to {y_binary} for AUC")
+                            else:
+                                auc = roc_auc_score(y_split_original, ensemble_probs)
+                        else:
+                            # Multiclass classification - use one-vs-rest
+                            auc = roc_auc_score(y_split_original, ensemble_probs, multi_class='ovr', average='weighted')
+                            self.logger.debug(f"Multiclass: using OVR AUC with {len(np.unique(y_split_original))} classes")
+                    except Exception as e:
+                        self.logger.warning(f"Could not compute AUC: {e}, setting to 0.0")
+                        auc = 0.0
                 
                     ensemble_results[split_name] = {
                         'accuracy': accuracy,
