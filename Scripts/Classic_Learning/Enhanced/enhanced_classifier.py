@@ -80,6 +80,10 @@ class EnhancedRadiomicsClassifier:
         self.binary_labels = binary_labels
         self.ml_threads = ml_threads
         
+        # Disease label mapping
+        self.label_to_disease = {0: 'CN', 1: 'AD', 2: 'PD'}
+        self.disease_to_label = {v: k for k, v in self.label_to_disease.items()}
+        
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -156,7 +160,9 @@ class EnhancedRadiomicsClassifier:
             self.X = self.data[self.feature_names].values
             
             self.logger.info(f"Data shape: {self.X.shape}")
-            self.logger.info(f"Labels: {np.unique(self.y)} (counts: {np.bincount(self.y)})")
+            unique_labels = np.unique(self.y)
+            disease_counts = {self.label_to_disease.get(label, str(label)): np.sum(self.y == label) for label in unique_labels}
+            self.logger.info(f"Labels: {unique_labels} -> {disease_counts}")
             
             return True
             
@@ -589,7 +595,13 @@ class EnhancedRadiomicsClassifier:
                 self.results[best_model]['test']['predictions']
             )
             
-            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[1, 0])
+            # Get unique labels in the confusion matrix
+            unique_labels = np.unique(np.concatenate([np.unique(self.results[best_model]['test']['true_labels']), 
+                                                    np.unique(self.results[best_model]['test']['predictions'])]))
+            disease_labels = [self.label_to_disease.get(label, str(label)) for label in unique_labels]
+            
+            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[1, 0],
+                       xticklabels=disease_labels, yticklabels=disease_labels)
             axes[1, 0].set_title(f'Confusion Matrix - {best_model}')
             axes[1, 0].set_xlabel('Predicted')
             axes[1, 0].set_ylabel('Actual')
@@ -1083,7 +1095,10 @@ class EnhancedRadiomicsClassifier:
         # Top-right: Averaged confusion matrix (if provided)
         ax1 = axes[0, 1]
         if ensemble_avg_cm is not None:
-            sns.heatmap(ensemble_avg_cm, annot=True, fmt='.1f', cmap='Blues', cbar=True, ax=ax1)
+            # Use disease labels for confusion matrix
+            disease_labels = ['CN', 'AD', 'PD'][:ensemble_avg_cm.shape[0]]
+            sns.heatmap(ensemble_avg_cm, annot=True, fmt='.1f', cmap='Blues', cbar=True, ax=ax1,
+                       xticklabels=disease_labels, yticklabels=disease_labels)
             ax1.set_title('Averaged Confusion Matrix (Ensemble, Test)')
             ax1.set_xlabel('Predicted')
             ax1.set_ylabel('Actual')
@@ -1191,7 +1206,10 @@ class EnhancedRadiomicsClassifier:
 
         # Confusion matrix heatmap (aggregated)
         ax1 = axes[0, 1]
-        sns.heatmap(agg_cm, annot=True, fmt='d', cmap='Blues', cbar=False, ax=ax1)
+        # Use disease labels for confusion matrix
+        disease_labels = ['CN', 'AD', 'PD'][:agg_cm.shape[0]]
+        sns.heatmap(agg_cm, annot=True, fmt='d', cmap='Blues', cbar=False, ax=ax1,
+                   xticklabels=disease_labels, yticklabels=disease_labels)
         ax1.set_title('Aggregated Confusion Matrix (Test)')
         ax1.set_xlabel('Predicted')
         ax1.set_ylabel('Actual')
