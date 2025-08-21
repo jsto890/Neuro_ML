@@ -453,6 +453,12 @@ class EnhancedRadiomicsClassifier:
             # Remap labels for training
             y_train_remapped = self._remap_labels_for_training(y_train)
             
+            # Log class distribution for debugging
+            unique_labels, counts = np.unique(y_train_remapped, return_counts=True)
+            self.logger.info(f"Training set class distribution: {dict(zip(unique_labels, counts))}")
+            if len(unique_labels) < 3 and not self.binary_only:
+                self.logger.warning(f"Warning: Only {len(unique_labels)} classes in training set for multiclass classification")
+            
             for name, (model, param_grid) in self.models.items():
                 self.logger.info(f"Training {name}...")
                 
@@ -462,9 +468,16 @@ class EnhancedRadiomicsClassifier:
                 search_n_jobs = -1
                 if ('LightGBM' in name) or ('XGBoost' in name):
                     search_n_jobs = 1
+                # Choose appropriate scoring metric based on classification type
+                if self.binary_only:
+                    scoring = 'roc_auc'
+                else:
+                    # For multiclass, use accuracy which is more reliable
+                    scoring = 'accuracy'
+                
                 search = RandomizedSearchCV(
                     model, param_grid, n_iter=20, cv=5,
-                    scoring='roc_auc', n_jobs=search_n_jobs,
+                    scoring=scoring, n_jobs=search_n_jobs,
                     random_state=self.random_state, verbose=0
                 )
                 
@@ -476,9 +489,24 @@ class EnhancedRadiomicsClassifier:
                             search.fit(X_train, y_train_remapped)
                 else:
                     search.fit(X_train, y_train_remapped)
-                self.best_models[name] = search.best_estimator_
                 
-                self.logger.info(f"{name} - Best CV score: {search.best_score_:.4f}")
+                # Check if we got a valid score
+                if np.isnan(search.best_score_):
+                    self.logger.warning(f"{name} got NaN score. This might indicate class imbalance in CV folds.")
+                    # Try to get a fallback score
+                    try:
+                        # Use the model to predict on training data and calculate accuracy
+                        y_pred = search.best_estimator_.predict(X_train)
+                        fallback_score = accuracy_score(y_train_remapped, y_pred)
+                        self.logger.info(f"{name} - Fallback accuracy score: {fallback_score:.4f}")
+                    except Exception as e:
+                        self.logger.warning(f"Could not calculate fallback score for {name}: {e}")
+                        fallback_score = 0.0
+                else:
+                    fallback_score = search.best_score_
+                
+                self.best_models[name] = search.best_estimator_
+                self.logger.info(f"{name} - Best CV score: {fallback_score:.4f}")
                 self.logger.info(f"{name} - Best params: {search.best_params_}")
             
             return True
