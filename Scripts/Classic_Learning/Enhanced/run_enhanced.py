@@ -20,7 +20,11 @@ from datetime import datetime
 # Add the current directory to Python path
 sys.path.append(str(Path(__file__).parent))
 
-from Scripts.Classic_Learning.Enhanced.enhanced_classifier import EnhancedRadiomicsClassifier
+# Support running as a script (direct path) or as a module (-m)
+try:
+    from Scripts.Classic_Learning.Enhanced.enhanced_classifier import EnhancedRadiomicsClassifier
+except ModuleNotFoundError:
+    from enhanced_classifier import EnhancedRadiomicsClassifier
 
 def main():
     """Run the enhanced radiomics classification pipeline."""
