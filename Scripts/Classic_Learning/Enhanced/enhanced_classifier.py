@@ -530,13 +530,13 @@ class EnhancedRadiomicsClassifier:
                         y_pred = model.predict(X_split)
                         
                         # Handle probabilities for both binary and multiclass
+                        proba_matrix = model.predict_proba(X_split)
                         if self.binary_only:
                             # Binary: extract probability of positive class
-                            y_pred_proba = model.predict_proba(X_split)[:, 1]
+                            y_pred_proba = proba_matrix[:, 1]
                         else:
-                            # Multiclass: use probability of predicted class
-                            proba_matrix = model.predict_proba(X_split)
-                            y_pred_proba = np.max(proba_matrix, axis=1)
+                            # Multiclass: store full probability matrix for AUC calculation
+                            y_pred_proba = proba_matrix
                         
                         # Restore original labels for evaluation if remapping was used
                         y_split_original = self._restore_original_labels(y_split)
@@ -617,20 +617,25 @@ class EnhancedRadiomicsClassifier:
             for split_name, (X_split, y_split, ids_split) in self.splits.items():
                 try:
                     # Get probabilities from all models
-                    all_probs = []
-                    for name, model in self.best_models.items():
-                        if self.binary_only:
-                            # Binary: extract probability of positive class
+                    if self.binary_only:
+                        # Binary: collect probabilities of positive class
+                        all_probs = []
+                        for name, model in self.best_models.items():
                             probs = model.predict_proba(X_split)[:, 1]
-                        else:
-                            # Multiclass: use probability of predicted class
+                            all_probs.append(probs)
+                        # Average probabilities
+                        ensemble_probs = np.mean(all_probs, axis=0)
+                        ensemble_preds = (ensemble_probs > 0.5).astype(int)
+                    else:
+                        # Multiclass: average probability matrices and take argmax
+                        all_proba_matrices = []
+                        for name, model in self.best_models.items():
                             proba_matrix = model.predict_proba(X_split)
-                            probs = np.max(proba_matrix, axis=1)
-                        all_probs.append(probs)
-                    
-                    # Average probabilities
-                    ensemble_probs = np.mean(all_probs, axis=0)
-                    ensemble_preds = (ensemble_probs > 0.5).astype(int)
+                            all_proba_matrices.append(proba_matrix)
+                        # Average probability matrices
+                        ensemble_probs = np.mean(all_proba_matrices, axis=0)
+                        # Get predictions from averaged probabilities
+                        ensemble_preds = np.argmax(ensemble_probs, axis=1)
                     
                     # Restore original labels for evaluation if remapping was used
                     y_split_original = self._restore_original_labels(y_split)
@@ -711,24 +716,21 @@ class EnhancedRadiomicsClassifier:
             axes[0, 0].set_xticklabels(model_names, ha='right')
             
             # 2. ROC Curves
-            for name in model_names:
-                y_true = self.results[name]['test']['true_labels']
-                y_probs = self.results[name]['test']['probabilities']
-                
-                if self.binary_only:
-                    # Binary: use probabilities directly
-                    y_true_binary = y_true
-                    y_probs_binary = y_probs
-                else:
-                    # Multiclass: convert to one-vs-rest for ROC curves
-                    # Use the highest probability class as positive
-                    y_true_binary = (y_true == y_true.max()).astype(int)
-                    y_probs_binary = y_probs
-                    self.logger.debug(f"Multiclass ROC: converting labels {np.unique(y_true)} to {np.unique(y_true_binary)}")
-                
-                fpr, tpr, _ = roc_curve(y_true_binary, y_probs_binary)
-                auc_score = self.results[name]['test']['auc']
-                axes[0, 1].plot(fpr, tpr, label=f'{name} (AUC = {auc_score:.3f})')
+            if self.binary_only:
+                # Binary: plot ROC curves for all models
+                for name in model_names:
+                    y_true = self.results[name]['test']['true_labels']
+                    y_probs = self.results[name]['test']['probabilities']
+                    
+                    fpr, tpr, _ = roc_curve(y_true, y_probs)
+                    auc_score = self.results[name]['test']['auc']
+                    axes[0, 1].plot(fpr, tpr, label=f'{name} (AUC = {auc_score:.3f})')
+            else:
+                # Multiclass: skip ROC curves or show message
+                axes[0, 1].text(0.5, 0.5, 'ROC curves not shown for multiclass\n(AUC scores in metrics table)', 
+                               ha='center', va='center', fontsize=12)
+                axes[0, 1].set_xlim(0, 1)
+                axes[0, 1].set_ylim(0, 1)
             
             axes[0, 1].plot([0, 1], [0, 1], 'k--', label='Random')
             axes[0, 1].set_title('ROC Curves - Test Set')
