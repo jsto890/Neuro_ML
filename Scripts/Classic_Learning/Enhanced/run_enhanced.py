@@ -28,7 +28,7 @@ def main():
     parser = argparse.ArgumentParser(description='Enhanced Radiomics Classification Pipeline')
     parser.add_argument('--input', default='~/reseng202500013-ndd-ml/data/radiomics_MRI_mri_labels.csv',
                         help='Path to radiomics CSV file')
-    parser.add_argument('--output-dir', default='~/reseng202500013-ndd-ml/data/enhanced_classical_results',
+    parser.add_argument('--output-dir', default='~/reseng202500013-ndd-ml/data/classic_results/enhanced_run',
                         help='Output directory for results')
     parser.add_argument('--random-state', type=int, default=42,
                         help='Random seed for reproducibility')
