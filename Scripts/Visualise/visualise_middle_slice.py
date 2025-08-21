@@ -7,7 +7,7 @@ import pandas as pd
 from ipywidgets import interact, IntSlider
 
 # Load the NIfTI file
-nii_file = "/Volumes/reseng202500013-ndd-ml/data/preprocessed/smriprep/smriprep/sub-I288115/anat/sub-I288115_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w.nii.gz"
+nii_file = "/Volumes/reseng202500013-ndd-ml/data/preprocessed/PET/PPMI/sub-I372065_PPMI_PET_PD/sub-I372065_PPMI_PET_PD_SUVR_s2_maskRefined.nii.gz"
 
 img = nib.load(nii_file)
 data = img.get_fdata()
