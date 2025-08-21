@@ -1312,23 +1312,31 @@ class EnhancedRadiomicsClassifier:
         # Bottom-right: ROC curves for the 5 ensemble models
         ax3 = axes[1, 1]
         if ensemble_rocs and len(ensemble_rocs) > 0:
-            for i, (y_true, y_prob) in enumerate(ensemble_rocs):
-                # Convert labels to {0,1} for roc_curve if they're not consecutive
-                if set(np.unique(y_true)) != {0, 1}:
-                    y_true_binary = (y_true == y_true.max()).astype(int)
-                else:
-                    y_true_binary = y_true
+            # Check if this is multiclass data
+            if hasattr(self, 'binary_only') and not self.binary_only:
+                # Multiclass: show message instead of ROC curves
+                ax3.axis('off')
+                ax3.text(0.5, 0.5, 'ROC curves not shown for multiclass\n(AUC scores in metrics table)', 
+                       ha='center', va='center', fontsize=11, alpha=0.7)
+            else:
+                # Binary: plot ROC curves
+                for i, (y_true, y_prob) in enumerate(ensemble_rocs):
+                    # Ensure y_prob is 1D for binary classification
+                    if y_prob.ndim > 1:
+                        y_prob_1d = y_prob[:, 1]  # Extract probability of positive class
+                    else:
+                        y_prob_1d = y_prob
+                    
+                    fpr, tpr, _ = roc_curve(y_true, y_prob_1d)
+                    auc_score = roc_auc_score(y_true, y_prob_1d)
+                    ax3.plot(fpr, tpr, label=f'Fold {i+1} (AUC = {auc_score:.3f})', alpha=0.8, linewidth=2)
                 
-                fpr, tpr, _ = roc_curve(y_true_binary, y_prob)
-                auc_score = roc_auc_score(y_true_binary, y_prob)
-                ax3.plot(fpr, tpr, label=f'Fold {i+1} (AUC = {auc_score:.3f})', alpha=0.8, linewidth=2)
-            
-            ax3.plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Random')
-            ax3.set_xlabel('False Positive Rate')
-            ax3.set_ylabel('True Positive Rate')
-            ax3.set_title('ROC Curves - Ensemble Models (5 Folds)')
-            ax3.legend(fontsize=9)
-            ax3.grid(True, alpha=0.3)
+                ax3.plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Random')
+                ax3.set_xlabel('False Positive Rate')
+                ax3.set_ylabel('True Positive Rate')
+                ax3.set_title('ROC Curves - Ensemble Models (5 Folds)')
+                ax3.legend(fontsize=9)
+                ax3.grid(True, alpha=0.3)
         else:
             ax3.axis('off')
             ax3.text(0.5, 0.5, 'ROC curves unavailable', ha='center', va='center', fontsize=11, alpha=0.7)
