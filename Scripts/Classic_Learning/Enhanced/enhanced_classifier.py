@@ -424,18 +424,24 @@ class EnhancedRadiomicsClassifier:
             try:
                 # Convert input to list of integers first
                 y_list = [int(label) for label in y]
-                restored = [self.training_to_original_labels[label] for label in y_list]
-                # Return as numpy array of regular Python integers
-                result = np.array(restored, dtype=int)
-                self.logger.debug(f"Label restoration: {y} -> {result}, types: {type(y)} -> {type(result)}")
-                return result
+                # Check if we need to restore labels (if labels are in training space [0,1])
+                if set(y_list).issubset({0, 1}):
+                    restored = [self.training_to_original_labels[label] for label in y_list]
+                    result = np.array(restored, dtype=int)
+                    self.logger.debug(f"Label restoration: {y} -> {result}")
+                    return result
+                else:
+                    # Labels are already in original space, just ensure they're integers
+                    result = np.array([int(x) for x in y], dtype=int)
+                    self.logger.debug(f"Labels already in original space: {y} -> {result}")
+                    return result
             except Exception as e:
                 self.logger.warning(f"Error in label restoration: {e}, returning original labels")
                 # Ensure we return regular Python integers
                 return np.array([int(x) for x in y], dtype=int)
         # If no remapping, ensure we return regular Python integers
         result = np.array([int(x) for x in y], dtype=int)
-        self.logger.debug(f"No remapping, converted to int: {y} -> {result}, types: {type(y)} -> {type(result)}")
+        self.logger.debug(f"No remapping, converted to int: {y} -> {result}")
         return result
     
     def train_models(self):
@@ -508,7 +514,15 @@ class EnhancedRadiomicsClassifier:
                         precision = precision_score(y_split_original, y_pred_original, average='weighted')
                         recall = recall_score(y_split_original, y_pred_original, average='weighted')
                         f1 = f1_score(y_split_original, y_pred_original, average='weighted')
-                        auc = roc_auc_score(y_split_original, y_pred_proba)
+                        
+                        # For ROC AUC, we need to handle non-consecutive labels
+                        try:
+                            auc = roc_auc_score(y_split_original, y_pred_proba)
+                        except ValueError:
+                            # If labels are not {0,1}, convert to {0,1} for AUC calculation
+                            y_binary = (y_split_original == y_split_original.max()).astype(int)
+                            auc = roc_auc_score(y_binary, y_pred_proba)
+                            self.logger.debug(f"Converted labels {y_split_original} to {y_binary} for AUC calculation")
                         
                         results[split_name] = {
                             'accuracy': accuracy,
@@ -579,8 +593,16 @@ class EnhancedRadiomicsClassifier:
                     precision = precision_score(y_split_original, ensemble_preds_original, average='weighted')
                     recall = recall_score(y_split_original, ensemble_preds_original, average='weighted')
                     f1 = f1_score(y_split_original, ensemble_preds_original, average='weighted')
-                    auc = roc_auc_score(y_split_original, ensemble_probs)
                     
+                    # For ROC AUC, we need to handle non-consecutive labels
+                    try:
+                        auc = roc_auc_score(y_split_original, ensemble_probs)
+                    except ValueError:
+                        # If labels are not {0,1}, convert to {0,1} for AUC calculation
+                        y_binary = (y_split_original == y_split_original.max()).astype(int)
+                        auc = roc_auc_score(y_binary, ensemble_probs)
+                        self.logger.debug(f"Converted labels {y_split_original} to {y_binary} for AUC calculation")
+                
                     ensemble_results[split_name] = {
                         'accuracy': accuracy,
                         'precision': precision,
