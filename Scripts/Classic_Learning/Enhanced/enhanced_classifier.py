@@ -30,7 +30,6 @@ from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.svm import SVC, LinearSVC
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.naive_bayes import GaussianNB
 from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.feature_selection import (
     SelectKBest, f_classif, mutual_info_classif, 
@@ -285,15 +284,6 @@ class EnhancedRadiomicsClassifier:
             'solver': ['liblinear'],
             'class_weight': ['balanced']
         }
-        # Logistic Regression Elastic-Net (predict_proba supported via saga)
-        lr_en_params = {
-            'C': [0.1, 1.0, 10.0],
-            'l1_ratio': [0.1, 0.5, 0.9],
-            'penalty': ['elasticnet'],
-            'solver': ['saga'],
-            'class_weight': ['balanced'],
-            'max_iter': [2000]
-        }
         
         # SVM (kernel)
         svm_params = {
@@ -335,10 +325,6 @@ class EnhancedRadiomicsClassifier:
             'p': [1, 2]
         }
 
-        # Gaussian Naive Bayes
-        gnb_params = {
-            'var_smoothing': [1e-9, 1e-8, 1e-7]
-        }
 
         # SGDClassifier as probabilistic linear baseline
         sgd_params = {
@@ -397,12 +383,10 @@ class EnhancedRadiomicsClassifier:
             'RandomForest': (RandomForestClassifier(random_state=self.random_state), rf_params),
             'ExtraTrees': (ExtraTreesClassifier(random_state=self.random_state), et_params),
             'LogisticRegression': (LogisticRegression(random_state=self.random_state), lr_params),
-            'LogRegElasticNet': (LogisticRegression(random_state=self.random_state), lr_en_params),
             'SVM': (SVC(random_state=self.random_state, probability=True), svm_params),
             'LinearSVC_Calibrated': (linsvc_calibrated, linsvc_params),
             'GradientBoosting': (GradientBoostingClassifier(random_state=self.random_state), gb_params),
             'KNN': (KNeighborsClassifier(), knn_params),
-            'GaussianNB': (GaussianNB(), gnb_params),
             'SGDClassifier': (SGDClassifier(random_state=self.random_state), sgd_params)
         }
         if XGBOOST_AVAILABLE and xgb_model is not None:
