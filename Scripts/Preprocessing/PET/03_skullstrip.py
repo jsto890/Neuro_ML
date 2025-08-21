@@ -168,8 +168,8 @@ def process_one(suvr_path: str, mask_path: str, args) -> list[str]:
 
 def main():
 	parser = argparse.ArgumentParser(description="Skull-strip SUVR using refined brain mask and optional median renorm")
-	parser.add_argument("--suvr", required=True, help="Path to SUVR image (e.g., *_SUVR_s2.nii.gz)")
-	parser.add_argument("--mask", required=True, help="Path to brain mask image (subject MNI brain)")
+	parser.add_argument("--suvr", required=False, default=None, help="Path to SUVR image (e.g., *_SUVR_s2.nii.gz)")
+	parser.add_argument("--mask", required=False, default=None, help="Path to brain mask image (subject MNI brain)")
 	parser.add_argument("--out_dir", default=None, help="Optional output directory (defaults to SUVR directory)")
 	parser.add_argument("--morph_iters", type=int, default=1, help="Morphology iterations (closing+opening)")
 	parser.add_argument("--erode_iters", type=int, default=1, help="Additional erosion iterations after cleanup")
@@ -182,6 +182,10 @@ def main():
 	parser.add_argument("--groups", nargs="*", default=None, help="Optional list of group folder names to include (e.g., CN PD). Default: all groups found.")
 	parser.add_argument("--skip_if_exists", action="store_true", help="Skip subject if the main output already exists.")
 	args = parser.parse_args()
+
+	# Enforce single-file required args only when not running in batch mode
+	if not args.root_dir and (not args.suvr or not args.mask):
+		parser.error("--suvr and --mask are required when --root_dir is not provided.")
 
 	# Batch mode
 	if args.root_dir:
