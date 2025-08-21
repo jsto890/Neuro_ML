@@ -84,6 +84,10 @@ class EnhancedRadiomicsClassifier:
         self.label_to_disease = {0: 'CN', 1: 'AD', 2: 'PD'}
         self.disease_to_label = {v: k for k, v in self.label_to_disease.items()}
         
+        # Label remapping for training (to handle non-consecutive labels)
+        self.original_to_training_labels = {}
+        self.training_to_original_labels = {}
+        
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -150,6 +154,13 @@ class EnhancedRadiomicsClassifier:
                 
                 if final_count == 0:
                     raise ValueError(f"No samples remaining after binary filtering for labels {self.binary_labels}")
+                
+                # Create label remapping for training (to handle non-consecutive labels)
+                unique_labels = sorted(self.binary_labels)
+                self.original_to_training_labels = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
+                self.training_to_original_labels = {v: k for k, v in self.original_to_training_labels.items()}
+                
+                self.logger.info(f"Label remapping: {self.original_to_training_labels}")
             
             # Extract components
             self.subject_ids = self.data['subject_id'].values
@@ -401,12 +412,26 @@ class EnhancedRadiomicsClassifier:
         self.logger.info(f"Defined {len(self.models)} models")
         return True
     
+    def _remap_labels_for_training(self, y):
+        """Remap labels to consecutive integers for training."""
+        if hasattr(self, 'original_to_training_labels') and self.original_to_training_labels:
+            return np.array([self.original_to_training_labels[label] for label in y])
+        return y
+    
+    def _restore_original_labels(self, y):
+        """Restore original labels from training labels."""
+        if hasattr(self, 'training_to_original_labels') and self.training_to_original_labels:
+            return np.array([self.training_to_original_labels[label] for label in y])
+        return y
+    
     def train_models(self):
         """Stage 3: Train multiple models with cross-validation."""
         self.logger.info("Stage 3: Training multiple models...")
         
         try:
             X_train, y_train, _ = self.splits['train']
+            # Remap labels for training
+            y_train_remapped = self._remap_labels_for_training(y_train)
             
             for name, (model, param_grid) in self.models.items():
                 self.logger.info(f"Training {name}...")
@@ -428,9 +453,9 @@ class EnhancedRadiomicsClassifier:
                     import contextlib, os, sys
                     with open(os.devnull, 'w') as devnull:
                         with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
-                            search.fit(X_train, y_train)
+                            search.fit(X_train, y_train_remapped)
                 else:
-                    search.fit(X_train, y_train)
+                    search.fit(X_train, y_train_remapped)
                 self.best_models[name] = search.best_estimator_
                 
                 self.logger.info(f"{name} - Best CV score: {search.best_score_:.4f}")
@@ -456,12 +481,16 @@ class EnhancedRadiomicsClassifier:
                     y_pred = model.predict(X_split)
                     y_pred_proba = model.predict_proba(X_split)[:, 1]
                     
-                    # Calculate metrics
-                    accuracy = accuracy_score(y_split, y_pred)
-                    precision = precision_score(y_split, y_pred, average='weighted')
-                    recall = recall_score(y_split, y_pred, average='weighted')
-                    f1 = f1_score(y_split, y_pred, average='weighted')
-                    auc = roc_auc_score(y_split, y_pred_proba)
+                    # Restore original labels for evaluation if remapping was used
+                    y_split_original = self._restore_original_labels(y_split)
+                    y_pred_original = self._restore_original_labels(y_pred)
+                    
+                    # Calculate metrics using original labels
+                    accuracy = accuracy_score(y_split_original, y_pred_original)
+                    precision = precision_score(y_split_original, y_pred_original, average='weighted')
+                    recall = recall_score(y_split_original, y_pred_original, average='weighted')
+                    f1 = f1_score(y_split_original, y_pred_original, average='weighted')
+                    auc = roc_auc_score(y_split_original, y_pred_proba)
                     
                     results[split_name] = {
                         'accuracy': accuracy,
@@ -469,9 +498,9 @@ class EnhancedRadiomicsClassifier:
                         'recall': recall,
                         'f1': f1,
                         'auc': auc,
-                        'predictions': y_pred,
+                        'predictions': y_pred_original,
                         'probabilities': y_pred_proba,
-                        'true_labels': y_split,
+                        'true_labels': y_split_original,
                         'subject_ids': ids_split
                     }
                     
@@ -512,12 +541,16 @@ class EnhancedRadiomicsClassifier:
                 ensemble_probs = np.mean(all_probs, axis=0)
                 ensemble_preds = (ensemble_probs > 0.5).astype(int)
                 
-                # Calculate metrics
-                accuracy = accuracy_score(y_split, ensemble_preds)
-                precision = precision_score(y_split, ensemble_preds, average='weighted')
-                recall = recall_score(y_split, ensemble_preds, average='weighted')
-                f1 = f1_score(y_split, ensemble_preds, average='weighted')
-                auc = roc_auc_score(y_split, ensemble_probs)
+                # Restore original labels for evaluation if remapping was used
+                y_split_original = self._restore_original_labels(y_split)
+                ensemble_preds_original = self._restore_original_labels(ensemble_preds)
+                
+                # Calculate metrics using original labels
+                accuracy = accuracy_score(y_split_original, ensemble_preds_original)
+                precision = precision_score(y_split_original, ensemble_preds_original, average='weighted')
+                recall = recall_score(y_split_original, ensemble_preds_original, average='weighted')
+                f1 = f1_score(y_split_original, ensemble_preds_original, average='weighted')
+                auc = roc_auc_score(y_split_original, ensemble_probs)
                 
                 ensemble_results[split_name] = {
                     'accuracy': accuracy,
@@ -525,9 +558,9 @@ class EnhancedRadiomicsClassifier:
                     'recall': recall,
                     'f1': f1,
                     'auc': auc,
-                    'predictions': ensemble_preds,
+                    'predictions': ensemble_preds_original,
                     'probabilities': ensemble_probs,
-                    'true_labels': y_split,
+                    'true_labels': y_split_original,
                     'subject_ids': ids_split
                 }
                 
@@ -886,6 +919,13 @@ class EnhancedRadiomicsClassifier:
                 self.output_dir = original_output_dir
                 self.setup_logging()
                 continue
+            
+            # Create label remapping for this fold if binary classification
+            if self.binary_only and hasattr(self, 'binary_labels'):
+                unique_labels = sorted(self.binary_labels)
+                self.original_to_training_labels = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
+                self.training_to_original_labels = {v: k for k, v in self.original_to_training_labels.items()}
+                self.logger.info(f"Fold {fold_idx} label remapping: {self.original_to_training_labels}")
 
             # Proceed with modeling stages (no leakage)
             stages = [
@@ -933,7 +973,7 @@ class EnhancedRadiomicsClassifier:
                             mcc = float(matthews_corrcoef(y_true, y_pred))
                     except Exception:
                         mcc = None
-                    # Compute confusion matrix
+                    # Compute confusion matrix using original labels
                     try:
                         cm = confusion_matrix(y_true, y_pred)
                     except Exception:
