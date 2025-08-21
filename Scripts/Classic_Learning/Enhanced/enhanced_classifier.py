@@ -164,7 +164,7 @@ class EnhancedRadiomicsClassifier:
             
             # Extract components
             self.subject_ids = self.data['subject_id'].values
-            self.y = self.data['label'].values
+            self.y = self.data['label'].values.astype(int)  # Ensure labels are integers
             self.feature_names = [col for col in self.data.columns if col not in ['subject_id', 'label']]
             # Preserve full list for per-fold resets in outer CV
             self._original_feature_names = list(self.feature_names)
@@ -421,10 +421,22 @@ class EnhancedRadiomicsClassifier:
     def _restore_original_labels(self, y):
         """Restore original labels from training labels."""
         if hasattr(self, 'training_to_original_labels') and self.training_to_original_labels:
-            restored = np.array([self.training_to_original_labels[label] for label in y])
-            # Convert to regular Python integers to avoid numpy type issues
-            return restored.astype(int)
-        return y
+            try:
+                # Convert input to list of integers first
+                y_list = [int(label) for label in y]
+                restored = [self.training_to_original_labels[label] for label in y_list]
+                # Return as numpy array of regular Python integers
+                result = np.array(restored, dtype=int)
+                self.logger.debug(f"Label restoration: {y} -> {result}, types: {type(y)} -> {type(result)}")
+                return result
+            except Exception as e:
+                self.logger.warning(f"Error in label restoration: {e}, returning original labels")
+                # Ensure we return regular Python integers
+                return np.array([int(x) for x in y], dtype=int)
+        # If no remapping, ensure we return regular Python integers
+        result = np.array([int(x) for x in y], dtype=int)
+        self.logger.debug(f"No remapping, converted to int: {y} -> {result}, types: {type(y)} -> {type(result)}")
+        return result
     
     def train_models(self):
         """Stage 3: Train multiple models with cross-validation."""
@@ -479,37 +491,45 @@ class EnhancedRadiomicsClassifier:
                 
                 results = {}
                 for split_name, (X_split, y_split, ids_split) in self.splits.items():
-                    # Predictions
-                    y_pred = model.predict(X_split)
-                    y_pred_proba = model.predict_proba(X_split)[:, 1]
-                    
-                    # Restore original labels for evaluation if remapping was used
-                    y_split_original = self._restore_original_labels(y_split)
-                    y_pred_original = self._restore_original_labels(y_pred)
-                    
-                    # Log label information for debugging
-                    self.logger.debug(f"{name} {split_name} - Original labels: {np.unique(y_split_original)}, Predicted labels: {np.unique(y_pred_original)}")
-                    
-                    # Calculate metrics using original labels
-                    accuracy = accuracy_score(y_split_original, y_pred_original)
-                    precision = precision_score(y_split_original, y_pred_original, average='weighted')
-                    recall = recall_score(y_split_original, y_pred_original, average='weighted')
-                    f1 = f1_score(y_split_original, y_pred_original, average='weighted')
-                    auc = roc_auc_score(y_split_original, y_pred_proba)
-                    
-                    results[split_name] = {
-                        'accuracy': accuracy,
-                        'precision': precision,
-                        'recall': recall,
-                        'f1': f1,
-                        'auc': auc,
-                        'predictions': y_pred_original,
-                        'probabilities': y_pred_proba,
-                        'true_labels': y_split_original,
-                        'subject_ids': ids_split
-                    }
-                    
-                    self.logger.info(f"{name} {split_name} - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}")
+                    try:
+                        # Predictions
+                        y_pred = model.predict(X_split)
+                        y_pred_proba = model.predict_proba(X_split)[:, 1]
+                        
+                        # Restore original labels for evaluation if remapping was used
+                        y_split_original = self._restore_original_labels(y_split)
+                        y_pred_original = self._restore_original_labels(y_pred)
+                        
+                        # Log label information for debugging
+                        self.logger.debug(f"{name} {split_name} - Original labels: {np.unique(y_split_original)}, Predicted labels: {np.unique(y_pred_original)}")
+                        
+                        # Calculate metrics using original labels
+                        accuracy = accuracy_score(y_split_original, y_pred_original)
+                        precision = precision_score(y_split_original, y_pred_original, average='weighted')
+                        recall = recall_score(y_split_original, y_pred_original, average='weighted')
+                        f1 = f1_score(y_split_original, y_pred_original, average='weighted')
+                        auc = roc_auc_score(y_split_original, y_pred_proba)
+                        
+                        results[split_name] = {
+                            'accuracy': accuracy,
+                            'precision': precision,
+                            'recall': recall,
+                            'f1': f1,
+                            'auc': auc,
+                            'predictions': y_pred_original,
+                            'probabilities': y_pred_proba,
+                            'true_labels': y_split_original,
+                            'subject_ids': ids_split
+                        }
+                        
+                        self.logger.info(f"{name} {split_name} - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}")
+                        
+                    except Exception as e:
+                        self.logger.error(f"Error evaluating {name} on {split_name}: {e}")
+                        self.logger.error(f"y_split type: {type(y_split)}, y_pred type: {type(y_pred)}")
+                        self.logger.error(f"y_split_original type: {type(y_split_original) if 'y_split_original' in locals() else 'Not created'}")
+                        self.logger.error(f"y_pred_original type: {type(y_pred_original) if 'y_pred_original' in locals() else 'Not created'}")
+                        raise
                 
                 self.results[name] = results
                 
@@ -536,43 +556,51 @@ class EnhancedRadiomicsClassifier:
             ensemble_results = {}
             
             for split_name, (X_split, y_split, ids_split) in self.splits.items():
-                # Get probabilities from all models
-                all_probs = []
-                for name, model in self.best_models.items():
-                    probs = model.predict_proba(X_split)[:, 1]
-                    all_probs.append(probs)
-                
-                # Average probabilities
-                ensemble_probs = np.mean(all_probs, axis=0)
-                ensemble_preds = (ensemble_probs > 0.5).astype(int)
-                
-                # Restore original labels for evaluation if remapping was used
-                y_split_original = self._restore_original_labels(y_split)
-                ensemble_preds_original = self._restore_original_labels(ensemble_preds)
-                
-                # Log label information for debugging
-                self.logger.debug(f"Ensemble {split_name} - Original labels: {np.unique(y_split_original)}, Predicted labels: {np.unique(ensemble_preds_original)}")
-                
-                # Calculate metrics using original labels
-                accuracy = accuracy_score(y_split_original, ensemble_preds_original)
-                precision = precision_score(y_split_original, ensemble_preds_original, average='weighted')
-                recall = recall_score(y_split_original, ensemble_preds_original, average='weighted')
-                f1 = f1_score(y_split_original, ensemble_preds_original, average='weighted')
-                auc = roc_auc_score(y_split_original, ensemble_probs)
-                
-                ensemble_results[split_name] = {
-                    'accuracy': accuracy,
-                    'precision': precision,
-                    'recall': recall,
-                    'f1': f1,
-                    'auc': auc,
-                    'predictions': ensemble_preds_original,
-                    'probabilities': ensemble_probs,
-                    'true_labels': y_split_original,
-                    'subject_ids': ids_split
-                }
-                
-                self.logger.info(f"Ensemble {split_name} - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}")
+                try:
+                    # Get probabilities from all models
+                    all_probs = []
+                    for name, model in self.best_models.items():
+                        probs = model.predict_proba(X_split)[:, 1]
+                        all_probs.append(probs)
+                    
+                    # Average probabilities
+                    ensemble_probs = np.mean(all_probs, axis=0)
+                    ensemble_preds = (ensemble_probs > 0.5).astype(int)
+                    
+                    # Restore original labels for evaluation if remapping was used
+                    y_split_original = self._restore_original_labels(y_split)
+                    ensemble_preds_original = self._restore_original_labels(ensemble_preds)
+                    
+                    # Log label information for debugging
+                    self.logger.debug(f"Ensemble {split_name} - Original labels: {np.unique(y_split_original)}, Predicted labels: {np.unique(ensemble_preds_original)}")
+                    
+                    # Calculate metrics using original labels
+                    accuracy = accuracy_score(y_split_original, ensemble_preds_original)
+                    precision = precision_score(y_split_original, ensemble_preds_original, average='weighted')
+                    recall = recall_score(y_split_original, ensemble_preds_original, average='weighted')
+                    f1 = f1_score(y_split_original, ensemble_preds_original, average='weighted')
+                    auc = roc_auc_score(y_split_original, ensemble_probs)
+                    
+                    ensemble_results[split_name] = {
+                        'accuracy': accuracy,
+                        'precision': precision,
+                        'recall': recall,
+                        'f1': f1,
+                        'auc': auc,
+                        'predictions': ensemble_preds_original,
+                        'probabilities': ensemble_probs,
+                        'true_labels': y_split_original,
+                        'subject_ids': ids_split
+                    }
+                    
+                    self.logger.info(f"Ensemble {split_name} - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}")
+                    
+                except Exception as e:
+                    self.logger.error(f"Error evaluating Ensemble on {split_name}: {e}")
+                    self.logger.error(f"y_split type: {type(y_split)}, ensemble_preds type: {type(ensemble_preds)}")
+                    self.logger.error(f"y_split_original type: {type(y_split_original) if 'y_split_original' in locals() else 'Not created'}")
+                    self.logger.error(f"ensemble_preds_original type: {type(ensemble_preds_original) if 'ensemble_preds_original' in locals() else 'Not created'}")
+                    raise
             
             self.results['Ensemble'] = ensemble_results
             
@@ -934,6 +962,8 @@ class EnhancedRadiomicsClassifier:
                 self.original_to_training_labels = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
                 self.training_to_original_labels = {v: k for k, v in self.original_to_training_labels.items()}
                 self.logger.info(f"Fold {fold_idx} label remapping: {self.original_to_training_labels}")
+                self.logger.debug(f"Fold {fold_idx} training_to_original_labels: {self.training_to_original_labels}")
+                self.logger.debug(f"Fold {fold_idx} y type: {type(self.y)}, y unique: {np.unique(self.y)}")
 
             # Proceed with modeling stages (no leakage)
             stages = [
