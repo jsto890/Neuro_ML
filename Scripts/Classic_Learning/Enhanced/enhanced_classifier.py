@@ -26,7 +26,7 @@ from sklearn.model_selection import (
     train_test_split, RandomizedSearchCV
 )
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier
-from sklearn.linear_model import LogisticRegression, SGDClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC, LinearSVC
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.neighbors import KNeighborsClassifier
@@ -326,13 +326,6 @@ class EnhancedRadiomicsClassifier:
         }
 
 
-        # SGDClassifier as probabilistic linear baseline
-        sgd_params = {
-            'loss': ['log_loss'],
-            'alpha': [1e-4, 1e-3, 1e-2],
-            'penalty': ['l2', 'elasticnet'],
-            'max_iter': [2000]
-        }
 
         # XGBoost (if available)
         if XGBOOST_AVAILABLE:
@@ -386,8 +379,7 @@ class EnhancedRadiomicsClassifier:
             'SVM': (SVC(random_state=self.random_state, probability=True), svm_params),
             'LinearSVC_Calibrated': (linsvc_calibrated, linsvc_params),
             'GradientBoosting': (GradientBoostingClassifier(random_state=self.random_state), gb_params),
-            'KNN': (KNeighborsClassifier(), knn_params),
-            'SGDClassifier': (SGDClassifier(random_state=self.random_state), sgd_params)
+            'KNN': (KNeighborsClassifier(), knn_params)
         }
         if XGBOOST_AVAILABLE and xgb_model is not None:
             self.models['XGBoost'] = (xgb_model, xgb_params)
