@@ -172,7 +172,7 @@ class EnhancedRadiomicsClassifier:
             
             self.logger.info(f"Data shape: {self.X.shape}")
             unique_labels = np.unique(self.y)
-            disease_counts = {self.label_to_disease.get(label, str(label)): np.sum(self.y == label) for label in unique_labels}
+            disease_counts = {self.label_to_disease.get(int(label), str(label)): np.sum(self.y == label) for label in unique_labels}
             self.logger.info(f"Labels: {unique_labels} -> {disease_counts}")
             
             return True
@@ -421,7 +421,9 @@ class EnhancedRadiomicsClassifier:
     def _restore_original_labels(self, y):
         """Restore original labels from training labels."""
         if hasattr(self, 'training_to_original_labels') and self.training_to_original_labels:
-            return np.array([self.training_to_original_labels[label] for label in y])
+            restored = np.array([self.training_to_original_labels[label] for label in y])
+            # Convert to regular Python integers to avoid numpy type issues
+            return restored.astype(int)
         return y
     
     def train_models(self):
@@ -485,6 +487,9 @@ class EnhancedRadiomicsClassifier:
                     y_split_original = self._restore_original_labels(y_split)
                     y_pred_original = self._restore_original_labels(y_pred)
                     
+                    # Log label information for debugging
+                    self.logger.debug(f"{name} {split_name} - Original labels: {np.unique(y_split_original)}, Predicted labels: {np.unique(y_pred_original)}")
+                    
                     # Calculate metrics using original labels
                     accuracy = accuracy_score(y_split_original, y_pred_original)
                     precision = precision_score(y_split_original, y_pred_original, average='weighted')
@@ -544,6 +549,9 @@ class EnhancedRadiomicsClassifier:
                 # Restore original labels for evaluation if remapping was used
                 y_split_original = self._restore_original_labels(y_split)
                 ensemble_preds_original = self._restore_original_labels(ensemble_preds)
+                
+                # Log label information for debugging
+                self.logger.debug(f"Ensemble {split_name} - Original labels: {np.unique(y_split_original)}, Predicted labels: {np.unique(ensemble_preds_original)}")
                 
                 # Calculate metrics using original labels
                 accuracy = accuracy_score(y_split_original, ensemble_preds_original)
@@ -631,7 +639,7 @@ class EnhancedRadiomicsClassifier:
             # Get unique labels in the confusion matrix
             unique_labels = np.unique(np.concatenate([np.unique(self.results[best_model]['test']['true_labels']), 
                                                     np.unique(self.results[best_model]['test']['predictions'])]))
-            disease_labels = [self.label_to_disease.get(label, str(label)) for label in unique_labels]
+            disease_labels = [self.label_to_disease.get(int(label), str(label)) for label in unique_labels]
             
             sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[1, 0],
                        xticklabels=disease_labels, yticklabels=disease_labels)
@@ -975,8 +983,19 @@ class EnhancedRadiomicsClassifier:
                         mcc = None
                     # Compute confusion matrix using original labels
                     try:
-                        cm = confusion_matrix(y_true, y_pred)
-                    except Exception:
+                        # Ensure labels are regular integers for confusion_matrix
+                        if y_true is not None and y_pred is not None:
+                            y_true_int = y_true.astype(int)
+                            y_pred_int = y_pred.astype(int)
+                            # Ensure we have valid labels for confusion matrix
+                            if len(np.unique(y_true_int)) > 0 and len(np.unique(y_pred_int)) > 0:
+                                cm = confusion_matrix(y_true_int, y_pred_int)
+                            else:
+                                cm = None
+                        else:
+                            cm = None
+                    except Exception as e:
+                        self.logger.warning(f"Could not compute confusion matrix: {e}")
                         cm = None
 
                     entry = {
@@ -1135,8 +1154,12 @@ class EnhancedRadiomicsClassifier:
         # Top-right: Averaged confusion matrix (if provided)
         ax1 = axes[0, 1]
         if ensemble_avg_cm is not None:
-            # Use disease labels for confusion matrix
-            disease_labels = ['CN', 'AD', 'PD'][:ensemble_avg_cm.shape[0]]
+            # Use disease labels for confusion matrix based on actual labels
+            if hasattr(self, 'binary_labels') and self.binary_only:
+                disease_labels = [self.label_to_disease.get(label, str(label)) for label in sorted(self.binary_labels)]
+            else:
+                disease_labels = [self.label_to_disease.get(label, str(label)) for label in sorted(set(self.y))]
+            
             sns.heatmap(ensemble_avg_cm, annot=True, fmt='.1f', cmap='Blues', cbar=True, ax=ax1,
                        xticklabels=disease_labels, yticklabels=disease_labels)
             ax1.set_title('Averaged Confusion Matrix (Ensemble, Test)')
@@ -1246,8 +1269,12 @@ class EnhancedRadiomicsClassifier:
 
         # Confusion matrix heatmap (aggregated)
         ax1 = axes[0, 1]
-        # Use disease labels for confusion matrix
-        disease_labels = ['CN', 'AD', 'PD'][:agg_cm.shape[0]]
+        # Use disease labels for confusion matrix based on actual labels
+        if hasattr(self, 'binary_labels') and self.binary_only:
+            disease_labels = [self.label_to_disease.get(label, str(label)) for label in sorted(self.binary_labels)]
+        else:
+            disease_labels = [self.label_to_disease.get(label, str(label)) for label in sorted(set(self.y))]
+        
         sns.heatmap(agg_cm, annot=True, fmt='d', cmap='Blues', cbar=False, ax=ax1,
                    xticklabels=disease_labels, yticklabels=disease_labels)
         ax1.set_title('Aggregated Confusion Matrix (Test)')
