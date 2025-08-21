@@ -1314,10 +1314,58 @@ class EnhancedRadiomicsClassifier:
         if ensemble_rocs and len(ensemble_rocs) > 0:
             # Check if this is multiclass data
             if hasattr(self, 'binary_only') and not self.binary_only:
-                # Multiclass: show message instead of ROC curves
-                ax3.axis('off')
-                ax3.text(0.5, 0.5, 'ROC curves not shown for multiclass\n(AUC scores in metrics table)', 
-                       ha='center', va='center', fontsize=11, alpha=0.7)
+                # Multiclass: plot One-vs-Rest (OvR) ROC curves
+                if len(ensemble_rocs) > 0:
+                    # Get unique classes from the first fold
+                    y_true_first, y_prob_first = ensemble_rocs[0]
+                    unique_classes = sorted(np.unique(y_true_first))
+                    n_classes = len(unique_classes)
+                    
+                    # Colors for different classes
+                    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+                    
+                    # Plot ROC curve for each class vs rest
+                    for class_idx, class_label in enumerate(unique_classes):
+                        class_aucs = []
+                        
+                        for fold_idx, (y_true, y_prob) in enumerate(ensemble_rocs):
+                            # Create binary labels: current class = 1, others = 0
+                            y_true_binary = (y_true == class_label).astype(int)
+                            
+                            # Get probability for current class
+                            if y_prob.ndim > 1:
+                                y_prob_class = y_prob[:, class_idx]
+                            else:
+                                y_prob_class = y_prob
+                            
+                            # Compute ROC curve for this class vs rest
+                            fpr, tpr, _ = roc_curve(y_true_binary, y_prob_class)
+                            auc_score = roc_auc_score(y_true_binary, y_prob_class)
+                            class_aucs.append(auc_score)
+                            
+                            # Plot with different alpha for each fold
+                            alpha = 0.6 - (fold_idx * 0.1)  # Decreasing alpha for each fold
+                            alpha = max(0.2, alpha)  # Minimum alpha of 0.2
+                            
+                            ax3.plot(fpr, tpr, color=colors[class_idx % len(colors)], 
+                                   alpha=alpha, linewidth=1.5, 
+                                   label=f'{self.label_to_disease.get(class_label, f"Class {class_label}")} - Fold {fold_idx+1}' if fold_idx == 0 else None)
+                        
+                        # Add average AUC for this class
+                        mean_auc = np.mean(class_aucs)
+                        std_auc = np.std(class_aucs)
+                        ax3.plot([], [], color=colors[class_idx % len(colors)], linewidth=3,
+                               label=f'{self.label_to_disease.get(class_label, f"Class {class_label}")} - Avg AUC: {mean_auc:.3f} ± {std_auc:.3f}')
+                    
+                    ax3.plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Random')
+                    ax3.set_xlabel('False Positive Rate')
+                    ax3.set_ylabel('True Positive Rate')
+                    ax3.set_title('Multiclass ROC Curves - One-vs-Rest (5 Folds)')
+                    ax3.legend(fontsize=8, loc='lower right')
+                    ax3.grid(True, alpha=0.3)
+                else:
+                    ax3.axis('off')
+                    ax3.text(0.5, 0.5, 'ROC curves unavailable', ha='center', va='center', fontsize=11, alpha=0.7)
             else:
                 # Binary: plot ROC curves
                 for i, (y_true, y_prob) in enumerate(ensemble_rocs):
