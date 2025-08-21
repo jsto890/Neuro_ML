@@ -888,6 +888,8 @@ class EnhancedRadiomicsClassifier:
 
         Preprocessing and model selection are fit exclusively on Train to avoid leakage.
         """
+        import numpy as np
+        
         self.logger.info("Starting Enhanced Outer Stratified K-Fold evaluation")
 
         # Stage 0: Load data once
