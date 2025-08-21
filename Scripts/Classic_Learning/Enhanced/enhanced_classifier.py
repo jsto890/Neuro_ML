@@ -726,18 +726,55 @@ class EnhancedRadiomicsClassifier:
                     auc_score = self.results[name]['test']['auc']
                     axes[0, 1].plot(fpr, tpr, label=f'{name} (AUC = {auc_score:.3f})')
             else:
-                # Multiclass: skip ROC curves or show message
-                axes[0, 1].text(0.5, 0.5, 'ROC curves not shown for multiclass\n(AUC scores in metrics table)', 
-                               ha='center', va='center', fontsize=12)
-                axes[0, 1].set_xlim(0, 1)
-                axes[0, 1].set_ylim(0, 1)
+                # Multiclass: plot One-vs-Rest ROC curves
+                # Get unique classes from the first model's predictions
+                first_model = model_names[0]
+                y_true_first = self.results[first_model]['test']['true_labels']
+                unique_classes = sorted(np.unique(y_true_first))
+                n_classes = len(unique_classes)
+                
+                # Colors for different classes
+                colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+                
+                # Plot ROC curve for each class vs rest for best model (Ensemble)
+                best_model = 'Ensemble' if 'Ensemble' in model_names else model_names[0]
+                
+                if best_model in self.results and 'probabilities' in self.results[best_model]['test']:
+                    y_true = self.results[best_model]['test']['true_labels']
+                    y_pred_proba = self.results[best_model]['test']['probabilities']
+                    
+                    for class_idx, class_label in enumerate(unique_classes):
+                        # Create binary labels: current class = 1, others = 0
+                        y_true_binary = (y_true == class_label).astype(int)
+                        
+                        # Get probability for current class
+                        if y_pred_proba.ndim > 1 and class_idx < y_pred_proba.shape[1]:
+                            y_prob_class = y_pred_proba[:, class_idx]
+                        else:
+                            continue  # Skip if not multiclass probabilities
+                        
+                        # Compute ROC curve for this class vs rest
+                        fpr, tpr, _ = roc_curve(y_true_binary, y_prob_class)
+                        auc_score = roc_auc_score(y_true_binary, y_prob_class)
+                        
+                        # Plot with class-specific color
+                        axes[0, 1].plot(fpr, tpr, color=colors[class_idx % len(colors)], 
+                                      alpha=0.8, linewidth=2,
+                                      label=f'{self.label_to_disease.get(class_label, f"Class {class_label}")} (AUC={auc_score:.3f})')
+                    
+                    axes[0, 1].set_title(f'Multiclass ROC Curves - One-vs-Rest ({best_model})')
+                else:
+                    # Fallback message if no probabilities available
+                    axes[0, 1].text(0.5, 0.5, 'ROC curves not available\n(probabilities not stored)', 
+                                   ha='center', va='center', fontsize=12)
+                    axes[0, 1].set_xlim(0, 1)
+                    axes[0, 1].set_ylim(0, 1)
             
-            axes[0, 1].plot([0, 1], [0, 1], 'k--', label='Random')
-            axes[0, 1].set_title('ROC Curves - Test Set')
+            axes[0, 1].plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Random')
             axes[0, 1].set_xlabel('False Positive Rate')
             axes[0, 1].set_ylabel('True Positive Rate')
-            axes[0, 1].legend()
-            axes[0, 1].grid(True)
+            axes[0, 1].legend(fontsize=9, loc='lower right')
+            axes[0, 1].grid(True, alpha=0.3)
             
             # 3. Feature Importance (Random Forest)
             if 'RandomForest' in self.feature_importance:
