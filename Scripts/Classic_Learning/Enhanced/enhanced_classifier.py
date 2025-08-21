@@ -528,7 +528,15 @@ class EnhancedRadiomicsClassifier:
                     try:
                         # Predictions
                         y_pred = model.predict(X_split)
-                        y_pred_proba = model.predict_proba(X_split)[:, 1]
+                        
+                        # Handle probabilities for both binary and multiclass
+                        if self.binary_only:
+                            # Binary: extract probability of positive class
+                            y_pred_proba = model.predict_proba(X_split)[:, 1]
+                        else:
+                            # Multiclass: use probability of predicted class
+                            proba_matrix = model.predict_proba(X_split)
+                            y_pred_proba = np.max(proba_matrix, axis=1)
                         
                         # Restore original labels for evaluation if remapping was used
                         y_split_original = self._restore_original_labels(y_split)
@@ -611,7 +619,13 @@ class EnhancedRadiomicsClassifier:
                     # Get probabilities from all models
                     all_probs = []
                     for name, model in self.best_models.items():
-                        probs = model.predict_proba(X_split)[:, 1]
+                        if self.binary_only:
+                            # Binary: extract probability of positive class
+                            probs = model.predict_proba(X_split)[:, 1]
+                        else:
+                            # Multiclass: use probability of predicted class
+                            proba_matrix = model.predict_proba(X_split)
+                            probs = np.max(proba_matrix, axis=1)
                         all_probs.append(probs)
                     
                     # Average probabilities
@@ -701,14 +715,18 @@ class EnhancedRadiomicsClassifier:
                 y_true = self.results[name]['test']['true_labels']
                 y_probs = self.results[name]['test']['probabilities']
                 
-                # Convert labels to {0,1} for roc_curve if they're not consecutive
-                if set(np.unique(y_true)) != {0, 1}:
-                    y_true_binary = (y_true == y_true.max()).astype(int)
-                    self.logger.debug(f"Converting labels {np.unique(y_true)} to {np.unique(y_true_binary)} for ROC curve")
-                else:
+                if self.binary_only:
+                    # Binary: use probabilities directly
                     y_true_binary = y_true
+                    y_probs_binary = y_probs
+                else:
+                    # Multiclass: convert to one-vs-rest for ROC curves
+                    # Use the highest probability class as positive
+                    y_true_binary = (y_true == y_true.max()).astype(int)
+                    y_probs_binary = y_probs
+                    self.logger.debug(f"Multiclass ROC: converting labels {np.unique(y_true)} to {np.unique(y_true_binary)}")
                 
-                fpr, tpr, _ = roc_curve(y_true_binary, y_probs)
+                fpr, tpr, _ = roc_curve(y_true_binary, y_probs_binary)
                 auc_score = self.results[name]['test']['auc']
                 axes[0, 1].plot(fpr, tpr, label=f'{name} (AUC = {auc_score:.3f})')
             
