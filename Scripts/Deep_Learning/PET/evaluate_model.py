@@ -132,7 +132,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     output_path.mkdir(parents=True, exist_ok=True)
     
     # Disease label mapping
-    label_to_disease = {0: 'CN', 1: 'AD', 2: 'PD'}
+    label_to_disease = {0: 'AD', 1: 'CN', 2: 'PD'}
     
     # Create comprehensive plot
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
