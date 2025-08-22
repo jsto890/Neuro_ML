@@ -2188,9 +2188,13 @@ def main():
     # Model arguments
     parser.add_argument("--labels", nargs='+', type=int, required=True,
                         help="List of label values to use for classification")
-    parser.add_argument("--models", nargs='+', type=str, required=True,
+    parser.add_argument("--model", type=str, default=None,
+                        help="Single model to train (alternative to --models)")
+    parser.add_argument("--models", nargs='+', type=str, default=None,
                         choices=['Simple3DCNN', 'VisionTransformer3D', 'SwinUNETRClassifier', 'FullSwinUNETRClassifier'],
-                        help="List of models to train")
+                        help="List of models to train (alternative to --model)")
+    parser.add_argument("--run_all", action='store_true', default=False,
+                        help="Run all available models")
     parser.add_argument("--use_pretrained", action='store_true', default=False,
                         help="Use pretrained weights for models that support it")
     
@@ -2212,6 +2216,8 @@ def main():
     # Data split arguments
     parser.add_argument("--val_ratio", type=float, default=0.2, help="Validation set ratio")
     parser.add_argument("--test_ratio", type=float, default=0.2, help="Test set ratio")
+    parser.add_argument("--balance_dataset", action='store_true', default=False,
+                        help="Balance dataset by undersampling majority classes")
     
     # CNN-specific arguments
     parser.add_argument("--cnn_drop_rate", type=float, default=0.0, help="Dropout rate for CNN models")
