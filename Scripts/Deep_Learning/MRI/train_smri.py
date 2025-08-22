@@ -1500,6 +1500,18 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                     dropout_p=(args.cnn_drop_rate if model_name == "Simple3DCNN" else 0.0),
                 )
             
+            # Move model to device immediately after creation
+            model = model.to(args.device)
+            print(f"[INFO] Model moved to device: {args.device}")
+            
+            # Verify model is on correct device
+            model_device = next(model.parameters()).device
+            if str(model_device) != args.device:
+                print(f"[WARNING] Model device mismatch! Expected: {args.device}, Got: {model_device}")
+                print(f"[INFO] Moving model to correct device...")
+                model = model.to(args.device)
+                print(f"[INFO] Model now on device: {next(model.parameters()).device}")
+            
             # Create memory-optimized data loaders
             train_loader, val_loader, test_loader, working_batch_size = create_data_loaders_with_memory_optimization(
                 train_dataset, val_dataset, test_dataset, args, model
@@ -2093,6 +2105,11 @@ def auto_reduce_batch_size(model, initial_batch_size, min_batch_size, device, ar
             # Create a dummy batch to test memory
             dummy_input = torch.randn(batch_size, 1, 96, 112, 96).to(device)
             
+            # Ensure model is on the same device as input
+            if next(model.parameters()).device != dummy_input.device:
+                print(f"[MEMORY] Moving model to {device} for testing...")
+                model = model.to(device)
+            
             # Test forward pass
             with torch.no_grad():
                 _ = model(dummy_input)
@@ -2114,6 +2131,26 @@ def auto_reduce_batch_size(model, initial_batch_size, min_batch_size, device, ar
             if batch_size <= min_batch_size:
                 print(f"[MEMORY] ⚠️  Reached minimum batch size {min_batch_size}. Training may be slow.")
                 return min_batch_size
+        except RuntimeError as e:
+            if "Input type" in str(e) and "weight type" in str(e):
+                print(f"[MEMORY] ❌ Device mismatch error: {e}")
+                print(f"[MEMORY] Attempting to fix device placement...")
+                try:
+                    model = model.to(device)
+                    # Retry with corrected device placement
+                    with torch.no_grad():
+                        _ = model(dummy_input)
+                    print(f"[MEMORY] ✅ Device issue fixed! Batch size {batch_size} works.")
+                    return batch_size
+                except Exception as retry_e:
+                    print(f"[MEMORY] ❌ Device fix failed: {retry_e}")
+                    return min_batch_size
+            else:
+                print(f"[MEMORY] ❌ Runtime error: {e}")
+                return min_batch_size
+        except Exception as e:
+            print(f"[MEMORY] ❌ Unexpected error: {e}")
+            return min_batch_size
     
     print(f"[MEMORY] ⚠️  Could not find working batch size. Using minimum: {min_batch_size}")
     return min_batch_size
@@ -2138,6 +2175,11 @@ def create_data_loaders_with_memory_optimization(train_dataset, val_dataset, tes
     if args.auto_batch_size:
         print(f"[MEMORY] Auto-batch size optimization enabled.")
         print(f"[MEMORY] Testing memory usage with model: {type(model).__name__}")
+        
+        # Ensure model is on the correct device before testing
+        if 'cuda' in args.device:
+            model = model.to(args.device)
+            print(f"[MEMORY] Model moved to {args.device}")
         
         # Test with current batch size
         working_batch_size = auto_reduce_batch_size(
