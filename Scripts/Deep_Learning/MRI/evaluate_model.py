@@ -23,6 +23,8 @@ from torch.utils.data import DataLoader
 import json
 from pathlib import Path
 import pandas as pd
+from sklearn.calibration import calibration_curve
+from scipy.optimize import minimize_scalar
 
 from dataset import SMRIDataset
 from models_smri import Simple3DCNN
@@ -30,6 +32,152 @@ from models_smri import Simple3DCNN
 # Set style for plots
 plt.style.use('default')
 sns.set_palette("husl")
+
+def temperature_scaling(logits, temperature):
+    """
+    Apply temperature scaling to logits.
+    
+    Args:
+        logits: Raw model outputs [N, num_classes]
+        temperature: Temperature parameter (T > 0)
+    
+    Returns:
+        Calibrated probabilities [N, num_classes]
+    """
+    return nn.Softmax(dim=1)(logits / temperature)
+
+def find_optimal_temperature(logits, labels, max_iter=1000):
+    """
+    Find optimal temperature parameter for calibration using validation set.
+    
+    Args:
+        logits: Raw model outputs [N, num_classes]
+        labels: Ground truth labels [N]
+        max_iter: Maximum iterations for optimization
+    
+    Returns:
+        optimal_temperature: Optimal temperature value
+        calibrated_probs: Probabilities after temperature scaling
+    """
+    def objective(t):
+        """Objective function: negative log-likelihood."""
+        if t <= 0:
+            return 1e10  # Penalty for invalid temperature
+        
+        # Apply temperature scaling
+        probs = temperature_scaling(torch.from_numpy(logits), t).numpy()
+        
+        # Calculate negative log-likelihood
+        nll = 0
+        for i, label in enumerate(labels):
+            nll -= np.log(probs[i, label] + 1e-15)  # Add small epsilon for numerical stability
+        
+        return nll
+    
+    # Find optimal temperature using scipy optimization
+    result = minimize_scalar(objective, bounds=(0.1, 10.0), method='bounded', options={'maxiter': max_iter})
+    
+    if result.success:
+        optimal_temperature = result.x
+        calibrated_probs = temperature_scaling(torch.from_numpy(logits), optimal_temperature).numpy()
+        return optimal_temperature, calibrated_probs
+    else:
+        print(f"Warning: Temperature optimization failed. Using default temperature 1.0")
+        return 1.0, nn.Softmax(dim=1)(torch.from_numpy(logits)).numpy()
+
+def evaluate_model_with_temperature_scaling(model, test_loader, device, val_loader=None, label_mapping=None, threshold: float | None = None):
+    """
+    Evaluate model with optional temperature scaling for better calibration.
+    
+    Args:
+        model: trained model
+        test_loader: test data loader
+        device: device to run inference on
+        val_loader: validation data loader for temperature calibration (optional)
+        label_mapping: label mapping if provided
+        threshold: threshold for binary classification (ignored for multiclass)
+    
+    Returns:
+        tuple: (predictions, probabilities, labels, temperature_info)
+    """
+    model.eval()
+    all_logits = []
+    all_probabilities = []
+    all_predictions = []
+    all_labels = []
+    
+    # First pass: collect logits and probabilities
+    with torch.no_grad():
+        for smri, labels in test_loader:
+            smri = smri.to(device)
+            
+            # Apply label mapping if provided
+            if label_mapping is not None:
+                labels = torch.tensor([label_mapping[label.item()] for label in labels], device=device)
+            
+            logits = model(smri)
+            probabilities = nn.Softmax(dim=1)(logits)
+            
+            all_logits.append(logits.cpu())
+            all_probabilities.append(probabilities.cpu())
+            all_labels.append(labels.cpu())
+    
+    # Concatenate all batches
+    all_logits = torch.cat(all_logits, dim=0).numpy()
+    all_probabilities = torch.cat(all_probabilities, dim=0).numpy()
+    all_labels = torch.cat(all_labels, dim=0).numpy()
+    
+    # Temperature scaling if validation data is provided
+    temperature_info = {'temperature': 1.0, 'calibrated': False}
+    
+    if val_loader is not None and all_logits.shape[1] > 2:  # Only for multiclass
+        print("Applying temperature scaling for multiclass calibration...")
+        
+        # Collect validation logits and labels
+        val_logits = []
+        val_labels = []
+        
+        with torch.no_grad():
+            for smri, labels in val_loader:
+                smri = smri.to(device)
+                
+                if label_mapping is not None:
+                    labels = torch.tensor([label_mapping[label.item()] for label in labels], device=device)
+                
+                logits = model(smri)
+                val_logits.append(logits.cpu())
+                val_labels.append(labels.cpu())
+        
+        val_logits = torch.cat(val_logits, dim=0).numpy()
+        val_labels = torch.cat(val_labels, dim=0).numpy()
+        
+        # Find optimal temperature
+        optimal_temperature, calibrated_probs = find_optimal_temperature(val_logits, val_labels)
+        
+        # Apply temperature scaling to test set
+        test_calibrated_probs = temperature_scaling(torch.from_numpy(all_logits), optimal_temperature).numpy()
+        
+        # Update probabilities and temperature info
+        all_probabilities = test_calibrated_probs
+        temperature_info = {
+            'temperature': float(optimal_temperature),
+            'calibrated': True,
+            'validation_logits': val_logits,
+            'validation_labels': val_labels
+        }
+        
+        print(f"Temperature scaling applied: T = {optimal_temperature:.3f}")
+    
+    # Make predictions
+    if threshold is not None and all_probabilities.shape[1] == 2:
+        # Binary classification with threshold
+        pred_pos = (all_probabilities[:, 1] >= threshold).astype(int)
+        all_predictions = pred_pos
+    else:
+        # Multiclass or binary without threshold: use argmax
+        all_predictions = np.argmax(all_probabilities, axis=1)
+    
+    return np.array(all_predictions), np.array(all_probabilities), np.array(all_labels), temperature_info
 
 def load_model(model_path, num_classes=2, device='cpu'):
     """Load a trained model from .pth file."""
@@ -52,35 +200,55 @@ def load_model(model_path, num_classes=2, device='cpu'):
     model.eval()
     return model
 
-def evaluate_model(model, test_loader, device='cpu', label_mapping=None, threshold: float | None = None):
-    """Evaluate model and return predictions and metrics."""
-    model.eval()
-    all_predictions = []
-    all_probabilities = []
-    all_labels = []
+def evaluate_model(model, test_loader, device='cpu', label_mapping=None, threshold: float | None = None, use_temperature_scaling=False, val_loader=None):
+    """
+    Evaluate model and return predictions and metrics.
     
-    with torch.no_grad():
-        for smri, labels in test_loader:
-            smri = smri.to(device)
-            
-            # Apply label mapping if provided
-            if label_mapping is not None:
-                labels = torch.tensor([label_mapping[label.item()] for label in labels], device=device)
-            
-            logits = model(smri)
-            probabilities = nn.Softmax(dim=1)(logits)
-            if threshold is not None and probabilities.shape[1] == 2:
-                # Use provided threshold on positive class prob for binary case
-                pred_pos = (probabilities[:, 1] >= threshold).long()
-                predictions = pred_pos
-            else:
-                predictions = torch.argmax(logits, dim=1)
-            
-            all_predictions.extend(predictions.cpu().numpy())
-            all_probabilities.extend(probabilities.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
+    Args:
+        model: trained model
+        test_loader: test data loader
+        device: device to run inference on
+        label_mapping: label mapping if provided
+        threshold: threshold for binary classification
+        use_temperature_scaling: whether to apply temperature scaling for multiclass
+        val_loader: validation data loader for temperature calibration (required if use_temperature_scaling=True)
     
-    return np.array(all_predictions), np.array(all_probabilities), np.array(all_labels)
+    Returns:
+        tuple: (predictions, probabilities, labels) or (predictions, probabilities, labels, temperature_info)
+    """
+    if use_temperature_scaling and val_loader is not None:
+        return evaluate_model_with_temperature_scaling(
+            model, test_loader, device, val_loader, label_mapping, threshold
+        )
+    else:
+        # Original evaluation logic
+        model.eval()
+        all_predictions = []
+        all_probabilities = []
+        all_labels = []
+        
+        with torch.no_grad():
+            for smri, labels in test_loader:
+                smri = smri.to(device)
+                
+                # Apply label mapping if provided
+                if label_mapping is not None:
+                    labels = torch.tensor([label_mapping[label.item()] for label in labels], device=device)
+                
+                logits = model(smri)
+                probabilities = nn.Softmax(dim=1)(logits)
+                if threshold is not None and probabilities.shape[1] == 2:
+                    # Use provided threshold on positive class prob for binary case
+                    pred_pos = (probabilities[:, 1] >= threshold).long()
+                    predictions = pred_pos
+                else:
+                    predictions = torch.argmax(logits, dim=1)
+                
+                all_predictions.extend(predictions.cpu().numpy())
+                all_probabilities.extend(probabilities.cpu().numpy())
+                all_labels.extend(labels.cpu().numpy())
+        
+        return np.array(all_predictions), np.array(all_probabilities), np.array(all_labels)
 
 def calculate_metrics(predictions, probabilities, labels):
     """Calculate comprehensive evaluation metrics."""
@@ -384,6 +552,10 @@ def main():
                         help="Device to use (cpu/cuda)")
     parser.add_argument("--num_classes", type=int, default=2,
                         help="Number of classes in the model")
+    parser.add_argument("--use_temperature_scaling", action="store_true",
+                        help="Whether to apply temperature scaling for multiclass calibration")
+    parser.add_argument("--val_csv", type=str,
+                        help="Path to validation labels CSV file for temperature scaling (required if --use_temperature_scaling is True)")
     
     args = parser.parse_args()
     
@@ -400,10 +572,26 @@ def main():
         shuffle=False,
         num_workers=args.num_workers
     )
+
+    # Create validation dataset if temperature scaling is used
+    val_dataset = None
+    val_loader = None
+    if args.use_temperature_scaling and args.val_csv:
+        print(f"Loading validation data from: {args.val_csv}")
+        val_dataset = SMRIDataset(csv_path=args.val_csv, data_root=args.data_root)
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.num_workers
+        )
     
     # Evaluate model
     print("Running evaluation...")
-    predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
+    predictions, probabilities, labels, temperature_info = evaluate_model(
+        model, test_loader, args.device, label_mapping=None, threshold=None,
+        use_temperature_scaling=args.use_temperature_scaling, val_loader=val_loader
+    )
     
     # Calculate metrics
     print("Calculating metrics...")
