@@ -1216,16 +1216,8 @@ def optimize_threshold(y_probs, y_true, thresholds=None):
 
 def evaluate_model_with_threshold_optimization(model, val_loader, device, optimize_threshold_flag=True, label_mapping=None):
     """
-    Evaluate model and optionally optimize threshold for accuracy.
-    
-    Args:
-        model: trained model
-        val_loader: validation data loader
-        device: device to run inference on
-        optimize_threshold_flag: whether to optimize threshold
-    
-    Returns:
-        dict with evaluation results including optimal threshold
+    Evaluate model on validation set with optional threshold optimization.
+    For multiclass, threshold optimization is disabled as it's not applicable.
     """
     model.eval()
     val_logits = []
@@ -1240,25 +1232,27 @@ def evaluate_model_with_threshold_optimization(model, val_loader, device, optimi
                 labels = torch.tensor([label_mapping[label.item()] for label in labels], device=device)
             
             logits = model(smri)
-            val_logits.append(logits.cpu().numpy())
-            val_labels.append(labels.cpu().numpy())
+            val_logits.append(logits.cpu())
+            val_labels.append(labels.cpu())
     
-    val_logits = np.concatenate(val_logits, axis=0)
-    val_labels = np.concatenate(val_labels, axis=0)
+    val_logits = torch.cat(val_logits, dim=0).numpy()
+    val_labels = torch.cat(val_labels, dim=0).numpy()
     
-    # Convert logits to probabilities
+    # Apply softmax to get probabilities
     probs_softmax = nn.Softmax(dim=1)(torch.from_numpy(val_logits)).numpy()
     
     # Handle both binary and multiclass
     if probs_softmax.shape[1] == 2:
         # Binary classification: use positive class probability
         probs = probs_softmax[:, 1]
+        is_binary = True
     else:
-        # Multiclass: use max probability for threshold optimization
+        # Multiclass: threshold optimization not applicable
         probs = np.max(probs_softmax, axis=1)
+        is_binary = False
     
-    # Calculate metrics with default threshold (0.5)
-    if probs_softmax.shape[1] == 2:
+    # Calculate metrics with default threshold (0.5 for binary, argmax for multiclass)
+    if is_binary:
         # Binary classification
         default_preds = (probs >= 0.5).astype(int)
         default_acc = accuracy_score(val_labels, default_preds)
@@ -1273,16 +1267,17 @@ def evaluate_model_with_threshold_optimization(model, val_loader, device, optimi
     results = {
         'probabilities': probs,
         'labels': val_labels,
-        'default_threshold': 0.5,
+        'default_threshold': 0.5 if is_binary else None,
         'default_accuracy': default_acc,
         'default_auc': default_auc,
-        'optimal_threshold': 0.5,
+        'optimal_threshold': 0.5 if is_binary else None,
         'optimal_accuracy': default_acc,
-        'threshold_optimized': False
+        'threshold_optimized': False,
+        'is_binary': is_binary
     }
     
-    if optimize_threshold_flag:
-        # Optimize threshold for accuracy
+    if optimize_threshold_flag and is_binary:
+        # Only optimize threshold for binary classification
         best_thresh, best_acc, threshold_results = optimize_threshold(probs, val_labels)
         
         # Calculate metrics with optimal threshold
@@ -1304,6 +1299,20 @@ def evaluate_model_with_threshold_optimization(model, val_loader, device, optimi
         
         print(f"Threshold optimization: {default_acc:.4f} -> {best_acc:.4f} (improvement: {best_acc - default_acc:.4f})")
         print(f"Optimal threshold: {best_thresh:.3f} (default: 0.5)")
+    elif not is_binary:
+        # For multiclass, calculate per-class metrics without threshold optimization
+        precision, recall, f1, support = precision_recall_fscore_support(val_labels, default_preds, average='macro', zero_division=0)
+        mcc = matthews_corrcoef(val_labels, default_preds)
+        
+        results.update({
+            'optimal_precision': precision,
+            'optimal_recall': recall,
+            'optimal_f1': f1,
+            'optimal_mcc': mcc,
+            'threshold_optimized': False
+        })
+        
+        print(f"Multiclass evaluation (no threshold optimization): Accuracy = {default_acc:.4f}, AUC = {default_auc:.4f}")
     
     return results
 

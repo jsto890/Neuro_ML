@@ -120,49 +120,98 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
-    # Disease label mapping
-    label_to_disease = {0: 'AD', 1: 'CN', 2: 'PD'}
+    # Disease label mapping - Updated for proper CN, AD, PD ordering
+    # This assumes labels are in order: [CN, AD, PD] or [0, 1, 2]
+    n_classes = probabilities.shape[1]
+    if n_classes == 3:
+        # For 3-class: CN, AD, PD
+        label_to_disease = {0: 'CN', 1: 'AD', 2: 'PD'}
+        disease_names = ['CN', 'AD', 'PD']
+    elif n_classes == 2:
+        # For binary classification
+        label_to_disease = {0: 'Class 0', 1: 'Class 1'}
+        disease_names = ['Class 0', 'Class 1']
+    else:
+        # For other multiclass scenarios
+        label_to_disease = {i: f'Class {i}' for i in range(n_classes)}
+        disease_names = [f'Class {i}' for i in range(n_classes)]
     
     # Create comprehensive plot
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    if n_classes == 2:
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    else:
+        # For multiclass, we need more space for ROC curves
+        fig, axes = plt.subplots(3, 3, figsize=(20, 18))
+    
     fig.suptitle('Model Evaluation Results - Disease Classification', fontsize=16, fontweight='bold')
     
     # 1. ROC Curve
     ax1 = axes[0, 0]
-    if probabilities.shape[1] == 2:
+    if n_classes == 2:
+        # Binary classification
         fpr, tpr, _ = roc_curve(labels, probabilities[:, 1])
         ax1.plot(fpr, tpr, color='blue', lw=2, label=f'ROC Curve (AUC = {metrics["auc"]:.3f})')
         ax1.plot([0, 1], [0, 1], color='red', lw=1, linestyle='--', alpha=0.8)
         ax1.set_xlabel('False Positive Rate')
         ax1.set_ylabel('True Positive Rate')
-        ax1.set_title('ROC Curve')
+        ax1.set_title('ROC Curve (Binary)')
         ax1.legend()
         ax1.grid(True, alpha=0.3)
     else:
-        ax1.text(0.5, 0.5, 'ROC Curve\n(Not available for multi-class)', 
-                ha='center', va='center', transform=ax1.transAxes)
-        ax1.set_title('ROC Curve')
+        # Multiclass: One-vs-Rest ROC curves
+        from sklearn.metrics import roc_curve, auc
+        colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown']
+        
+        for i in range(n_classes):
+            # One-vs-rest: class i vs all others
+            y_true_binary = (labels == i).astype(int)
+            fpr, tpr, _ = roc_curve(y_true_binary, probabilities[:, i])
+            roc_auc = auc(fpr, tpr)
+            
+            ax1.plot(fpr, tpr, color=colors[i % len(colors)], lw=2, 
+                    label=f'{disease_names[i]} vs Rest (AUC = {roc_auc:.3f})')
+        
+        ax1.plot([0, 1], [0, 1], color='black', lw=1, linestyle='--', alpha=0.8)
+        ax1.set_xlabel('False Positive Rate')
+        ax1.set_ylabel('True Positive Rate')
+        ax1.set_title('ROC Curves (One-vs-Rest)')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
     
     # 2. Precision-Recall Curve
     ax2 = axes[0, 1]
-    if probabilities.shape[1] == 2:
+    if n_classes == 2:
+        # Binary classification
         precision_curve, recall_curve, _ = precision_recall_curve(labels, probabilities[:, 1])
         ax2.plot(recall_curve, precision_curve, color='green', lw=2)
         ax2.set_xlabel('Recall')
         ax2.set_ylabel('Precision')
-        ax2.set_title('Precision-Recall Curve')
+        ax2.set_title('Precision-Recall Curve (Binary)')
         ax2.grid(True, alpha=0.3)
     else:
-        ax2.text(0.5, 0.5, 'Precision-Recall Curve\n(Not available for multi-class)', 
-                ha='center', va='center', transform=ax2.transAxes)
-        ax2.set_title('Precision-Recall Curve')
+        # Multiclass: One-vs-Rest Precision-Recall curves
+        from sklearn.metrics import precision_recall_curve, average_precision_score
+        
+        for i in range(n_classes):
+            y_true_binary = (labels == i).astype(int)
+            precision_curve, recall_curve, _ = precision_recall_curve(y_true_binary, probabilities[:, i])
+            avg_precision = average_precision_score(y_true_binary, probabilities[:, i])
+            
+            ax2.plot(recall_curve, precision_curve, color=colors[i % len(colors)], lw=2,
+                    label=f'{disease_names[i]} vs Rest (AP = {avg_precision:.3f})')
+        
+        ax2.set_xlabel('Recall')
+        ax2.set_ylabel('Precision')
+        ax2.set_title('Precision-Recall Curves (One-vs-Rest)')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
     
     # 3. Confusion Matrix
     ax3 = axes[0, 2]
     cm = metrics['confusion_matrix']
     # Get disease labels for the confusion matrix
-    n_classes = len(cm)
-    disease_labels = [label_to_disease.get(i, f'Class {i}') for i in range(n_classes)]
+    n_classes_actual = len(cm)
+    disease_labels = [label_to_disease.get(i, f'Class {i}') for i in range(n_classes_actual)]
     
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax3,
                xticklabels=disease_labels, yticklabels=disease_labels)
@@ -205,13 +254,13 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     
     # 6. Probability Distribution
     ax6 = axes[1, 2]
-    if probabilities.shape[1] == 2:
+    if n_classes == 2:
         # For binary classification, show probability distribution
         positive_probs = probabilities[:, 1]
         ax6.hist(positive_probs, bins=20, alpha=0.7, color='orange', edgecolor='black')
         ax6.set_xlabel('Probability of Positive Class')
         ax6.set_ylabel('Count')
-        ax6.set_title('Probability Distribution')
+        ax6.set_title('Probability Distribution (Binary)')
         ax6.grid(True, alpha=0.3)
     else:
         # For multi-class, show max probability distribution
@@ -219,8 +268,59 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         ax6.hist(max_probs, bins=20, alpha=0.7, color='orange', edgecolor='black')
         ax6.set_xlabel('Maximum Probability')
         ax6.set_ylabel('Count')
-        ax6.set_title('Probability Distribution')
+        ax6.set_title('Probability Distribution (Multiclass)')
         ax6.grid(True, alpha=0.3)
+    
+    # 7. Per-class Performance (only for multiclass)
+    if n_classes > 2:
+        ax7 = axes[2, 0]
+        # Calculate per-class metrics
+        from sklearn.metrics import precision_recall_fscore_support
+        precision_per_class, recall_per_class, f1_per_class, _ = precision_recall_fscore_support(
+            labels, predictions, average=None, zero_division=0
+        )
+        
+        x = np.arange(len(disease_names))
+        width = 0.25
+        
+        ax7.bar(x - width, precision_per_class, width, label='Precision', alpha=0.7)
+        ax7.bar(x, recall_per_class, width, label='Recall', alpha=0.7)
+        ax7.bar(x + width, f1_per_class, width, label='F1-Score', alpha=0.7)
+        
+        ax7.set_xlabel('Classes')
+        ax7.set_ylabel('Score')
+        ax7.set_title('Per-Class Performance Metrics')
+        ax7.set_xticks(x)
+        ax7.set_xticklabels(disease_names)
+        ax7.legend()
+        ax7.grid(True, alpha=0.3)
+        ax7.set_ylim(0, 1)
+        
+        # 8. Class Balance Analysis
+        ax8 = axes[2, 1]
+        unique_labels_actual, counts_actual = np.unique(labels, return_counts=True)
+        disease_labels_actual = [label_to_disease.get(label, f'Class {label}') for label in unique_labels_actual]
+        
+        ax8.bar(range(len(unique_labels_actual)), counts_actual, alpha=0.7, color='lightgreen', edgecolor='black')
+        ax8.set_xlabel('Actual Class')
+        ax8.set_ylabel('Count')
+        ax8.set_title('Class Distribution in Test Set')
+        ax8.set_xticks(range(len(unique_labels_actual)))
+        ax8.set_xticklabels(disease_labels_actual)
+        ax8.grid(True, alpha=0.3)
+        
+        # 9. Confidence Analysis
+        ax9 = axes[2, 2]
+        # Show confidence distribution for each class
+        for i in range(n_classes):
+            class_probs = probabilities[:, i]
+            ax9.hist(class_probs, bins=20, alpha=0.5, label=disease_names[i], density=True)
+        
+        ax9.set_xlabel('Predicted Probability')
+        ax9.set_ylabel('Density')
+        ax9.set_title('Class-wise Confidence Distribution')
+        ax9.legend()
+        ax9.grid(True, alpha=0.3)
     
     plt.tight_layout()
     plot_path = output_path / 'model_evaluation_analysis.png'
