@@ -863,6 +863,15 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     final_train_acc = 0.0
     no_improvement_count = 0
     
+    # Early stopping variables
+    early_stopping_patience = getattr(args, 'early_stopping_patience', 30)
+    early_stopping_min_delta = getattr(args, 'early_stopping_min_delta', 0.001)
+    early_stopping_monitor = getattr(args, 'early_stopping_monitor', 'val_auc')
+    best_monitored_metric = 0.0
+    early_stopping_count = 0
+    
+    print(f"[INFO] Early stopping enabled: patience={early_stopping_patience}, monitor={early_stopping_monitor}, min_delta={early_stopping_min_delta}")
+    
     # Store best metrics
     best_precision_macro = 0.0
     best_recall_macro = 0.0
@@ -1186,15 +1195,58 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             best_threshold_results = val_results.get('threshold_results', [])
         else:
             no_improvement_count += 1
+        
+        # Early stopping logic based on monitored metric
+        current_monitored_metric = 0.0
+        if early_stopping_monitor == 'val_auc':
+            current_monitored_metric = val_auc
+        elif early_stopping_monitor == 'val_acc':
+            current_monitored_metric = val_acc
+        elif early_stopping_monitor == 'val_loss':
+            current_monitored_metric = -epoch_loss  # Negative because we want to maximize
+        
+        # Check if we have improvement
+        if current_monitored_metric > best_monitored_metric + early_stopping_min_delta:
+            best_monitored_metric = current_monitored_metric
+            early_stopping_count = 0
+        else:
+            early_stopping_count += 1
+        
+        # Early stopping check
+        if early_stopping_count >= early_stopping_patience:
+            print(f"\n[EARLY STOPPING] No improvement in {early_stopping_monitor} for {early_stopping_patience} epochs")
+            print(f"[EARLY STOPPING] Best {early_stopping_monitor}: {best_monitored_metric:.6f}")
+            print(f"[EARLY STOPPING] Stopping training at epoch {epoch}/{epochs}")
+            break
             
-        # Early stopping if no improvement for 20 epochs
+        # Legacy early stopping (keeping for backward compatibility)
         if no_improvement_count >= 20:
-            print(f"\nEarly stopping triggered after {epoch} epochs")
+            print(f"\n[LEGACY] Early stopping triggered after {epoch} epochs (no improvement in AUC)")
             break
 
     # Load best model weights before returning
     if best_state is not None:
         model.load_state_dict(best_state)
+    
+    # Print training summary
+    if early_stopping_count >= early_stopping_patience:
+        print(f"\n{'='*60}")
+        print(f"TRAINING COMPLETED WITH EARLY STOPPING")
+        print(f"{'='*60}")
+        print(f"Final epoch: {epoch}/{epochs}")
+        print(f"Early stopping triggered: {early_stopping_monitor} did not improve for {early_stopping_patience} epochs")
+        print(f"Best {early_stopping_monitor}: {best_monitored_metric:.6f}")
+        print(f"Best validation AUC: {best_val_auc:.6f}")
+        print(f"Best validation accuracy: {best_val_acc:.6f}")
+        print(f"Training completed in {len(training_history)} epochs")
+    else:
+        print(f"\n{'='*60}")
+        print(f"TRAINING COMPLETED SUCCESSFULLY")
+        print(f"{'='*60}")
+        print(f"Completed all {epochs} epochs")
+        print(f"Best {early_stopping_monitor}: {best_monitored_metric:.6f}")
+        print(f"Best validation AUC: {best_val_auc:.6f}")
+        print(f"Best validation accuracy: {best_val_acc:.6f}")
     
     return model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix, best_threshold, best_threshold_results
 
@@ -2247,6 +2299,15 @@ def main():
     parser.add_argument("--weight_decay", type=float, default=0.00001, help="Weight decay for CNN models")
     parser.add_argument("--lr_scheduler_patience", type=int, default=5, help="LR scheduler patience")
     parser.add_argument("--lr_scheduler_factor", type=float, default=0.5, help="LR scheduler factor (0.5 = halve LR)")
+    
+    # Early stopping arguments
+    parser.add_argument("--early_stopping_patience", type=int, default=30,
+                        help="Early stopping patience (stop if no improvement for N epochs)")
+    parser.add_argument("--early_stopping_min_delta", type=float, default=0.001,
+                        help="Minimum improvement threshold for early stopping")
+    parser.add_argument("--early_stopping_monitor", type=str, default="val_auc",
+                        choices=["val_auc", "val_acc", "val_loss"],
+                        help="Metric to monitor for early stopping")
     
     # Hardware arguments
     parser.add_argument("--device", type=str, default="cuda", help="Device to use (cuda, cpu, or specific GPU)")
