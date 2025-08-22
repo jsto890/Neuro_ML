@@ -19,6 +19,7 @@ from pathlib import Path
 import shutil
 from sklearn.model_selection import train_test_split
 import contextlib
+import math
 
 from dataset import SMRIDataset
 from models_smri import Simple3DCNN, get_3d_model
@@ -828,19 +829,31 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     class_weights = class_weights / class_weights.sum()
     class_weights = torch.FloatTensor(class_weights).to(device)
     
-    class FocalLoss(nn.Module):
-        def __init__(self, alpha=0.25, gamma=2):
-            super().__init__()
-            self.alpha = alpha
-            self.gamma = gamma
+    # Check if this is a Vision Transformer model
+    is_vit_model = any(name.lower() in str(type(model)).lower() for name in 
+                       ['visiontransformer3d', 'swinunetrclassifier', 'fullswinunetrclassifier'])
+    
+    # Use appropriate loss function based on model type
+    if is_vit_model and args.label_smoothing > 0:
+        # Use CrossEntropyLoss with label smoothing for ViT models
+        criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+        print(f"[INFO] Using CrossEntropyLoss with label smoothing {args.label_smoothing} for ViT model")
+    else:
+        # Use FocalLoss for CNN models (original behavior)
+        class FocalLoss(nn.Module):
+            def __init__(self, alpha=0.25, gamma=2):
+                super().__init__()
+                self.alpha = alpha
+                self.gamma = gamma
+            
+            def forward(self, inputs, targets):
+                ce_loss = nn.CrossEntropyLoss(reduction='none')(inputs, targets)
+                pt = torch.exp(-ce_loss)
+                focal_loss = self.alpha * (1-pt)**self.gamma * ce_loss
+                return focal_loss.mean()
         
-        def forward(self, inputs, targets):
-            ce_loss = nn.CrossEntropyLoss(reduction='none')(inputs, targets)
-            pt = torch.exp(-ce_loss)
-            focal_loss = self.alpha * (1-pt)**self.gamma * ce_loss
-            return focal_loss.mean()
-
-    criterion = FocalLoss(alpha=0.25, gamma=2)
+        criterion = FocalLoss(alpha=0.25, gamma=2)
+        print(f"[INFO] Using FocalLoss for CNN model")
 
     model.to(device)
     best_val_auc = 0.0
@@ -890,21 +903,49 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     # Ensure we start epoch loop in train mode
     model.train()
 
-    # Use AdamW optimizer; constant LR for Simple3DCNN by default
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
-    # Plateau LR scheduler on validation AUC
-    # Handle PyTorch versions where ReduceLROnPlateau does not accept 'verbose'
-    try:
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode='max',
-            factor=args.lr_scheduler_factor,
-            patience=args.lr_scheduler_patience,
-            threshold=1e-4,
-            min_lr=1e-5,
-            verbose=False,
-        )
-    except TypeError:
+    # Configure optimizer and scheduler based on model type
+    if is_vit_model:
+        # Vision Transformer optimizations
+        if args.vit_optimizer.lower() == "adamw":
+            optimizer = torch.optim.AdamW(
+                model.parameters(), 
+                lr=args.learning_rate, 
+                weight_decay=args.vit_weight_decay
+            )
+            print(f"[INFO] Using AdamW optimizer with weight decay {args.vit_weight_decay} for ViT model")
+        else:
+            optimizer = torch.optim.Adam(
+                model.parameters(), 
+                lr=args.learning_rate, 
+                weight_decay=args.vit_weight_decay
+            )
+            print(f"[INFO] Using Adam optimizer with weight decay {args.vit_weight_decay} for ViT model")
+        
+        # Cosine schedule with warmup for ViT models
+        if args.vit_use_cosine_schedule:
+            total_steps = len(train_loader) * epochs
+            warmup_steps = len(train_loader) * args.vit_warmup_epochs
+            
+            def lr_lambda(step):
+                if step < warmup_steps:
+                    return float(step) / float(max(1, warmup_steps))
+                return max(0.0, 0.5 * (1.0 + math.cos(math.pi * (step - warmup_steps) / float(max(1, total_steps - warmup_steps)))))
+            
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+            print(f"[INFO] Using cosine schedule with {args.vit_warmup_epochs} epoch warmup for ViT model")
+        else:
+            # Fallback to plateau scheduler for ViT
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='max', factor=args.lr_scheduler_factor,
+                patience=args.lr_scheduler_patience, threshold=1e-4, min_lr=1e-5
+            )
+            print(f"[INFO] Using plateau scheduler for ViT model")
+    else:
+        # Original CNN behavior
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+        print(f"[INFO] Using AdamW optimizer with weight decay {args.weight_decay} for CNN model")
+        
+        # Plateau LR scheduler on validation AUC for CNN models
         try:
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer,
@@ -913,14 +954,26 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 patience=args.lr_scheduler_patience,
                 threshold=1e-4,
                 min_lr=1e-5,
+                verbose=False,
             )
         except TypeError:
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer,
-                mode='max',
-                factor=args.lr_scheduler_factor,
-                patience=args.lr_scheduler_patience,
-            )
+            try:
+                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer,
+                    mode='max',
+                    factor=args.lr_scheduler_factor,
+                    patience=args.lr_scheduler_patience,
+                    threshold=1e-4,
+                    min_lr=1e-5,
+                )
+            except TypeError:
+                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer,
+                    mode='max',
+                    factor=args.lr_scheduler_factor,
+                    patience=args.lr_scheduler_patience,
+                )
+    
     current_eval_weights = 'raw'  # track which weights are used for eval
 
     # --- EMA setup (disabled to match old behavior) ---
@@ -951,8 +1004,12 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                     loss = criterion(logits, labels)
                 
                 scaler.scale(loss).backward()
-                # unscale (no gradient clipping)
-                scaler.unscale_(optimizer)
+                
+                # Apply gradient clipping for ViT models
+                if is_vit_model and args.grad_clip_max_norm > 0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_max_norm)
+                
                 scaler.step(optimizer)
                 scaler.update()
             else:
@@ -961,6 +1018,11 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 loss = criterion(logits, labels)
                 
                 loss.backward()
+                
+                # Apply gradient clipping for ViT models
+                if is_vit_model and args.grad_clip_max_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_max_norm)
+                
                 optimizer.step()
 
             # Update EMA after optimizer step (disabled)
@@ -1034,8 +1096,15 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             }
 
         # Step plateau scheduler on val AUC
-        scheduler.step(val_auc)
-        new_lr = optimizer.param_groups[0]['lr']
+        # Step scheduler based on model type
+        if is_vit_model and args.vit_use_cosine_schedule:
+            # Step-based scheduler for ViT with cosine schedule
+            scheduler.step()
+            new_lr = optimizer.param_groups[0]['lr']
+        else:
+            # Plateau scheduler for CNN models or ViT with plateau
+            scheduler.step(val_auc)
+            new_lr = optimizer.param_groups[0]['lr']
         
         # Store epoch data
         val_mcc = matthews_corrcoef(val_labels, optimal_preds)
@@ -1953,6 +2022,18 @@ Examples:
                         help="Specific models to train (e.g., 'Simple3DCNN' 'EfficientNetB0_3D')")
     parser.add_argument("--run_all",     action='store_true',
                         help="Run all available models (default behavior)")
+    
+    # Vision Transformer specific arguments
+    parser.add_argument("--vit_warmup_epochs", type=int, default=5,
+                        help="Number of warmup epochs for Vision Transformer models")
+    parser.add_argument("--vit_use_cosine_schedule", action='store_true', default=True,
+                        help="Use cosine learning rate schedule for Vision Transformer models")
+    parser.add_argument("--label_smoothing", type=float, default=0.1,
+                        help="Label smoothing factor (0.1 recommended for ViT)")
+    parser.add_argument("--vit_optimizer", type=str, default="adamw", choices=["adamw", "adam"],
+                        help="Optimizer for Vision Transformer models")
+    parser.add_argument("--vit_weight_decay", type=float, default=0.05,
+                        help="Weight decay for Vision Transformer models (0.02-0.1 recommended)")
     
     args = parser.parse_args()
 
