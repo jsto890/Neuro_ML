@@ -33,7 +33,7 @@ class Simple3DCNN(nn.Module):
     Input:  [B, 1, D, H, W]  single‐channel sMRI
     Output: [B, num_classes] logits
     """
-    def __init__(self, num_classes=2, base_channels=16, dropout_p: float = 0.25):
+    def __init__(self, num_classes=2, base_channels=16, dropout_p: float = 0.0):
         super().__init__()
         self.dropout_p = float(dropout_p)
         self.features = nn.Sequential(
@@ -41,31 +41,33 @@ class Simple3DCNN(nn.Module):
             nn.Conv3d(1, base_channels, kernel_size=3, padding=1),
             nn.BatchNorm3d(base_channels),
             nn.ReLU(inplace=True),
-            nn.Dropout3d(p=self.dropout_p),
+            *( [nn.Dropout3d(p=self.dropout_p)] if self.dropout_p > 0 else [] ),
             nn.MaxPool3d(2),
             
             # Second conv block
             nn.Conv3d(base_channels, base_channels*2, kernel_size=3, padding=1),
             nn.BatchNorm3d(base_channels*2),
             nn.ReLU(inplace=True),
-            nn.Dropout3d(p=self.dropout_p),
+            *( [nn.Dropout3d(p=self.dropout_p)] if self.dropout_p > 0 else [] ),
             nn.MaxPool3d(2),
             
             # Third conv block
             nn.Conv3d(base_channels*2, base_channels*4, kernel_size=3, padding=1),
             nn.BatchNorm3d(base_channels*4),
             nn.ReLU(inplace=True),
-            nn.Dropout3d(p=self.dropout_p),
+            *( [nn.Dropout3d(p=self.dropout_p)] if self.dropout_p > 0 else [] ),
             nn.MaxPool3d(2)
         )
         
         # Initialize classifier with a placeholder
-        self.classifier = nn.Sequential(
+        cls_layers = [
             nn.Linear(1, 256),
             nn.ReLU(inplace=True),
-            nn.Dropout(p=max(0.2, min(0.3, self.dropout_p + 0.05))),
-            nn.Linear(256, num_classes)
-        )
+        ]
+        if self.dropout_p > 0:
+            cls_layers.append(nn.Dropout(p=self.dropout_p))
+        cls_layers.append(nn.Linear(256, num_classes))
+        self.classifier = nn.Sequential(*cls_layers)
         
         self._initialized = False
 
@@ -142,7 +144,8 @@ class SMRI_GradCAM_3DCNN(nn.Module):
         return logits, fmap
 
 # --- Model Factory Function ---
-def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use_pretrained=False, dropout_p: float = 0.25):
+def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use_pretrained=False, dropout_p: float = 0.0,
+                 vit_drop_rate: float = 0.0, vit_attn_drop_rate: float = 0.0, vit_drop_path_rate: float = 0.0):
     """
     Returns a 3D CNN model instance by name.
     Supported: 'Simple3DCNN', 'ResNet18_3D', 'DenseNet121_3D', 'EfficientNetB0_3D',
@@ -256,7 +259,17 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
     elif model_name in ["visiontransformer3d", "swinunetrclassifier", "fullswinunetrclassifier"]:
         if get_transformer_model is None:
             raise ImportError("Transformer models are not available. Install required dependencies.")
-        return get_transformer_model(model_name, num_classes=num_classes, in_channels=in_channels)
+        if model_name == "visiontransformer3d":
+            return get_transformer_model(
+                model_name,
+                num_classes=num_classes,
+                in_channels=in_channels,
+                drop_rate=vit_drop_rate,
+                attn_drop_rate=vit_attn_drop_rate,
+                drop_path_rate=vit_drop_path_rate,
+            )
+        else:
+            return get_transformer_model(model_name, num_classes=num_classes, in_channels=in_channels)
     
     else:
         raise ValueError(f"Unknown model name: {model_name}")

@@ -146,6 +146,8 @@ class RadiomicsClassifier:
             self.y = self.data['label'].values
             self.feature_names = [col for col in self.data.columns if col not in ['subject_id', 'label']]
             self.X = self.data[self.feature_names].values
+            # Preserve original feature names for per-fold resets
+            self._original_feature_names = list(self.feature_names)
             
             self.logger.info(f"Data shape: {self.X.shape}")
             self.logger.info(f"Labels: {np.unique(self.y)} (counts: {np.bincount(self.y)})")
@@ -157,7 +159,10 @@ class RadiomicsClassifier:
             return False
     
     def split_data(self, test_size=0.2, val_size=0.2):
-        """Stage 2: Train-validation-test split (BEFORE any preprocessing)."""
+        """Stage 2: Train/Val/Test split (BEFORE any preprocessing).
+
+        If val_size <= 0, skip creating a validation set and merge Train+Val into Train.
+        """
         self.logger.info("Stage 2: Splitting data (before preprocessing)...")
         
         try:
@@ -169,26 +174,36 @@ class RadiomicsClassifier:
                 stratify=self.y
             )
             
-            # Second split: train vs val
-            val_size_adjusted = val_size / (1 - test_size)
-            X_train, X_val, y_train, y_val, ids_train, ids_val = train_test_split(
-                X_temp, y_temp, ids_temp,
-                test_size=val_size_adjusted,
-                random_state=self.random_state,
-                stratify=y_temp
-            )
-            
-            # Store raw splits (before preprocessing)
-            self.splits = {
-                'train': (X_train, y_train, ids_train),
-                'val': (X_val, y_val, ids_val),
-                'test': (X_test, y_test, ids_test)
-            }
-            
-            self.logger.info(f"Raw data splits:")
-            self.logger.info(f"  Train: {X_train.shape[0]} samples")
-            self.logger.info(f"  Validation: {X_val.shape[0]} samples")
-            self.logger.info(f"  Test: {X_test.shape[0]} samples")
+            if val_size and val_size > 0:
+                # Second split: train vs val
+                val_size_adjusted = val_size / (1 - test_size)
+                X_train, X_val, y_train, y_val, ids_train, ids_val = train_test_split(
+                    X_temp, y_temp, ids_temp,
+                    test_size=val_size_adjusted,
+                    random_state=self.random_state,
+                    stratify=y_temp
+                )
+
+                # Store raw splits (before preprocessing)
+                self.splits = {
+                    'train': (X_train, y_train, ids_train),
+                    'val': (X_val, y_val, ids_val),
+                    'test': (X_test, y_test, ids_test)
+                }
+
+                self.logger.info(f"Raw data splits:")
+                self.logger.info(f"  Train: {X_train.shape[0]} samples")
+                self.logger.info(f"  Validation: {X_val.shape[0]} samples")
+                self.logger.info(f"  Test: {X_test.shape[0]} samples")
+            else:
+                # No validation set
+                self.splits = {
+                    'train': (X_temp, y_temp, ids_temp),
+                    'test': (X_test, y_test, ids_test)
+                }
+                self.logger.info(f"Raw data splits:")
+                self.logger.info(f"  Train: {X_temp.shape[0]} samples (no validation)")
+                self.logger.info(f"  Test: {X_test.shape[0]} samples")
             
             return True
             
@@ -197,13 +212,22 @@ class RadiomicsClassifier:
             return False
     
     def preprocess_data(self):
-        """Stage 3: Data preprocessing (fitted on training data only)."""
+        """Stage 3: Data preprocessing (fitted on training data only).
+
+        Supports configurations with or without a validation split.
+        """
         self.logger.info("Stage 3: Preprocessing data (training data only)...")
         
         try:
+            # Reset fold-specific transformers/selectors to avoid cross-fold state
+            self.variance_selector = VarianceThreshold(threshold=0.01)
+            self.scaler = StandardScaler()
+            self.feature_selector = None
             X_train, y_train, _ = self.splits['train']
-            X_val, y_val, _ = self.splits['val']
             X_test, y_test, _ = self.splits['test']
+            has_val = 'val' in self.splits
+            if has_val:
+                X_val, y_val, _ = self.splits['val']
             
             # Handle missing values with imputation (fit on train, apply to all)
             if hasattr(X_train, 'dtype') and np.issubdtype(X_train.dtype, np.number):
@@ -221,22 +245,24 @@ class RadiomicsClassifier:
                 
                 if hasattr(X_train, 'dtype') and np.issubdtype(X_train.dtype, np.number):
                     X_train = imputer.fit_transform(X_train)
-                    X_val = imputer.transform(X_val)
+                    if has_val:
+                        X_val = imputer.transform(X_val)
                     X_test = imputer.transform(X_test)
                 else:
                     X_train_numeric = pd.DataFrame(X_train, columns=self.feature_names).apply(pd.to_numeric, errors='coerce')
-                    X_val_numeric = pd.DataFrame(X_val, columns=self.feature_names).apply(pd.to_numeric, errors='coerce')
+                    X_val_numeric = pd.DataFrame(X_val, columns=self.feature_names).apply(pd.to_numeric, errors='coerce') if has_val else None
                     X_test_numeric = pd.DataFrame(X_test, columns=self.feature_names).apply(pd.to_numeric, errors='coerce')
                     
                     X_train = imputer.fit_transform(X_train_numeric)
-                    X_val = imputer.transform(X_val_numeric)
+                    if has_val:
+                        X_val = imputer.transform(X_val_numeric)
                     X_test = imputer.transform(X_test_numeric)
                 
                 self.logger.info(f"Imputed missing values using median strategy (fitted on training data)")
             
             # Remove constant features (fitted on train, applied to all)
             X_train_var = self.variance_selector.fit_transform(X_train)
-            X_val_var = self.variance_selector.transform(X_val)
+            X_val_var = self.variance_selector.transform(X_val) if has_val else None
             X_test_var = self.variance_selector.transform(X_test)
             
             # Update feature names after variance thresholding
@@ -247,7 +273,7 @@ class RadiomicsClassifier:
             
             # Standardize features (fitted on train, applied to all)
             X_train_scaled = self.scaler.fit_transform(X_train_var)
-            X_val_scaled = self.scaler.transform(X_val_var)
+            X_val_scaled = self.scaler.transform(X_val_var) if has_val else None
             X_test_scaled = self.scaler.transform(X_test_var)
             
             self.logger.info("Features standardized (fitted on training data)")
@@ -256,7 +282,7 @@ class RadiomicsClassifier:
             if X_train_scaled.shape[1] > 100:
                 self.feature_selector = SelectKBest(score_func=f_classif, k=100)
                 X_train_final = self.feature_selector.fit_transform(X_train_scaled, y_train)
-                X_val_final = self.feature_selector.transform(X_val_scaled)
+                X_val_final = self.feature_selector.transform(X_val_scaled) if has_val else None
                 X_test_final = self.feature_selector.transform(X_test_scaled)
                 
                 # Update feature names after feature selection
@@ -266,15 +292,17 @@ class RadiomicsClassifier:
                 self.logger.info(f"Selected top 100 features (fitted on training data): {X_train_final.shape}")
             else:
                 X_train_final = X_train_scaled
-                X_val_final = X_val_scaled
+                X_val_final = X_val_scaled if has_val else None
                 X_test_final = X_test_scaled
             
             # Update splits with preprocessed data
-            self.splits = {
+            new_splits = {
                 'train': (X_train_final, y_train, self.splits['train'][2]),
-                'val': (X_val_final, y_val, self.splits['val'][2]),
                 'test': (X_test_final, y_test, self.splits['test'][2])
             }
+            if has_val:
+                new_splits['val'] = (X_val_final, y_val, self.splits['val'][2])
+            self.splits = new_splits
             
             self.logger.info(f"Preprocessing completed. Final feature count: {len(self.feature_names)}")
             return True
@@ -556,6 +584,130 @@ class RadiomicsClassifier:
         self.logger.info(f"Results saved to: {self.output_dir}")
         self.logger.info(f"{'='*50}")
         
+        return True
+
+    def run_outer_cv(self, k_folds: int = 5, val_ratio: float = 0.2):
+        """Run outer Stratified K-Fold evaluation.
+
+        - Outer CV defines distinct test sets (approximately 20% each when k_folds=5)
+        - If val_ratio > 0, split training pool into Train/Val; otherwise Train uses entire pool
+        - All preprocessing, feature selection, and tuning are fit ONLY on the training data
+        - Evaluate on Test (and Val if present); save artifacts per-fold under subdirectories
+        """
+        self.logger.info("Starting Outer Stratified K-Fold evaluation")
+
+        # Stage 1: Load data once
+        if not self.load_data():
+            self.logger.error("Failed to load data for outer CV")
+            return False
+
+        # Prepare outer folds
+        skf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=self.random_state)
+
+        # Aggregate results across folds
+        outer_results = []
+
+        for fold_idx, (train_pool_idx, test_idx) in enumerate(skf.split(self.X, self.y), start=1):
+            self.logger.info(f"\n{'='*60}\nStarting OUTER FOLD {fold_idx}/{k_folds}\n{'='*60}")
+
+            # Reset feature names to original for this fold
+            if hasattr(self, '_original_feature_names'):
+                self.feature_names = list(self._original_feature_names)
+
+            # Build raw splits for this fold (no preprocessing yet)
+            X_train_pool = self.X[train_pool_idx]
+            y_train_pool = self.y[train_pool_idx]
+            ids_train_pool = self.subject_ids[train_pool_idx]
+
+            X_test_raw = self.X[test_idx]
+            y_test_raw = self.y[test_idx]
+            ids_test_raw = self.subject_ids[test_idx]
+
+            if val_ratio and val_ratio > 0:
+                # Train/Val split within training pool
+                X_train_raw, X_val_raw, y_train_raw, y_val_raw, ids_train_raw, ids_val_raw = train_test_split(
+                    X_train_pool,
+                    y_train_pool,
+                    ids_train_pool,
+                    test_size=val_ratio,
+                    random_state=self.random_state,
+                    stratify=y_train_pool
+                )
+                # Set the raw (pre-preprocessing) splits on self
+                self.splits = {
+                    'train': (X_train_raw, y_train_raw, ids_train_raw),
+                    'val': (X_val_raw, y_val_raw, ids_val_raw),
+                    'test': (X_test_raw, y_test_raw, ids_test_raw)
+                }
+            else:
+                self.splits = {
+                    'train': (X_train_pool, y_train_pool, ids_train_pool),
+                    'test': (X_test_raw, y_test_raw, ids_test_raw)
+                }
+
+            # Use a fold-specific output directory
+            original_output_dir = self.output_dir
+            fold_output_dir = original_output_dir / f"outercv_fold_{fold_idx}"
+            self.output_dir = fold_output_dir
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            # Reconfigure logging to fold directory
+            self.setup_logging()
+
+            # Proceed with the usual stages but starting from preprocessing
+            stages = [
+                ("Preprocessing", self.preprocess_data),
+                ("Model Training", self.train_model),
+                ("Model Evaluation", self.evaluate_model),
+                ("Model Interpretation", self.interpret_model),
+                ("Saving Artifacts", self.save_artifacts)
+            ]
+
+            fold_success = True
+            for stage_name, stage_func in stages:
+                self.logger.info(f"\n{'='*50}")
+                self.logger.info(f"Starting {stage_name}")
+                self.logger.info(f"{'='*50}")
+                if not stage_func():
+                    self.logger.error(f"Fold {fold_idx} failed at {stage_name}")
+                    fold_success = False
+                    break
+
+            # Collect key metrics for summary
+            if fold_success and self.results and 'test' in self.results:
+                test_metrics = self.results['test']
+                outer_results.append({
+                    'fold': fold_idx,
+                    'accuracy': float(test_metrics.get('accuracy', 0.0)),
+                    'precision': float(test_metrics.get('precision', 0.0)),
+                    'recall': float(test_metrics.get('recall', 0.0)),
+                    'f1': float(test_metrics.get('f1', 0.0)),
+                    'auc': float(test_metrics.get('auc', 0.0)),
+                    'mcc': float(test_metrics.get('mcc', 0.0))
+                })
+
+            # Restore original output directory before next fold
+            self.output_dir = original_output_dir
+            self.setup_logging()
+
+        # Save aggregated summary at root output directory
+        try:
+            import json
+            from statistics import mean
+            summary = {
+                'k_folds': k_folds,
+                'val_ratio': val_ratio,
+                'random_state': self.random_state,
+                'folds': outer_results,
+            }
+            if outer_results:
+                for metric in ['accuracy', 'precision', 'recall', 'f1', 'auc', 'mcc']:
+                    summary[f'{metric}_mean'] = float(mean([f[metric] for f in outer_results]))
+            (self.output_dir / 'outer_cv_summary.json').write_text(json.dumps(summary, indent=2))
+            self.logger.info(f"Outer CV summary saved to {self.output_dir / 'outer_cv_summary.json'}")
+        except Exception as e:
+            self.logger.error(f"Failed to write outer CV summary: {e}")
+
+        self.logger.info("Outer Stratified K-Fold evaluation complete")
         return True
 
 def main():

@@ -67,7 +67,7 @@ class VisionTransformer3D(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches + 1, embed_dim))
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         
-        # Dropout
+        # Embedding dropout
         self.dropout = nn.Dropout(drop_rate)
         
         # Transformer blocks

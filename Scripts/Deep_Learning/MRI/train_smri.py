@@ -18,6 +18,8 @@ import json
 from pathlib import Path
 import shutil
 from sklearn.model_selection import train_test_split
+import contextlib
+import math
 
 from dataset import SMRIDataset
 from models_smri import Simple3DCNN, get_3d_model
@@ -26,6 +28,31 @@ from evaluate_model import evaluate_model, calculate_metrics, create_evaluation_
 # Set style for plots
 plt.style.use('default')
 sns.set_palette("husl")
+
+def compute_summary_stats(values):
+    """Compute mean, std, 95% CI, min, max, range for a list of numeric values."""
+    arr = np.array(values, dtype=float)
+    n = len(arr)
+    if n == 0:
+        return {'mean': 0.0, 'std': 0.0, 'ci95': 0.0, 'ci95_lower': 0.0, 'ci95_upper': 0.0, 'min': 0.0, 'max': 0.0, 'range': 0.0, 'n': 0}
+    mean = float(np.mean(arr))
+    std = float(np.std(arr, ddof=1)) if n > 1 else 0.0
+    se = std / np.sqrt(n) if n > 1 else 0.0
+    ci = 1.96 * se if n > 1 else 0.0
+    min_v = float(np.min(arr))
+    max_v = float(np.max(arr))
+    rng = max_v - min_v
+    return {
+        'mean': mean,
+        'std': std,
+        'ci95': ci,
+        'ci95_lower': mean - ci,
+        'ci95_upper': mean + ci,
+        'min': min_v,
+        'max': max_v,
+        'range': rng,
+        'n': int(n)
+    }
 
 def filter_labels(csv_path, labels):
     """Filter the CSV file to only include specified labels."""
@@ -566,6 +593,152 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_
     
     return summary
 
+def create_test_summary_plots(fold_test_metrics, output_dir="./deep_learning_plots", model_name="Model", classification_description=None):
+    """Create comprehensive test summary plots aggregated across folds and save JSON stats.
+
+    fold_test_metrics: list of dicts with keys {'fold': int, 'metrics': dict}
+    The metrics dict should contain: 'accuracy', 'precision', 'recall', 'f1_score', 'auc', 'mcc', 'confusion_matrix'
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    if not fold_test_metrics:
+        print(f"No test metrics provided for {model_name}; skipping test summary plots.")
+        return None
+
+    folds = [d['fold'] for d in fold_test_metrics]
+    accs = [d['metrics']['accuracy'] for d in fold_test_metrics]
+    precs = [d['metrics']['precision'] for d in fold_test_metrics]
+    recalls = [d['metrics']['recall'] for d in fold_test_metrics]
+    f1s = [d['metrics']['f1_score'] for d in fold_test_metrics]
+    aucs = [d['metrics']['auc'] for d in fold_test_metrics]
+    mccs = [d['metrics']['mcc'] for d in fold_test_metrics]
+    thresholds = [d['threshold_used'] for d in fold_test_metrics if d.get('threshold_used') is not None]
+
+    # Average confusion matrix
+    cms = [np.array(d['metrics']['confusion_matrix']) for d in fold_test_metrics if 'confusion_matrix' in d['metrics'] and d['metrics']['confusion_matrix'] is not None]
+    avg_cm = None
+    if cms:
+        try:
+            avg_cm = np.mean(np.stack(cms, axis=0), axis=0)
+        except Exception:
+            # Fallback: sum then divide
+            avg_cm = sum(cms) / len(cms)
+
+    # Create plots (2x3 grid)
+    fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+    title_suffix = f" - {classification_description} Classification" if classification_description else ""
+    fig.suptitle(f'Test Performance Summary - {model_name}{title_suffix}', fontsize=16, fontweight='bold')
+
+    # 1. Test AUC by Fold
+    ax1 = axes[0, 0]
+    bars = ax1.bar(folds, aucs, alpha=0.8, color='skyblue', edgecolor='black')
+    for bar, v in zip(bars, aucs):
+        ax1.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01, f'{v:.3f}', ha='center', va='bottom')
+    ax1.set_xlabel('Fold')
+    ax1.set_ylabel('AUC')
+    ax1.set_ylim(0, 1)
+    ax1.set_title('Test AUC by Fold')
+    ax1.grid(True, alpha=0.3)
+
+    # 2. Test Accuracy by Fold
+    ax2 = axes[0, 1]
+    bars = ax2.bar(folds, accs, alpha=0.8, color='lightcoral', edgecolor='black')
+    for bar, v in zip(bars, accs):
+        ax2.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01, f'{v:.3f}', ha='center', va='bottom')
+    ax2.set_xlabel('Fold')
+    ax2.set_ylabel('Accuracy')
+    ax2.set_ylim(0, 1)
+    ax2.set_title('Test Accuracy by Fold')
+    ax2.grid(True, alpha=0.3)
+
+    # 3. Test F1-Score by Fold
+    ax3 = axes[0, 2]
+    bars = ax3.bar(folds, f1s, alpha=0.8, color='orange', edgecolor='black')
+    for bar, v in zip(bars, f1s):
+        ax3.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01, f'{v:.3f}', ha='center', va='bottom')
+    ax3.set_xlabel('Fold')
+    ax3.set_ylabel('F1-Score')
+    ax3.set_ylim(0, 1)
+    ax3.set_title('Test F1-Score by Fold')
+    ax3.grid(True, alpha=0.3)
+
+    # 4. Test Precision and Recall by Fold (grouped)
+    ax4 = axes[1, 0]
+    x = np.arange(len(folds))
+    width = 0.35
+    ax4.bar(x - width/2, precs, width, label='Precision', alpha=0.8, color='lightgreen', edgecolor='black')
+    ax4.bar(x + width/2, recalls, width, label='Recall', alpha=0.8, color='lightblue', edgecolor='black')
+    ax4.set_xticks(x)
+    ax4.set_xticklabels(folds)
+    ax4.set_xlabel('Fold')
+    ax4.set_ylabel('Score')
+    ax4.set_ylim(0, 1)
+    ax4.set_title('Test Precision and Recall by Fold')
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+
+    # 5. Average Confusion Matrix
+    ax5 = axes[1, 1]
+    if avg_cm is not None:
+        sns.heatmap(avg_cm, annot=True, fmt='.1f', cmap='Blues', xticklabels=['CN', 'AD'], yticklabels=['CN', 'AD'], ax=ax5)
+        ax5.set_title('Average Confusion Matrix (Test)')
+        ax5.set_xlabel('Predicted')
+        ax5.set_ylabel('Actual')
+    else:
+        ax5.text(0.5, 0.5, 'No confusion matrix data', ha='center', va='center', transform=ax5.transAxes)
+        ax5.set_title('Confusion Matrix (No Data)')
+
+    # 6. Mean ± 95% CI for all metrics
+    ax6 = axes[1, 2]
+    metric_names = ['Accuracy', 'Precision', 'Recall', 'F1', 'AUC', 'MCC']
+    metric_values = [accs, precs, recalls, f1s, aucs, mccs]
+    stats = [compute_summary_stats(vals) for vals in metric_values]
+    means = [s['mean'] for s in stats]
+    cis = [s['ci95'] for s in stats]
+    bars = ax6.bar(metric_names, means, yerr=cis, capsize=4, alpha=0.8, color='mediumpurple', edgecolor='black')
+    ax6.set_ylim(0, 1)
+    ax6.set_ylabel('Score')
+    ax6.set_title('Test Metrics: Mean ± 95% CI')
+    for bar, mean in zip(bars, means):
+        ax6.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01, f'{mean:.3f}', ha='center', va='bottom')
+    ax6.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(output_path / f'{model_name}_test_analysis.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # Build summary JSON
+    summary = {
+        'model_name': model_name,
+        'total_folds': len(folds),
+        'metrics': {
+            'accuracy': compute_summary_stats(accs),
+            'precision': compute_summary_stats(precs),
+            'recall': compute_summary_stats(recalls),
+            'f1_score': compute_summary_stats(f1s),
+            'auc': compute_summary_stats(aucs),
+            'mcc': compute_summary_stats(mccs)
+        },
+        'average_confusion_matrix': (avg_cm.tolist() if avg_cm is not None else None),
+        'parameters': {
+            'threshold': (compute_summary_stats(thresholds) if thresholds else None)
+        }
+    }
+
+    with open(output_path / f'{model_name}_test_summary.json', 'w') as f:
+        json.dump(summary, f, indent=2)
+
+    # Print concise summary
+    print("\n" + "="*60)
+    print(f"DEEP LEARNING TEST SUMMARY - {model_name}")
+    print("="*60)
+    for name, stat in summary['metrics'].items():
+        print(f"{name.capitalize():<10}: {stat['mean']:.4f}  (95% CI ± {stat['ci95']:.4f}; range {stat['min']:.4f}-{stat['max']:.4f})")
+    print("="*60)
+
+    return summary
+
 def create_threshold_optimization_plot(threshold_results, output_dir, model_name="Model", fold_num=1):
     """
     Create plots showing threshold optimization results.
@@ -656,21 +829,31 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     class_weights = class_weights / class_weights.sum()
     class_weights = torch.FloatTensor(class_weights).to(device)
     
-    class FocalLoss(nn.Module):
-        def __init__(self, alpha=0.25, gamma=2):
-            super().__init__()
-            self.alpha = alpha
-            self.gamma = gamma
+    # Check if this is a Vision Transformer model
+    is_vit_model = any(name.lower() in str(type(model)).lower() for name in 
+                       ['visiontransformer3d', 'swinunetrclassifier', 'fullswinunetrclassifier'])
+    
+    # Use appropriate loss function based on model type
+    if is_vit_model and args.label_smoothing > 0:
+        # Use CrossEntropyLoss with label smoothing for ViT models
+        criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+        print(f"[INFO] Using CrossEntropyLoss with label smoothing {args.label_smoothing} for ViT model")
+    else:
+        # Use FocalLoss for CNN models (original behavior)
+        class FocalLoss(nn.Module):
+            def __init__(self, alpha=0.25, gamma=2):
+                super().__init__()
+                self.alpha = alpha
+                self.gamma = gamma
+            
+            def forward(self, inputs, targets):
+                ce_loss = nn.CrossEntropyLoss(reduction='none')(inputs, targets)
+                pt = torch.exp(-ce_loss)
+                focal_loss = self.alpha * (1-pt)**self.gamma * ce_loss
+                return focal_loss.mean()
         
-        def forward(self, inputs, targets):
-            ce_loss = nn.CrossEntropyLoss(reduction='none')(inputs, targets)
-            pt = torch.exp(-ce_loss)
-            focal_loss = self.alpha * (1-pt)**self.gamma * ce_loss
-            return focal_loss.mean()
-
-    criterion = FocalLoss(alpha=0.25, gamma=2)
-    # Use AdamW optimizer; constant LR for Simple3DCNN by default
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+        criterion = FocalLoss(alpha=0.25, gamma=2)
+        print(f"[INFO] Using FocalLoss for CNN model")
 
     model.to(device)
     best_val_auc = 0.0
@@ -690,27 +873,113 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     # Store training history
     training_history = []
     
-    # Initialize mixed precision training (no scheduler by default)
+    # Initialize mixed precision training with compatibility across torch versions
+    autocast_context = None
     if device.startswith('cuda'):
-        scaler = torch.amp.GradScaler()
+        try:
+            scaler = torch.amp.GradScaler()
+            autocast_context = lambda: torch.amp.autocast(device_type='cuda')
+        except AttributeError:
+            scaler = torch.cuda.amp.GradScaler()
+            autocast_context = lambda: torch.cuda.amp.autocast()
     else:
         scaler = None
-    # Plateau LR scheduler on validation AUC
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode='max',
-        factor=0.5,
-        patience=5,
-        threshold=1e-4,
-        min_lr=1e-5,
-        verbose=False,
-    )
+        autocast_context = contextlib.nullcontext
+
+    # Warm-up forward pass to initialize any dynamic layers (e.g., Simple3DCNN classifier)
+    # Run in eval mode to avoid affecting BatchNorm/Dropout statistics
+    # This ensures optimizer/EMA capture the correct parameter shapes
+    model.eval()
+    with torch.no_grad():
+        try:
+            sample_smri, _ = next(iter(train_loader))
+            sample_smri = sample_smri.to(device)
+            _ = model(sample_smri)
+        except StopIteration:
+            pass
+        except Exception:
+            # If warm-up fails for any reason, continue; model may not require it
+            pass
+    # Ensure we start epoch loop in train mode
+    model.train()
+
+    # Configure optimizer and scheduler based on model type
+    if is_vit_model:
+        # Vision Transformer optimizations
+        if args.vit_optimizer.lower() == "adamw":
+            optimizer = torch.optim.AdamW(
+                model.parameters(), 
+                lr=args.learning_rate, 
+                weight_decay=args.vit_weight_decay
+            )
+            print(f"[INFO] Using AdamW optimizer with weight decay {args.vit_weight_decay} for ViT model")
+        else:
+            optimizer = torch.optim.Adam(
+                model.parameters(), 
+                lr=args.learning_rate, 
+                weight_decay=args.vit_weight_decay
+            )
+            print(f"[INFO] Using Adam optimizer with weight decay {args.vit_weight_decay} for ViT model")
+        
+        # Cosine schedule with warmup for ViT models
+        if args.vit_use_cosine_schedule:
+            total_steps = len(train_loader) * epochs
+            warmup_steps = len(train_loader) * args.vit_warmup_epochs
+            
+            def lr_lambda(step):
+                if step < warmup_steps:
+                    return float(step) / float(max(1, warmup_steps))
+                return max(0.0, 0.5 * (1.0 + math.cos(math.pi * (step - warmup_steps) / float(max(1, total_steps - warmup_steps)))))
+            
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+            print(f"[INFO] Using cosine schedule with {args.vit_warmup_epochs} epoch warmup for ViT model")
+        else:
+            # Fallback to plateau scheduler for ViT
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='max', factor=args.lr_scheduler_factor,
+                patience=args.lr_scheduler_patience, threshold=1e-4, min_lr=1e-5
+            )
+            print(f"[INFO] Using plateau scheduler for ViT model")
+    else:
+        # Original CNN behavior
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+        print(f"[INFO] Using AdamW optimizer with weight decay {args.weight_decay} for CNN model")
+        
+        # Plateau LR scheduler on validation AUC for CNN models
+        try:
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode='max',
+                factor=args.lr_scheduler_factor,
+                patience=args.lr_scheduler_patience,
+                threshold=1e-4,
+                min_lr=1e-5,
+                verbose=False,
+            )
+        except TypeError:
+            try:
+                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer,
+                    mode='max',
+                    factor=args.lr_scheduler_factor,
+                    patience=args.lr_scheduler_patience,
+                    threshold=1e-4,
+                    min_lr=1e-5,
+                )
+            except TypeError:
+                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer,
+                    mode='max',
+                    factor=args.lr_scheduler_factor,
+                    patience=args.lr_scheduler_patience,
+                )
+    
     current_eval_weights = 'raw'  # track which weights are used for eval
 
-    # --- EMA setup ---
-    use_ema = True
+    # --- EMA setup (disabled to match old behavior) ---
+    use_ema = False
     ema_decay = 0.999
-    ema_params = [p.detach().clone() for p in model.parameters()]
+    ema_params = [p.detach().clone() for p in model.parameters()] if use_ema else []
 
     for epoch in range(1, epochs + 1):
         # --- Training phase ---
@@ -730,14 +999,17 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             
             # Use mixed precision training if available
             if scaler is not None:
-                with torch.amp.autocast(device_type='cuda'):
+                with autocast_context():
                     logits = model(smri)              # [B, 2]
                     loss = criterion(logits, labels)
                 
                 scaler.scale(loss).backward()
-                # unscale and clip
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                
+                # Apply gradient clipping for ViT models
+                if is_vit_model and args.grad_clip_max_norm > 0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_max_norm)
+                
                 scaler.step(optimizer)
                 scaler.update()
             else:
@@ -746,18 +1018,44 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 loss = criterion(logits, labels)
                 
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                
+                # Apply gradient clipping for ViT models
+                if is_vit_model and args.grad_clip_max_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_max_norm)
+                
                 optimizer.step()
 
-            # Update EMA after optimizer step
-            with torch.no_grad():
-                for p, e in zip(model.parameters(), ema_params):
-                    e.mul_(ema_decay).add_(p.data, alpha=1.0 - ema_decay)
+            # Update EMA after optimizer step (disabled)
+            if use_ema:
+                with torch.no_grad():
+                    params_list = list(model.parameters())
+                    need_reset_ema = False
+                    if len(ema_params) != len(params_list):
+                        need_reset_ema = True
+                    else:
+                        for p, e in zip(params_list, ema_params):
+                            if e.shape != p.data.shape:
+                                need_reset_ema = True
+                                break
+                    if need_reset_ema:
+                        ema_params = [p.detach().clone() for p in params_list]
+                    else:
+                        for p, e in zip(params_list, ema_params):
+                            e.mul_(ema_decay).add_(p.data, alpha=1.0 - ema_decay)
 
             running_loss += loss.item() * smri.size(0)
             preds = torch.argmax(logits, dim=1)
             running_corrects += (preds == labels).sum().item()
             total_samples += smri.size(0)
+            
+            # Memory optimization: clear cache periodically
+            if args.memory_efficient and total_samples % (args.batch_size * 10) == 0:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+        
+        # Clear memory after each epoch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         epoch_loss = running_loss / total_samples
         epoch_acc  = running_corrects / total_samples
@@ -788,8 +1086,19 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         val_labels = val_results['labels']
         optimal_threshold = val_results['optimal_threshold']
         
-        # Calculate additional metrics using optimal threshold
-        optimal_preds = (probs >= optimal_threshold).astype(int)
+        # Debug: print shapes and types
+        print(f"[DEBUG] probs shape: {probs.shape}, type: {type(probs)}")
+        print(f"[DEBUG] val_labels shape: {val_labels.shape}, type: {type(val_labels)}")
+        print(f"[DEBUG] optimal_threshold: {optimal_threshold}")
+        
+        # Calculate additional metrics using optimal threshold (binary) or argmax (multiclass)
+        if optimal_threshold is not None and probs.shape[1] == 2:
+            # Binary classification with threshold optimization
+            optimal_preds = (probs >= optimal_threshold).astype(int)
+        else:
+            # Multiclass or no threshold: use argmax
+            optimal_preds = np.argmax(probs, axis=1)
+        
         precision, recall, f1, support = precision_recall_fscore_support(val_labels, optimal_preds, average=None, zero_division=0)
         cm = confusion_matrix(val_labels, optimal_preds)
         
@@ -807,8 +1116,15 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             }
 
         # Step plateau scheduler on val AUC
-        scheduler.step(val_auc)
-        new_lr = optimizer.param_groups[0]['lr']
+        # Step scheduler based on model type
+        if is_vit_model and args.vit_use_cosine_schedule:
+            # Step-based scheduler for ViT with cosine schedule
+            scheduler.step()
+            new_lr = optimizer.param_groups[0]['lr']
+        else:
+            # Plateau scheduler for CNN models or ViT with plateau
+            scheduler.step(val_auc)
+            new_lr = optimizer.param_groups[0]['lr']
         
         # Store epoch data
         val_mcc = matthews_corrcoef(val_labels, optimal_preds)
@@ -818,7 +1134,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             'train_acc': float(epoch_acc),
             'val_auc': float(val_auc),
             'val_acc': float(val_acc),
-            'optimal_threshold': float(optimal_threshold),
+            'optimal_threshold': float(optimal_threshold) if optimal_threshold is not None else None,
             'accuracy_improvement': float(val_results.get('accuracy_improvement', 0.0)),
             'lr': float(new_lr),
             'precision_macro': float(precision_macro),
@@ -920,16 +1236,8 @@ def optimize_threshold(y_probs, y_true, thresholds=None):
 
 def evaluate_model_with_threshold_optimization(model, val_loader, device, optimize_threshold_flag=True, label_mapping=None):
     """
-    Evaluate model and optionally optimize threshold for accuracy.
-    
-    Args:
-        model: trained model
-        val_loader: validation data loader
-        device: device to run inference on
-        optimize_threshold_flag: whether to optimize threshold
-    
-    Returns:
-        dict with evaluation results including optimal threshold
+    Evaluate model on validation set with optional threshold optimization.
+    For multiclass, threshold optimization is disabled as it's not applicable.
     """
     model.eval()
     val_logits = []
@@ -944,49 +1252,52 @@ def evaluate_model_with_threshold_optimization(model, val_loader, device, optimi
                 labels = torch.tensor([label_mapping[label.item()] for label in labels], device=device)
             
             logits = model(smri)
-            val_logits.append(logits.cpu().numpy())
-            val_labels.append(labels.cpu().numpy())
+            val_logits.append(logits.cpu())
+            val_labels.append(labels.cpu())
     
-    val_logits = np.concatenate(val_logits, axis=0)
-    val_labels = np.concatenate(val_labels, axis=0)
+    val_logits = torch.cat(val_logits, dim=0).numpy()
+    val_labels = torch.cat(val_labels, dim=0).numpy()
     
-    # Convert logits to probabilities
+    # Apply softmax to get probabilities
     probs_softmax = nn.Softmax(dim=1)(torch.from_numpy(val_logits)).numpy()
     
     # Handle both binary and multiclass
     if probs_softmax.shape[1] == 2:
         # Binary classification: use positive class probability
         probs = probs_softmax[:, 1]
+        is_binary = True
     else:
-        # Multiclass: use max probability for threshold optimization
-        probs = np.max(probs_softmax, axis=1)
+        # Multiclass: return full probability matrix for proper evaluation
+        probs = probs_softmax
+        is_binary = False
     
-    # Calculate metrics with default threshold (0.5)
-    if probs_softmax.shape[1] == 2:
+    # Calculate metrics with default threshold (0.5 for binary, argmax for multiclass)
+    if is_binary:
         # Binary classification
         default_preds = (probs >= 0.5).astype(int)
         default_acc = accuracy_score(val_labels, default_preds)
         default_auc = roc_auc_score(val_labels, probs)
     else:
         # Multiclass: use argmax for predictions
-        default_preds = np.argmax(probs_softmax, axis=1)
+        default_preds = np.argmax(probs, axis=1)
         default_acc = accuracy_score(val_labels, default_preds)
         # For multiclass, calculate AUC using one-vs-rest
-        default_auc = roc_auc_score(val_labels, probs_softmax, multi_class='ovr', average='macro')
+        default_auc = roc_auc_score(val_labels, probs, multi_class='ovr', average='macro')
     
     results = {
         'probabilities': probs,
         'labels': val_labels,
-        'default_threshold': 0.5,
+        'default_threshold': 0.5 if is_binary else None,
         'default_accuracy': default_acc,
         'default_auc': default_auc,
-        'optimal_threshold': 0.5,
+        'optimal_threshold': 0.5 if is_binary else None,
         'optimal_accuracy': default_acc,
-        'threshold_optimized': False
+        'threshold_optimized': False,
+        'is_binary': is_binary
     }
     
-    if optimize_threshold_flag:
-        # Optimize threshold for accuracy
+    if optimize_threshold_flag and is_binary:
+        # Only optimize threshold for binary classification
         best_thresh, best_acc, threshold_results = optimize_threshold(probs, val_labels)
         
         # Calculate metrics with optimal threshold
@@ -1008,6 +1319,20 @@ def evaluate_model_with_threshold_optimization(model, val_loader, device, optimi
         
         print(f"Threshold optimization: {default_acc:.4f} -> {best_acc:.4f} (improvement: {best_acc - default_acc:.4f})")
         print(f"Optimal threshold: {best_thresh:.3f} (default: 0.5)")
+    elif not is_binary:
+        # For multiclass, calculate per-class metrics without threshold optimization
+        precision, recall, f1, support = precision_recall_fscore_support(val_labels, default_preds, average='macro', zero_division=0)
+        mcc = matthews_corrcoef(val_labels, default_preds)
+        
+        results.update({
+            'optimal_precision': precision,
+            'optimal_recall': recall,
+            'optimal_f1': f1,
+            'optimal_mcc': mcc,
+            'threshold_optimized': False
+        })
+        
+        print(f"Multiclass evaluation (no threshold optimization): Accuracy = {default_acc:.4f}, AUC = {default_auc:.4f}")
     
     return results
 
@@ -1109,6 +1434,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
 
         fold_results = []
         folds_data = []
+        fold_test_metrics = []
 
         for fold_idx, (train_pool_idx, test_idx) in enumerate(outer_splits, start=1):
             print(f"\nFOLD {fold_idx}/{k_folds} [{model_name}]")
@@ -1145,10 +1471,6 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             val_dataset = SMRIDataset(csv_path=temp_val_csv, data_root=args.data_root)
             test_dataset = SMRIDataset(csv_path=temp_test_csv, data_root=args.data_root)
 
-            train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-            val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
-            test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
-            
             # Initialize model for this fold
             unique_labels = sorted(train_dataset.df['label'].unique())
             num_classes = len(unique_labels)
@@ -1156,7 +1478,49 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             label_mapping = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
             print(f"[INFO] Label mapping: {label_mapping}")
             
-            model = get_3d_model(model_name, num_classes=num_classes, in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained, dropout_p=0.25)
+            if model_name == "VisionTransformer3D":
+                model = get_3d_model(
+                    model_name,
+                    num_classes=num_classes,
+                    in_channels=1,
+                    base_channels=args.base_channels,
+                    use_pretrained=args.use_pretrained,
+                    dropout_p=0.0,
+                    vit_drop_rate=args.vit_drop_rate,
+                    vit_attn_drop_rate=args.vit_attn_drop_rate,
+                    vit_drop_path_rate=args.vit_drop_path_rate,
+                )
+            else:
+                model = get_3d_model(
+                    model_name,
+                    num_classes=num_classes,
+                    in_channels=1,
+                    base_channels=args.base_channels,
+                    use_pretrained=args.use_pretrained,
+                    dropout_p=(args.cnn_drop_rate if model_name == "Simple3DCNN" else 0.0),
+                )
+            
+            # Move model to device immediately after creation
+            model = model.to(args.device)
+            print(f"[INFO] Model moved to device: {args.device}")
+            
+            # Verify model is on correct device
+            model_device = next(model.parameters()).device
+            if str(model_device) != args.device:
+                print(f"[WARNING] Model device mismatch! Expected: {args.device}, Got: {model_device}")
+                print(f"[INFO] Moving model to correct device...")
+                model = model.to(args.device)
+                print(f"[INFO] Model now on device: {next(model.parameters()).device}")
+            
+            # Create memory-optimized data loaders
+            train_loader, val_loader, test_loader, working_batch_size = create_data_loaders_with_memory_optimization(
+                train_dataset, val_dataset, test_dataset, args, model
+            )
+            
+            print(f"[MEMORY] Using batch size: {working_batch_size}")
+            
+            # Print memory status before training
+            print_memory_status(args.device, "[MEMORY] Before training")
             
             # Train
             (
@@ -1185,8 +1549,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 label_mapping=label_mapping,
             )
 
-            # Threshold optimization plot
-            if best_threshold_results:
+            # Threshold optimization plot (only for binary classification)
+            if best_threshold_results and num_classes == 2:
                 threshold_plot_dir = os.path.join(model_dir, "threshold_optimization_plots")
                 threshold_plot_info = create_threshold_optimization_plot(
                     best_threshold_results, threshold_plot_dir, model_name, fold_idx
@@ -1200,16 +1564,72 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             test_threshold = None
             if num_classes == 2 and best_threshold is not None:
                 test_threshold = float(best_threshold)
-            predictions, probabilities, labels = evaluate_model(
-                model, test_loader, args.device, label_mapping=label_mapping, threshold=test_threshold
-            )
+            
+            # For multiclass, use temperature scaling if available
+            if num_classes > 2:
+                # Use temperature scaling for multiclass calibration
+                eval_result = evaluate_model(
+                    model, test_loader, args.device, label_mapping=label_mapping, 
+                    threshold=test_threshold, use_temperature_scaling=True, val_loader=val_loader
+                )
+                
+                # Handle different return values
+                if len(eval_result) == 4:
+                    predictions, probabilities, labels, temperature_info = eval_result
+                else:
+                    predictions, probabilities, labels = eval_result
+                    temperature_info = None
+                
+                # Log temperature scaling info
+                if temperature_info and temperature_info.get('calibrated', False):
+                    print(f"  Temperature scaling applied: T = {temperature_info['temperature']:.3f}")
+                    # Save temperature info
+                    temp_info_path = os.path.join(model_dir, f"temperature_info_fold_{fold_idx}.json")
+                    with open(temp_info_path, 'w') as f:
+                        json.dump(temperature_info, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+            else:
+                # Binary classification: no temperature scaling
+                eval_result = evaluate_model(
+                    model, test_loader, args.device, label_mapping=label_mapping, threshold=test_threshold
+                )
+                predictions, probabilities, labels = eval_result
+                temperature_info = None
+            
             metrics = calculate_metrics(predictions, probabilities, labels)
             test_eval_dir = os.path.join(model_dir, f"test_evaluation_plots_fold_{fold_idx}")
             create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
             test_metrics_path = os.path.join(model_dir, f"test_metrics_fold_{fold_idx}.json")
-            with open(test_metrics_path, "w") as f:
+            with open(test_metrics_path, 'w') as f:
                 json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
             print(f"Fold {fold_idx} test evaluation saved to: {test_eval_dir}")
+
+            # Print memory status after evaluation
+            print_memory_status(args.device, "[MEMORY] After evaluation")
+            
+            # Store test metrics for aggregation
+            safe_metrics = {
+                'accuracy': float(metrics['accuracy']),
+                'precision': float(metrics['precision']),
+                'recall': float(metrics['recall']),
+                'f1_score': float(metrics['f1_score']),
+                'auc': float(metrics['auc']),
+                'mcc': float(metrics['mcc']),
+                'confusion_matrix': metrics['confusion_matrix'].tolist() if hasattr(metrics.get('confusion_matrix', None), 'tolist') else metrics.get('confusion_matrix')
+            }
+            
+            # Add temperature scaling info if available
+            if temperature_info and temperature_info.get('calibrated', False):
+                safe_metrics['temperature_scaling'] = {
+                    'temperature': temperature_info['temperature'],
+                    'calibrated': True
+                }
+            
+            fold_test_metrics.append({
+                'fold': fold_idx, 
+                'metrics': safe_metrics, 
+                'threshold_used': float(test_threshold) if test_threshold is not None else None,
+                'temperature_scaling': temperature_info.get('temperature', 1.0) if temperature_info else None
+            })
 
             # Collect results
             fold_results.append({
@@ -1223,7 +1643,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 'best_f1_macro': float(best_f1_macro),
                 'best_class_metrics': best_class_metrics,
                 'best_confusion_matrix': best_confusion_matrix.tolist() if best_confusion_matrix is not None else None,
-                'best_threshold': float(best_threshold),
+                'best_threshold': float(best_threshold) if best_threshold is not None else None,
                 'threshold_optimization': threshold_plot_info,
                 'test_metrics_path': test_metrics_path,
             })
@@ -1248,15 +1668,33 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         avg_recall_macro = float(np.mean([r['best_recall_macro'] for r in fold_results]))
         avg_f1_macro = float(np.mean([r['best_f1_macro'] for r in fold_results]))
         avg_mcc = float(np.mean([r.get('best_mcc', 0.0) for r in fold_results]))
-        avg_threshold = float(np.mean([r.get('best_threshold', 0.5) for r in fold_results]))
-        avg_accuracy_improvement = float(np.mean([r.get('threshold_optimization', {}).get('improvement', 0.0) for r in fold_results]))
+        
+        # Handle threshold aggregation (only for binary classification)
+        if num_classes == 2:
+            avg_threshold = float(np.mean([r.get('best_threshold', 0.5) for r in fold_results if r.get('best_threshold') is not None]))
+            avg_accuracy_improvement = float(np.mean([r.get('threshold_optimization', {}).get('improvement', 0.0) for r in fold_results]))
+        else:
+            avg_threshold = None
+            avg_accuracy_improvement = None
         
         evaluation_dir = os.path.join(model_dir, "evaluation_plots")
         create_training_plots(folds_data, evaluation_dir, model_name)
+        # Create aggregated test plots and summary
+        classification_description = get_label_description(args.labels)
+        test_summary = create_test_summary_plots(fold_test_metrics, evaluation_dir, model_name, classification_description=classification_description)
         folds_data_filename = f"{model_name}_folds_data.json"
         folds_data_path = os.path.join(model_dir, folds_data_filename)
         with open(folds_data_path, "w") as f:
             json.dump(folds_data, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+        # Compute validation stats across folds for this model
+        val_stats = {
+            'auc': compute_summary_stats([r['best_val_auc'] for r in fold_results]),
+            'accuracy': compute_summary_stats([r['best_val_acc'] for r in fold_results]),
+            'precision': compute_summary_stats([r['best_precision_macro'] for r in fold_results]),
+            'recall': compute_summary_stats([r['best_recall_macro'] for r in fold_results]),
+            'f1': compute_summary_stats([r['best_f1_macro'] for r in fold_results])
+        }
+
         run_summary = {
             'timestamp': timestamp,
             'run_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1272,6 +1710,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'average_mcc': avg_mcc,
             'average_threshold': avg_threshold,
             'average_accuracy_improvement': avg_accuracy_improvement,
+            'validation_stats': val_stats,
+            'test_summary': test_summary,
             'total_folds': len(fold_results),
             'training_params': {
                 'epochs': args.epochs,
@@ -1292,6 +1732,13 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         summary_path = os.path.join(model_dir, summary_filename)
         with open(summary_path, "w") as f:
             json.dump(run_summary, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+        
+        # Clean up memory before next model
+        print(f"[MEMORY] Cleaning up memory after {model_name}...")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        print_memory_status(args.device, "[MEMORY] After cleanup")
+        
         all_model_results.append({
             'model_name': model_name,
             'avg_val_auc': float(avg_val_auc),
@@ -1300,6 +1747,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'avg_recall_macro': float(avg_recall_macro),
             'avg_f1_macro': float(avg_f1_macro),
             'avg_mcc': float(avg_mcc),
+            'val_stats': val_stats,
+            'test_stats': (test_summary['metrics'] if isinstance(test_summary, dict) and 'metrics' in test_summary else None),
             'fold_results': fold_results
         })
         print(f"\n{model_name} results saved to: {model_dir}")
@@ -1325,32 +1774,78 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     avg_precisions = [r['avg_precision_macro'] for r in all_model_results]
     avg_recalls = [r['avg_recall_macro'] for r in all_model_results]
     avg_f1s = [r['avg_f1_macro'] for r in all_model_results]
+    # Also prepare test metric means if available
+    test_auc_means = []
+    test_auc_cis = []
+    for r in all_model_results:
+        ts = r.get('test_stats')
+        if ts and 'auc' in ts:
+            test_auc_means.append(ts['auc'].get('mean', None))
+            test_auc_cis.append(ts['auc'].get('ci95', 0.0))
+        else:
+            test_auc_means.append(None)
+            test_auc_cis.append(0.0)
     
     # Create a larger figure for more metrics
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-    
-    # Plot 1: AUC and Accuracy
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 7))
+
+    # Pull per-model validation stats for error bars
+    val_auc_means = []
+    val_auc_cis = []
+    val_acc_means = []
+    val_acc_cis = []
+    prec_means = []
+    prec_cis = []
+    rec_means = []
+    rec_cis = []
+    f1_means = []
+    f1_cis = []
+    for r in all_model_results:
+        if 'val_stats' in r and r['val_stats']:
+            val_auc_means.append(r['val_stats']['auc']['mean'])
+            val_auc_cis.append(r['val_stats']['auc']['ci95'])
+            val_acc_means.append(r['val_stats']['accuracy']['mean'])
+            val_acc_cis.append(r['val_stats']['accuracy']['ci95'])
+            prec_means.append(r['val_stats']['precision']['mean'])
+            prec_cis.append(r['val_stats']['precision']['ci95'])
+            rec_means.append(r['val_stats']['recall']['mean'])
+            rec_cis.append(r['val_stats']['recall']['ci95'])
+            f1_means.append(r['val_stats']['f1']['mean'])
+            f1_cis.append(r['val_stats']['f1']['ci95'])
+        else:
+            val_auc_means.append(0.0)
+            val_auc_cis.append(0.0)
+            val_acc_means.append(0.0)
+            val_acc_cis.append(0.0)
+            prec_means.append(0.0)
+            prec_cis.append(0.0)
+            rec_means.append(0.0)
+            rec_cis.append(0.0)
+            f1_means.append(0.0)
+            f1_cis.append(0.0)
+
+    # Plot 1: Validation AUC and Accuracy with 95% CI error bars
     x = np.arange(len(model_names))
     width = 0.35
-    ax1.bar(x - width/2, avg_aucs, width, label='Avg Val AUC', alpha=0.8, color='skyblue')
-    ax1.bar(x + width/2, avg_accs, width, label='Avg Val Acc', alpha=0.8, color='lightcoral')
+    ax1.bar(x - width/2, val_auc_means, width, yerr=val_auc_cis, capsize=4, label='Val AUC (mean ± 95% CI)', alpha=0.85, color='skyblue', edgecolor='black')
+    ax1.bar(x + width/2, val_acc_means, width, yerr=val_acc_cis, capsize=4, label='Val Acc (mean ± 95% CI)', alpha=0.85, color='lightcoral', edgecolor='black')
     ax1.set_xticks(x)
     ax1.set_xticklabels(model_names, rotation=20)
     ax1.set_ylabel('Score')
     ax1.set_ylim(0, 1)
-    ax1.set_title(f'AUC and Accuracy Comparison\n{get_label_description(args.labels)} Classification')
+    ax1.set_title(f'Validation AUC and Accuracy Comparison\n{get_label_description(args.labels)} Classification')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
-    
-    # Plot 2: Precision, Recall, F1
-    ax2.bar(x - width, avg_precisions, width, label='Precision', alpha=0.8, color='lightgreen')
-    ax2.bar(x, avg_recalls, width, label='Recall', alpha=0.8, color='lightblue')
-    ax2.bar(x + width, avg_f1s, width, label='F1 Score', alpha=0.8, color='orange')
+
+    # Plot 2: Validation Precision, Recall, F1 with error bars
+    ax2.bar(x - width, prec_means, width, yerr=prec_cis, capsize=4, label='Precision', alpha=0.85, color='lightgreen', edgecolor='black')
+    ax2.bar(x, rec_means, width, yerr=rec_cis, capsize=4, label='Recall', alpha=0.85, color='lightblue', edgecolor='black')
+    ax2.bar(x + width, f1_means, width, yerr=f1_cis, capsize=4, label='F1 Score', alpha=0.85, color='orange', edgecolor='black')
     ax2.set_xticks(x)
     ax2.set_xticklabels(model_names, rotation=20)
     ax2.set_ylabel('Score')
     ax2.set_ylim(0, 1)
-    ax2.set_title(f'Precision, Recall, F1 Comparison\n{get_label_description(args.labels)} Classification')
+    ax2.set_title(f'Validation Precision, Recall, F1 Comparison\n{get_label_description(args.labels)} Classification')
     ax2.legend()
     ax2.grid(True, alpha=0.3)
     
@@ -1361,12 +1856,26 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     print(f"Summary comparison plot saved to: {summary_plot_path}")
     
     # Save overall comparison summary
+    # Extend comparison summary with mean, 95% CI and range per model for validation and test (if available)
+    model_detailed_stats = {}
+    for r in all_model_results:
+        name = r['model_name']
+        # Validation stats already computed per model
+        val_stats = r.get('val_stats', None)
+        # Optional test stats (from aggregated test summary)
+        test_stats = r.get('test_stats', None)
+        model_detailed_stats[name] = {
+            'validation': val_stats,
+            'test': test_stats
+        }
+
     comparison_summary = {
         'run_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         'run_folder': run_folder,
         'classification_task': get_label_description(args.labels),
         'models_tested': model_names,
         'comparison_results': all_model_results,
+        'per_model_stats': model_detailed_stats,
         'best_model_by_auc': model_names[np.argmax(avg_aucs)],
         'best_model_by_acc': model_names[np.argmax(avg_accs)],
         'best_model_by_f1': model_names[np.argmax(avg_f1s)],
@@ -1526,80 +2035,270 @@ def ensemble_evaluate_models(model_name, model_dir, test_loader, device, args, f
     
     return ensemble_predictions, ensemble_probabilities, test_labels, ensemble_metrics
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Train a 3D‐CNN on sMRI volumes",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Available models:
-  Simple3DCNN        - Simple 3D CNN baseline
-  ResNet18_3D        - 3D ResNet-18 (requires MONAI)
-  DenseNet121_3D     - 3D DenseNet-121 (requires MONAI)
-  EfficientNetB0_3D  - 3D EfficientNet-B0 (requires efficientnet_pytorch_3d)
-
-Examples:
-  # Run all models (default) - Memory optimized for 24GB GPU
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --batch_size 8
-
-  # Run with smaller batch size if out of memory
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --batch_size 4
-
-  # Run with pretrained models (recommended for better performance)
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --use_pretrained
-
-  # Run single model with pretrained weights
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --model EfficientNetB0_3D --use_pretrained
-
-  # Run specific models
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --models Simple3DCNN EfficientNetB0_3D
-
-  # Run with balanced dataset (reduce majority classes)
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --balance_dataset
-
-  # Explicitly run all models
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --run_all
-        """
-    )
-    parser.add_argument("--master_csv", type=str, default="~/reseng202500013-ndd-ml/data/mri_labels.csv",
-                        help="Path to master labels CSV file")
-    parser.add_argument("--data_root",   type=str, required=True,
-                        help="Folder containing sMRI NIfTIs, e.g. data/preprocessed/sMRI")
-    parser.add_argument("--epochs",      type=int, default=30)
-    parser.add_argument("--batch_size",  type=int, default=12,
-                        help="Batch size (reduce to 4-6 if out of memory)")
-    parser.add_argument("--num_workers", type=int, default=16)
-    parser.add_argument("--base_channels", type=int, default=48,
-                        help="Number of base channels for CNN models (default: 32)")
-    parser.add_argument("--use_pretrained", action='store_true',
-                        help="Use pretrained weights for ResNet, DenseNet, and EfficientNet models")
-    parser.add_argument("--checkpoint_dir", type=str, default="~/reseng202500013-ndd-ml/data/checkpoints_ad_cn")
-    parser.add_argument("--device",      type=str, default="cuda")
-    parser.add_argument("--learning_rate", type=float, default=3e-4)
-    parser.add_argument("--weight_decay", type=float, default=1e-5)
-    parser.add_argument("--k_folds",     type=int, default=5,
-                        help="Number of folds for cross-validation")
-    parser.add_argument("--labels",      type=int, nargs='+', required=True,
-                        help="Labels to include in training (e.g., 0 1 for AD vs CN)")
-    parser.add_argument("--val_ratio", type=float, default=0.2,
-                        help="Proportion for validation set inside each fold's training pool (default: 0.2 -> 80/20 train/val)")
-    parser.add_argument("--test_ratio", type=float, default=0.2,
-                        help="Unused in outer K-fold mode; effective test proportion is 1/k_folds (default k_folds=5 -> 0.2)")
-    parser.add_argument("--random_seed", type=int, default=None,
-                        help="Random seed for reproducible splits (None for random)")
-    parser.add_argument("--balance_dataset", action='store_true',
-                        help="Per-fold: undersample the training pool to the minority class; discard leftovers; then split Train/Val 80/20 (stratified)")
-    parser.add_argument("--optimize_threshold", action='store_true', default=True,
-                        help="Optimize decision threshold for accuracy (default: True)")
-    parser.add_argument("--test_strategy", type=str, default="best_fold", choices=["best_fold", "ensemble", "last_fold"],
-                        help="Strategy for test evaluation: best_fold (default), ensemble, or last_fold")
+def get_gpu_memory_info(device):
+    """
+    Get current GPU memory usage information.
     
-    # New arguments for model selection
-    parser.add_argument("--model",       type=str, default=None,
-                        help="Single model to train (e.g., 'Simple3DCNN', 'ResNet18_3D', 'DenseNet121_3D', 'EfficientNetB0_3D', 'VisionTransformer3D', 'SwinUNETRClassifier', 'FullSwinUNETRClassifier')")
-    parser.add_argument("--models",      type=str, nargs='+', default=None,
-                        help="Specific models to train (e.g., 'Simple3DCNN' 'EfficientNetB0_3D')")
-    parser.add_argument("--run_all",     action='store_true',
-                        help="Run all available models (default behavior)")
+    Args:
+        device: CUDA device string (e.g., 'cuda:3')
+    
+    Returns:
+        dict: Memory usage information
+    """
+    if not torch.cuda.is_available():
+        return {'error': 'CUDA not available'}
+    
+    try:
+        gpu_id = int(device.split(':')[1]) if ':' in device else 0
+        memory_allocated = torch.cuda.memory_allocated(gpu_id) / 1024**3  # GB
+        memory_reserved = torch.cuda.memory_reserved(gpu_id) / 1024**3    # GB
+        memory_free = torch.cuda.get_device_properties(gpu_id).total_memory / 1024**3 - memory_reserved  # GB
+        
+        return {
+            'gpu_id': gpu_id,
+            'allocated_gb': round(memory_allocated, 2),
+            'reserved_gb': round(memory_reserved, 2),
+            'free_gb': round(memory_free, 2),
+            'total_gb': round(torch.cuda.get_device_properties(gpu_id).total_memory / 1024**3, 2)
+        }
+    except Exception as e:
+        return {'error': str(e)}
+
+
+def print_memory_status(device, prefix="[MEMORY]"):
+    """
+    Print current GPU memory status.
+    
+    Args:
+        device: CUDA device string
+        prefix: Prefix for the log message
+    """
+    memory_info = get_gpu_memory_info(device)
+    if 'error' not in memory_info:
+        print(f"{prefix} GPU {memory_info['gpu_id']}: "
+              f"Allocated: {memory_info['allocated_gb']}GB, "
+              f"Reserved: {memory_info['reserved_gb']}GB, "
+              f"Free: {memory_info['free_gb']}GB, "
+              f"Total: {memory_info['total_gb']}GB")
+    else:
+        print(f"{prefix} {memory_info['error']}")
+
+
+def auto_reduce_batch_size(model, initial_batch_size, min_batch_size, device, args):
+    """
+    Automatically reduce batch size if CUDA out of memory occurs.
+    
+    Args:
+        model: The model to test
+        initial_batch_size: Starting batch size
+        min_batch_size: Minimum batch size to try
+        device: Device to test on
+        args: Training arguments
+    
+    Returns:
+        int: Working batch size
+    """
+    print(f"[MEMORY] Testing batch size {initial_batch_size}...")
+    
+    for batch_size in range(initial_batch_size, min_batch_size - 1, -4):
+        try:
+            # Create a dummy batch to test memory
+            dummy_input = torch.randn(batch_size, 1, 96, 112, 96).to(device)
+            
+            # Ensure model is on the same device as input
+            if next(model.parameters()).device != dummy_input.device:
+                print(f"[MEMORY] Moving model to {device} for testing...")
+                model = model.to(device)
+            
+            # Test forward pass
+            with torch.no_grad():
+                _ = model(dummy_input)
+            
+            # Test backward pass with a dummy loss
+            dummy_loss = torch.tensor(0.0, requires_grad=True, device=device)
+            dummy_loss.backward()
+            
+            print(f"[MEMORY] ✅ Batch size {batch_size} works! Using this for training.")
+            return batch_size
+            
+        except torch.cuda.OutOfMemoryError as e:
+            print(f"[MEMORY] ❌ Batch size {batch_size} failed: {e}")
+            
+            # Clear GPU memory
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            if batch_size <= min_batch_size:
+                print(f"[MEMORY] ⚠️  Reached minimum batch size {min_batch_size}. Training may be slow.")
+                return min_batch_size
+        except RuntimeError as e:
+            if "Input type" in str(e) and "weight type" in str(e):
+                print(f"[MEMORY] ❌ Device mismatch error: {e}")
+                print(f"[MEMORY] Attempting to fix device placement...")
+                try:
+                    model = model.to(device)
+                    # Retry with corrected device placement
+                    with torch.no_grad():
+                        _ = model(dummy_input)
+                    print(f"[MEMORY] ✅ Device issue fixed! Batch size {batch_size} works.")
+                    return batch_size
+                except Exception as retry_e:
+                    print(f"[MEMORY] ❌ Device fix failed: {retry_e}")
+                    return min_batch_size
+            else:
+                print(f"[MEMORY] ❌ Runtime error: {e}")
+                return min_batch_size
+        except Exception as e:
+            print(f"[MEMORY] ❌ Unexpected error: {e}")
+            return min_batch_size
+    
+    print(f"[MEMORY] ⚠️  Could not find working batch size. Using minimum: {min_batch_size}")
+    return min_batch_size
+
+
+def create_data_loaders_with_memory_optimization(train_dataset, val_dataset, test_dataset, args, model):
+    """
+    Create data loaders with automatic batch size optimization.
+    
+    Args:
+        train_dataset: Training dataset
+        val_dataset: Validation dataset  
+        test_dataset: Test dataset
+        args: Training arguments
+        model: Model to test memory usage with
+    
+    Returns:
+        tuple: (train_loader, val_loader, test_loader, working_batch_size)
+    """
+    working_batch_size = args.batch_size
+    
+    if args.auto_batch_size:
+        print(f"[MEMORY] Auto-batch size optimization enabled.")
+        print(f"[MEMORY] Testing memory usage with model: {type(model).__name__}")
+        
+        # Ensure model is on the correct device before testing
+        if 'cuda' in args.device:
+            model = model.to(args.device)
+            print(f"[MEMORY] Model moved to {args.device}")
+        
+        # Test with current batch size
+        working_batch_size = auto_reduce_batch_size(
+            model, args.batch_size, args.min_batch_size, args.device, args
+        )
+        
+        if working_batch_size != args.batch_size:
+            print(f"[MEMORY] Reduced batch size from {args.batch_size} to {working_batch_size}")
+    
+    # Create data loaders with working batch size
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=working_batch_size, 
+        shuffle=True, 
+        num_workers=args.num_workers,
+        pin_memory=True if 'cuda' in args.device else False
+    )
+    
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=working_batch_size, 
+        shuffle=False, 
+        num_workers=args.num_workers,
+        pin_memory=True if 'cuda' in args.device else False
+    )
+    
+    test_loader = DataLoader(
+        test_dataset, 
+        batch_size=working_batch_size, 
+        shuffle=False, 
+        num_workers=args.num_workers,
+        pin_memory=True if 'cuda' in args.device else False
+    )
+    
+    return train_loader, val_loader, test_loader, working_batch_size
+
+def main():
+    parser = argparse.ArgumentParser(description='Train sMRI models with k-fold cross-validation')
+    
+    # Data arguments
+    parser.add_argument("--master_csv", type=str, required=True,
+                        help="Path to master CSV file with subject IDs and labels")
+    parser.add_argument("--data_root", type=str, required=True,
+                        help="Root directory containing preprocessed sMRI data")
+    parser.add_argument("--checkpoint_dir", type=str, required=True,
+                        help="Directory to save model checkpoints and results")
+    
+    # Model arguments
+    parser.add_argument("--labels", nargs='+', type=int, required=True,
+                        help="List of label values to use for classification")
+    parser.add_argument("--model", type=str, default=None,
+                        help="Single model to train (alternative to --models)")
+    parser.add_argument("--models", nargs='+', type=str, default=None,
+                        choices=['Simple3DCNN', 'VisionTransformer3D', 'SwinUNETRClassifier', 'FullSwinUNETRClassifier'],
+                        help="List of models to train (alternative to --model)")
+    parser.add_argument("--run_all", action='store_true', default=False,
+                        help="Run all available models")
+    parser.add_argument("--use_pretrained", action='store_true', default=False,
+                        help="Use pretrained weights for models that support it")
+    
+    # Training arguments
+    parser.add_argument("--epochs", type=int, default=100, help="Number of training epochs")
+    parser.add_argument("--batch_size", type=int, default=32, help="Training batch size")
+    parser.add_argument("--learning_rate", type=float, default=0.0003, help="Learning rate")
+    parser.add_argument("--weight_decay", type=float, default=0.00001, help="Weight decay for CNN models")
+    parser.add_argument("--lr_scheduler_patience", type=int, default=5, help="LR scheduler patience")
+    parser.add_argument("--lr_scheduler_factor", type=float, default=0.5, help="LR scheduler factor (0.5 = halve LR)")
+    
+    # Hardware arguments
+    parser.add_argument("--device", type=str, default="cuda", help="Device to use (cuda, cpu, or specific GPU)")
+    parser.add_argument("--k_folds", type=int, default=5, help="Number of k-folds for cross-validation")
+    parser.add_argument("--random_seed", type=int, default=42, help="Random seed for reproducibility")
+    parser.add_argument("--base_channels", type=int, default=64, help="Base number of channels for CNN models")
+    parser.add_argument("--num_workers", type=int, default=4, help="Number of data loader workers")
+    
+    # Data split arguments
+    parser.add_argument("--val_ratio", type=float, default=0.2, help="Validation set ratio")
+    parser.add_argument("--test_ratio", type=float, default=0.2, help="Test set ratio")
+    parser.add_argument("--balance_dataset", action='store_true', default=False,
+                        help="Balance dataset by undersampling majority classes")
+    
+    # CNN-specific arguments
+    parser.add_argument("--cnn_drop_rate", type=float, default=0.0, help="Dropout rate for CNN models")
+    
+    # Vision Transformer specific arguments
+    parser.add_argument("--vit_warmup_epochs", type=int, default=5,
+                        help="Number of warmup epochs for Vision Transformer models")
+    parser.add_argument("--vit_use_cosine_schedule", action='store_true', default=True,
+                        help="Use cosine learning rate schedule for Vision Transformer models")
+    parser.add_argument("--label_smoothing", type=float, default=0.1,
+                        help="Label smoothing factor (0.1 recommended for ViT)")
+    parser.add_argument("--vit_optimizer", type=str, default="adamw", choices=["adamw", "adam"],
+                        help="Optimizer for Vision Transformer models")
+    parser.add_argument("--vit_weight_decay", type=float, default=0.05,
+                        help="Weight decay for Vision Transformer models (0.02-0.1 recommended)")
+    parser.add_argument("--vit_drop_rate", type=float, default=0.1,
+                        help="Dropout rate for Vision Transformer models (0.1-0.3 recommended)")
+    parser.add_argument("--vit_attn_drop_rate", type=float, default=0.0,
+                        help="Attention dropout rate for Vision Transformer models (0.0-0.1 recommended)")
+    parser.add_argument("--vit_drop_path_rate", type=float, default=0.1,
+                        help="Stochastic depth rate for Vision Transformer models (0.1-0.2 recommended)")
+    
+    # General training arguments
+    parser.add_argument("--grad_clip_max_norm", type=float, default=0.0,
+                        help="Gradient clipping max norm (1.0 recommended for ViT)")
+    parser.add_argument("--optimize_threshold", action='store_true', default=True,
+                        help="Optimize classification threshold on validation set")
+    parser.add_argument("--use_temperature_scaling", action='store_true', default=True,
+                        help="Enable temperature scaling for multiclass calibration (improves accuracy by 2-5%)")
+    
+    # Memory optimization arguments
+    parser.add_argument("--auto_batch_size", action='store_true', default=True,
+                        help="Automatically reduce batch size if CUDA out of memory occurs")
+    parser.add_argument("--max_batch_size", type=int, default=32,
+                        help="Maximum batch size to try during auto-reduction")
+    parser.add_argument("--min_batch_size", type=int, default=4,
+                        help="Minimum batch size to try during auto-reduction")
+    parser.add_argument("--memory_efficient", action='store_true', default=False,
+                        help="Enable memory-efficient training (gradient checkpointing, etc.)")
     
     args = parser.parse_args()
 

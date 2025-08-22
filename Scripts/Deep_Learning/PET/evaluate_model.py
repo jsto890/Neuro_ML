@@ -131,9 +131,12 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
+    # Disease label mapping
+    label_to_disease = {0: 'AD', 1: 'CN', 2: 'PD'}
+    
     # Create comprehensive plot
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    fig.suptitle('Model Evaluation Results - AD vs CN Classification (PET)', fontsize=16, fontweight='bold')
+    fig.suptitle('Model Evaluation Results - Disease Classification (PET)', fontsize=16, fontweight='bold')
     
     # 1. ROC Curve
     ax1 = axes[0, 0]
@@ -178,7 +181,12 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     # 3. Confusion Matrix
     ax3 = axes[0, 2]
     cm = metrics['confusion_matrix']
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax3)
+    # Get disease labels for the confusion matrix
+    n_classes = len(cm)
+    disease_labels = [label_to_disease.get(i, f'Class {i}') for i in range(n_classes)]
+    
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax3,
+               xticklabels=disease_labels, yticklabels=disease_labels)
     ax3.set_xlabel('Predicted')
     ax3.set_ylabel('Actual')
     ax3.set_title('Confusion Matrix')
@@ -205,10 +213,15 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     # 5. Prediction Distribution
     ax5 = axes[1, 1]
     unique_labels, counts = np.unique(predictions, return_counts=True)
-    ax5.bar(unique_labels, counts, alpha=0.7, color='lightcoral', edgecolor='black')
+    # Convert numeric labels to disease names for x-axis
+    disease_labels = [label_to_disease.get(label, f'Class {label}') for label in unique_labels]
+    
+    ax5.bar(range(len(unique_labels)), counts, alpha=0.7, color='lightcoral', edgecolor='black')
     ax5.set_xlabel('Predicted Class')
     ax5.set_ylabel('Count')
     ax5.set_title('Prediction Distribution')
+    ax5.set_xticks(range(len(unique_labels)))
+    ax5.set_xticklabels(disease_labels)
     ax5.grid(True, alpha=0.3)
     
     # 6. Probability Distribution

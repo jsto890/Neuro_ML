@@ -16,6 +16,7 @@ import sys
 import json
 import pickle
 import logging
+import warnings
 import argparse
 import numpy as np
 import pandas as pd
@@ -28,6 +29,7 @@ from sklearn.preprocessing import RobustScaler, StandardScaler, PolynomialFeatur
 from sklearn.feature_selection import RFECV, SelectKBest, f_classif, mutual_info_classif
 from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.svm import SVC
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score, 
@@ -37,6 +39,9 @@ from sklearn.metrics import (
 from sklearn.feature_selection import VarianceThreshold
 import matplotlib.pyplot as plt
 import seaborn as sns
+# Silence frequent SVM convergence warnings
+warnings.filterwarnings("ignore", category=ConvergenceWarning, module="sklearn.svm._base")
+
 
 # Advanced ML libraries
 try:
@@ -136,6 +141,14 @@ class ImprovedOptimizedRadiomicsClassifier:
         self.feature_importance = {}
         self.results = {}
         self.feature_engineering_results = {}
+        # Store transformers/selectors for leak-free transform of Val/Test
+        self.variance_threshold_transformer = None
+        self.polynomial_features_transformer = None
+        self.var_feature_names: List[str] = []
+        self.engineered_feature_names: List[str] = []
+        self.top_feature_indices: List[int] = []
+        self.mi_selector = None
+        self.rfecv_selector = None
         
         # Setup logging
         self.setup_logging()
@@ -197,46 +210,56 @@ class ImprovedOptimizedRadiomicsClassifier:
             # Validate data quality
             if len(self.data) < 10:
                 raise ValueError(f"Insufficient data: only {len(self.data)} samples")
-            
             if len(self.data.columns) < 5:
                 raise ValueError(f"Insufficient features: only {len(self.data.columns)} columns")
-            
-            # Remove diagnostic columns (keep only radiomics features)
-            diagnostic_cols = [col for col in self.data.columns if any(x in col.lower() for x in ['diagnosis', 'label', 'class', 'target'])]
+
+            # Remove PyRadiomics diagnostics_* metadata columns only (keep 'label' and other fields)
+            diagnostic_cols = [col for col in self.data.columns if col.startswith('diagnostics_')]
             if diagnostic_cols:
                 self.data = self.data.drop(columns=diagnostic_cols)
-                self.logger.info(f"Removed {len(diagnostic_cols)} diagnostic columns")
-            
-            # Handle binary classification
-            if self.binary_only:
-                # Find label column
-                label_col = None
+                self.logger.info(f"Removed {len(diagnostic_cols)} diagnostics_* columns")
+
+            # Determine label column
+            label_col = 'label' if 'label' in self.data.columns else None
+            if label_col is None:
                 for col in self.data.columns:
                     if any(x in col.lower() for x in ['label', 'class', 'target', 'diagnosis']):
                         label_col = col
                         break
-                
-                if label_col is None:
-                    raise ValueError("No label column found")
-                
-                # Get unique labels
-                unique_labels = self.data[label_col].unique()
+            if label_col is None:
+                raise ValueError("No label column found")
+
+            # Ensure integer labels
+            try:
+                self.data[label_col] = self.data[label_col].astype(int)
+            except Exception:
+                pass
+
+            # Filter to binary classes if requested
+            unique_labels = self.data[label_col].unique()
             self.logger.info(f"Unique labels: {unique_labels}")
-            
-                # Filter to binary (0, 1)
-            if len(unique_labels) > 2:
-                # Keep only classes 0 and 1
+            if self.binary_only and len(unique_labels) > 2:
                 self.data = self.data[self.data[label_col].isin([0, 1])]
                 self.logger.info(f"Filtered to binary classification: {len(self.data)} samples")
-                
-                # Extract features and labels
+
+            # Save full copies for outer CV resets
+            self.full_data_df = self.data.copy()
+            self.full_label_col = label_col
+
+            # Extract features and labels; drop non-feature identity columns
+            non_feature_cols = [label_col]
+            if 'subject_id' in self.data.columns:
+                non_feature_cols.append('subject_id')
+
             self.y = self.data[label_col].values
-            self.X = self.data.drop(columns=[label_col]).values
-            self.feature_names = self.data.drop(columns=[label_col]).columns.tolist()
-            self.subject_ids = np.arange(len(self.data))
-                # Log final data shape
+            self.X = self.data.drop(columns=non_feature_cols).values
+            self.feature_names = self.data.drop(columns=non_feature_cols).columns.tolist()
+            self.subject_ids = self.data['subject_id'].values if 'subject_id' in self.data.columns else np.arange(len(self.data))
+
+            # Log final data shape
+            counts = {int(lbl): int((self.y == lbl).sum()) for lbl in np.unique(self.y)}
             self.logger.info(f"Data shape: {self.X.shape}")
-            self.logger.info(f"Labels: {np.unique(self.y)} (counts: {[np.sum(self.y == label) for label in np.unique(self.y)]})")
+            self.logger.info(f"Labels: {sorted(list(np.unique(self.y)))} (counts: {counts})")
             
             return True
             
@@ -324,6 +347,13 @@ class ImprovedOptimizedRadiomicsClassifier:
             self.y = y_clean
             self.subject_ids = subject_ids_clean
             self.feature_names = engineered_feature_names
+
+            # Persist transformers and feature name maps for Val/Test transform
+            self.variance_threshold_transformer = variance_threshold
+            self.polynomial_features_transformer = poly
+            self.var_feature_names = var_feature_names
+            self.engineered_feature_names = engineered_feature_names
+            self.top_feature_indices = top_feature_indices if found_top_features else []
             
             # Store feature engineering results
             self.feature_engineering_results = {
@@ -355,6 +385,36 @@ class ImprovedOptimizedRadiomicsClassifier:
         except Exception as e:
             self.logger.error(f"Error in improved feature engineering: {e}")
             return False
+
+    def transform_with_engineering(self, X_raw: np.ndarray) -> np.ndarray:
+        """Apply fitted variance thresholding, polynomial features, optional statistical features,
+        and scaling to new data (Val/Test). Assumes improved_feature_engineering has been run.
+        """
+        try:
+            if self.variance_threshold_transformer is None or self.polynomial_features_transformer is None:
+                raise RuntimeError("Engineering transformers are not fitted")
+
+            # 1) Variance threshold transform
+            X_var = self.variance_threshold_transformer.transform(X_raw)
+
+            # 2) Polynomial transform
+            X_poly = self.polynomial_features_transformer.transform(X_var)
+
+            # 3) Statistical features for top features (if available)
+            if self.top_feature_indices:
+                top_data = X_var[:, self.top_feature_indices]
+                texture_mean = np.mean(top_data, axis=1, keepdims=True)
+                texture_std = np.std(top_data, axis=1, keepdims=True)
+                X_engineered = np.hstack([X_poly, texture_mean, texture_std])
+            else:
+                X_engineered = X_poly
+
+            # 4) Scaling
+            X_scaled = self.scaler.transform(X_engineered)
+            return X_scaled
+        except Exception as e:
+            self.logger.error(f"Error transforming with engineering: {e}")
+            raise
     
     def improved_feature_selection(self):
         """Stage 2: Improved feature selection with cross-validation."""
@@ -392,6 +452,10 @@ class ImprovedOptimizedRadiomicsClassifier:
             # Update data
             self.X = X_final
             self.feature_names = final_feature_names
+
+            # Store selectors for transforming Val/Test
+            self.mi_selector = mi_selector
+            self.rfecv_selector = rfecv
             
             # Store feature selection results
             self.feature_engineering_results['feature_selection'] = {
@@ -409,6 +473,14 @@ class ImprovedOptimizedRadiomicsClassifier:
         except Exception as e:
             self.logger.error(f"Error in feature selection: {e}")
             return False
+
+    def transform_with_selection(self, X_engineered_scaled: np.ndarray) -> np.ndarray:
+        """Apply fitted MI and RFECV selectors to new data (Val/Test)."""
+        if self.mi_selector is None or self.rfecv_selector is None:
+            raise RuntimeError("Selection transformers are not fitted")
+        X_mi = self.mi_selector.transform(X_engineered_scaled)
+        X_final = self.rfecv_selector.transform(X_mi)
+        return X_final
     
     def split_data(self, test_size=0.2, val_size=0.2):
         """Stage 3: Split data with stratification."""
@@ -470,7 +542,7 @@ class ImprovedOptimizedRadiomicsClassifier:
                     'tol': Real(1e-4, 1e-2, prior='log-uniform')  # Increased tolerance
                 }
                 
-                # Bayesian optimization with fewer iterations
+                # Bayesian optimization with fewer iterations (silence repetitive CV fit logs)
                 bayes_search = BayesSearchCV(
                     estimator=base_svm,
                     search_spaces=search_spaces,
@@ -478,7 +550,7 @@ class ImprovedOptimizedRadiomicsClassifier:
                     cv=5,
                     scoring='roc_auc',  # Changed to roc_auc
                     n_jobs=-1,
-                    verbose=1,
+                    verbose=0,
                     random_state=self.random_state
                 )
                 
@@ -512,13 +584,14 @@ class ImprovedOptimizedRadiomicsClassifier:
                     'tol': [1e-3]
                 }
                 
+                # Grid search (silence repetitive CV fit logs)
                 grid_search = GridSearchCV(
                     estimator=base_svm,
                     param_grid=param_grid,
                     cv=5,
                     scoring='roc_auc',
                     n_jobs=-1,
-                    verbose=1
+                    verbose=0
                 )
                 
                 grid_search.fit(X_train, y_train)
@@ -808,6 +881,233 @@ class ImprovedOptimizedRadiomicsClassifier:
         self.logger.info(f"{'='*50}")
         
         return True
+
+    def run_outer_cv(self, k_folds: int = 5, val_ratio: float = 0.2):
+        """Run outer Stratified K-Fold evaluation with per-fold Train/Val split.
+
+        Ensures all preprocessing/feature engineering/selection and model tuning
+        are fit strictly on the training data of each fold to avoid leakage.
+        """
+        self.logger.info("Starting Improved Optimized Outer Stratified K-Fold evaluation")
+
+        # Stage 0: Load data once
+        if not self.load_data():
+            self.logger.error("Failed to load data for outer CV")
+            return False
+
+        from sklearn.model_selection import StratifiedKFold, train_test_split
+        skf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=self.random_state)
+
+        outer_results = []
+
+        # Use full dataset indices for each fold to avoid cumulative state affecting shapes
+        X_full = self.full_data_df.drop(columns=[c for c in [self.full_label_col, 'subject_id'] if c in self.full_data_df.columns]).values
+        y_full = self.full_data_df[self.full_label_col].values
+        ids_full = self.full_data_df['subject_id'].values if 'subject_id' in self.full_data_df.columns else np.arange(len(self.full_data_df))
+
+        for fold_idx, (train_pool_idx, test_idx) in enumerate(skf.split(X_full, y_full), start=1):
+            self.logger.info(f"\n{'='*60}\nStarting OUTER FOLD {fold_idx}/{k_folds}\n{'='*60}")
+
+            # Reset per-fold artifacts to avoid cross-fold state
+            self.feature_importance = {}
+            self.results = {}
+            self.feature_engineering_results = {}
+
+            # Build raw splits
+            X_train_pool = X_full[train_pool_idx]
+            y_train_pool = y_full[train_pool_idx]
+            ids_train_pool = ids_full[train_pool_idx]
+
+            X_test_raw = X_full[test_idx]
+            y_test_raw = y_full[test_idx]
+            ids_test_raw = ids_full[test_idx]
+
+            # Train/Val split in train pool (optional)
+            if val_ratio and val_ratio > 0:
+                X_train_raw, X_val_raw, y_train_raw, y_val_raw, ids_train_raw, ids_val_raw = train_test_split(
+                    X_train_pool,
+                    y_train_pool,
+                    ids_train_pool,
+                    test_size=val_ratio,
+                    random_state=self.random_state,
+                    stratify=y_train_pool
+                )
+                # Temporarily store raw splits before engineering
+                self.splits = {
+                    'train': (X_train_raw, y_train_raw, ids_train_raw),
+                    'val': (X_val_raw, y_val_raw, ids_val_raw),
+                    'test': (X_test_raw, y_test_raw, ids_test_raw)
+                }
+            else:
+                self.splits = {
+                    'train': (X_train_pool, y_train_pool, ids_train_pool),
+                    'test': (X_test_raw, y_test_raw, ids_test_raw)
+                }
+
+            # Use fold-specific output directory
+            original_output_dir = self.output_dir
+            fold_output_dir = original_output_dir / f"outercv_fold_{fold_idx}"
+            self.output_dir = fold_output_dir
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            self.setup_logging()
+
+            # Perform improved feature engineering and selection ONLY on Train
+            try:
+                # Set raw train as current data for engineering
+                X_train_raw, y_train_raw, ids_train_raw = self.splits['train']
+                self.X, self.y, self.subject_ids = X_train_raw, y_train_raw, ids_train_raw
+
+                # 1) Fit engineering on Train
+                if not self.improved_feature_engineering():
+                    raise RuntimeError("Feature engineering failed")
+
+                # Engineered Train
+                X_train_engineered = self.X
+                y_train_engineered = self.y
+                ids_train_engineered = self.subject_ids
+
+                # 2) Transform Val/Test with fitted engineering
+                has_val = 'val' in self.splits
+                if has_val:
+                    X_val_raw, y_val_raw, ids_val_raw = self.splits['val']
+                X_test_raw, y_test_raw, ids_test_raw = self.splits['test']
+
+                X_val_engineered = self.transform_with_engineering(X_val_raw) if has_val else None
+                X_test_engineered = self.transform_with_engineering(X_test_raw)
+
+                # 3) Fit feature selection on engineered Train only
+                self.X, self.y = X_train_engineered, y_train_engineered
+                if not self.improved_feature_selection():
+                    raise RuntimeError("Feature selection failed")
+
+                # 4) Transform Val/Test with fitted selection
+                X_train_selected = self.X
+                X_val_selected = self.transform_with_selection(X_val_engineered) if has_val else None
+                X_test_selected = self.transform_with_selection(X_test_engineered)
+
+                # Update splits to selected datasets
+                new_splits = {
+                    'train': (X_train_selected, y_train_engineered, ids_train_engineered),
+                    'test': (X_test_selected, y_test_raw, ids_test_raw)
+                }
+                if has_val:
+                    new_splits['val'] = (X_val_selected, y_val_raw, ids_val_raw)
+                self.splits = new_splits
+
+                # 5) Hyperparameter optimization, ensemble, evaluation, save
+                if not self.optimize_svm_hyperparameters():
+                    raise RuntimeError("SVM optimization failed")
+                if not self.create_improved_ensemble():
+                    raise RuntimeError("Ensemble creation failed")
+                if not self.evaluate_improved_models():
+                    raise RuntimeError("Evaluation failed")
+                if not self.save_improved_artifacts():
+                    raise RuntimeError("Saving artifacts failed")
+
+                # Collect test metrics for this fold (Optimized_SVM preferred)
+                if 'Optimized_SVM' in self.results:
+                    test_metrics = self.results['Optimized_SVM']['test']
+                else:
+                    test_metrics = self.results.get('Improved_Ensemble', {}).get('test', {})
+
+                outer_results.append({
+                    'fold': fold_idx,
+                    'accuracy': float(test_metrics.get('accuracy', 0.0)),
+                    'precision': float(test_metrics.get('precision', 0.0)),
+                    'recall': float(test_metrics.get('recall', 0.0)),
+                    'f1': float(test_metrics.get('f1', 0.0)),
+                    'auc': float(test_metrics.get('auc', 0.0)),
+                    'mcc': float(test_metrics.get('mcc', 0.0)) if 'mcc' in test_metrics else None
+                })
+
+            except Exception as e:
+                self.logger.error(f"Fold {fold_idx} failed: {e}")
+
+            # Restore output dir
+            self.output_dir = original_output_dir
+            self.setup_logging()
+
+        # Save outer CV summary
+        try:
+            import json
+            from statistics import mean
+            summary = {
+                'k_folds': k_folds,
+                'val_ratio': val_ratio,
+                'random_state': self.random_state,
+                'folds': outer_results
+            }
+            if outer_results:
+                for metric in ['accuracy', 'precision', 'recall', 'f1', 'auc']:
+                    values = [f[metric] for f in outer_results if f.get(metric) is not None]
+                    if values:
+                        summary[f'{metric}_mean'] = float(mean(values))
+            (self.output_dir / 'outer_cv_summary.json').write_text(json.dumps(summary, indent=2, cls=NumpyEncoder))
+            self.logger.info(f"Outer CV summary saved to {self.output_dir / 'outer_cv_summary.json'}")
+            # Create PNG summary plot with means, SD and 95% CI
+            try:
+                self._save_outer_cv_summary_plot(outer_results, output_path=self.output_dir / 'outer_cv_summary.png')
+                self.logger.info(f"Outer CV summary plot saved to {self.output_dir / 'outer_cv_summary.png'}")
+            except Exception as plot_err:
+                self.logger.error(f"Failed to write outer CV summary plot: {plot_err}")
+        except Exception as e:
+            self.logger.error(f"Failed to write outer CV summary: {e}")
+
+        self.logger.info("Improved Optimized Outer Stratified K-Fold evaluation complete")
+        return True
+
+    def _save_outer_cv_summary_plot(self, outer_results, output_path):
+        """Create a PNG summarizing per-fold test metrics with SD and 95% CI.
+
+        Error bars show 95% CI; points show individual fold scores.
+        """
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        metrics = ['accuracy', 'precision', 'recall', 'f1', 'auc']
+        values_by_metric = {}
+        for m in metrics:
+            vals = [float(d[m]) for d in outer_results if d.get(m) is not None]
+            if len(vals) == 0:
+                vals = [0.0]
+            values_by_metric[m] = np.array(vals, dtype=float)
+
+        means = [values_by_metric[m].mean() for m in metrics]
+        stds = [values_by_metric[m].std(ddof=1) if len(values_by_metric[m]) > 1 else 0.0 for m in metrics]
+        ns = [len(values_by_metric[m]) for m in metrics]
+        cis = []
+        for m, s, n in zip(means, stds, ns):
+            if n > 1:
+                se = s / np.sqrt(n)
+                ci = 1.96 * se
+            else:
+                ci = 0.0
+            cis.append(ci)
+
+        x = np.arange(len(metrics))
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.bar(x, means, yerr=cis, capsize=6, color='#4C78A8', alpha=0.85, label='Mean (95% CI)')
+
+        # Overlay fold points
+        for i, m in enumerate(metrics):
+            y_points = values_by_metric[m]
+            jitter = (np.random.rand(len(y_points)) - 0.5) * 0.15
+            ax.scatter(np.full_like(y_points, x[i]) + jitter, y_points, color='#F58518', alpha=0.7, s=30, label='Fold scores' if i == 0 else None)
+
+        # Annotate SD below bars
+        for i, s in enumerate(stds):
+            ax.text(x[i], max(0.01, means[i]) - 0.05, f"SD={s:.3f}", ha='center', va='top', fontsize=9, rotation=0)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels([m.upper() for m in metrics])
+        ax.set_ylim(0.0, 1.05)
+        ax.set_ylabel('Score')
+        ax.set_title('Outer CV Test Metrics (per script run)')
+        ax.legend()
+        ax.grid(True, axis='y', alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)
 
 def main():
     """Main function to run the improved optimized pipeline."""
