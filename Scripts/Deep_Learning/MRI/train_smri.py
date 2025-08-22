@@ -1047,6 +1047,15 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             preds = torch.argmax(logits, dim=1)
             running_corrects += (preds == labels).sum().item()
             total_samples += smri.size(0)
+            
+            # Memory optimization: clear cache periodically
+            if args.memory_efficient and total_samples % (args.batch_size * 10) == 0:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+        
+        # Clear memory after each epoch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         epoch_loss = running_loss / total_samples
         epoch_acc  = running_corrects / total_samples
@@ -1076,6 +1085,11 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         probs = val_results['probabilities']
         val_labels = val_results['labels']
         optimal_threshold = val_results['optimal_threshold']
+        
+        # Debug: print shapes and types
+        print(f"[DEBUG] probs shape: {probs.shape}, type: {type(probs)}")
+        print(f"[DEBUG] val_labels shape: {val_labels.shape}, type: {type(val_labels)}")
+        print(f"[DEBUG] optimal_threshold: {optimal_threshold}")
         
         # Calculate additional metrics using optimal threshold (binary) or argmax (multiclass)
         if optimal_threshold is not None and probs.shape[1] == 2:
@@ -1253,8 +1267,8 @@ def evaluate_model_with_threshold_optimization(model, val_loader, device, optimi
         probs = probs_softmax[:, 1]
         is_binary = True
     else:
-        # Multiclass: threshold optimization not applicable
-        probs = np.max(probs_softmax, axis=1)
+        # Multiclass: return full probability matrix for proper evaluation
+        probs = probs_softmax
         is_binary = False
     
     # Calculate metrics with default threshold (0.5 for binary, argmax for multiclass)
@@ -1265,10 +1279,10 @@ def evaluate_model_with_threshold_optimization(model, val_loader, device, optimi
         default_auc = roc_auc_score(val_labels, probs)
     else:
         # Multiclass: use argmax for predictions
-        default_preds = np.argmax(probs_softmax, axis=1)
+        default_preds = np.argmax(probs, axis=1)
         default_acc = accuracy_score(val_labels, default_preds)
         # For multiclass, calculate AUC using one-vs-rest
-        default_auc = roc_auc_score(val_labels, probs_softmax, multi_class='ovr', average='macro')
+        default_auc = roc_auc_score(val_labels, probs, multi_class='ovr', average='macro')
     
     results = {
         'probabilities': probs,
@@ -1457,10 +1471,6 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             val_dataset = SMRIDataset(csv_path=temp_val_csv, data_root=args.data_root)
             test_dataset = SMRIDataset(csv_path=temp_test_csv, data_root=args.data_root)
 
-            train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-            val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
-            test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
-            
             # Initialize model for this fold
             unique_labels = sorted(train_dataset.df['label'].unique())
             num_classes = len(unique_labels)
@@ -1489,6 +1499,16 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                     use_pretrained=args.use_pretrained,
                     dropout_p=(args.cnn_drop_rate if model_name == "Simple3DCNN" else 0.0),
                 )
+            
+            # Create memory-optimized data loaders
+            train_loader, val_loader, test_loader, working_batch_size = create_data_loaders_with_memory_optimization(
+                train_dataset, val_dataset, test_dataset, args, model
+            )
+            
+            print(f"[MEMORY] Using batch size: {working_batch_size}")
+            
+            # Print memory status before training
+            print_memory_status(args.device, "[MEMORY] Before training")
             
             # Train
             (
@@ -1571,6 +1591,9 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
             print(f"Fold {fold_idx} test evaluation saved to: {test_eval_dir}")
 
+            # Print memory status after evaluation
+            print_memory_status(args.device, "[MEMORY] After evaluation")
+            
             # Store test metrics for aggregation
             safe_metrics = {
                 'accuracy': float(metrics['accuracy']),
@@ -1697,6 +1720,13 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         summary_path = os.path.join(model_dir, summary_filename)
         with open(summary_path, "w") as f:
             json.dump(run_summary, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
+        
+        # Clean up memory before next model
+        print(f"[MEMORY] Cleaning up memory after {model_name}...")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        print_memory_status(args.device, "[MEMORY] After cleanup")
+        
         all_model_results.append({
             'model_name': model_name,
             'avg_val_auc': float(avg_val_auc),
@@ -1993,97 +2023,198 @@ def ensemble_evaluate_models(model_name, model_dir, test_loader, device, args, f
     
     return ensemble_predictions, ensemble_probabilities, test_labels, ensemble_metrics
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Train a 3D‐CNN on sMRI volumes",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Available models:
-  Simple3DCNN        - Simple 3D CNN baseline
-  ResNet18_3D        - 3D ResNet-18 (requires MONAI)
-  DenseNet121_3D     - 3D DenseNet-121 (requires MONAI)
-  EfficientNetB0_3D  - 3D EfficientNet-B0 (requires efficientnet_pytorch_3d)
-
-Examples:
-  # Run all models (default) - Memory optimized for 24GB GPU
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --batch_size 8
-
-  # Run with smaller batch size if out of memory
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --batch_size 4
-
-  # Run with pretrained models (recommended for better performance)
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --use_pretrained
-
-  # Run single model with pretrained weights
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --model EfficientNetB0_3D --use_pretrained
-
-  # Run specific models
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --models Simple3DCNN EfficientNetB0_3D
-
-  # Run with balanced dataset (reduce majority classes)
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --balance_dataset
-
-  # Explicitly run all models
-  python train_smri.py --master_csv ~/reseng202500013-ndd-ml/data/mri_labels.csv --data_root /path/to/data --labels 0 1 --run_all
-        """
-    )
-    parser.add_argument("--master_csv", type=str, default="~/reseng202500013-ndd-ml/data/mri_labels.csv",
-                        help="Path to master labels CSV file")
-    parser.add_argument("--data_root",   type=str, required=True,
-                        help="Folder containing sMRI NIfTIs, e.g. data/preprocessed/sMRI")
-    parser.add_argument("--epochs",      type=int, default=30)
-    parser.add_argument("--batch_size",  type=int, default=12,
-                        help="Batch size (reduce to 4-6 if out of memory)")
-    parser.add_argument("--num_workers", type=int, default=16)
-    parser.add_argument("--base_channels", type=int, default=48,
-                        help="Number of base channels for CNN models (default: 32)")
-    parser.add_argument("--use_pretrained", action='store_true',
-                        help="Use pretrained weights for ResNet, DenseNet, and EfficientNet models")
-    parser.add_argument("--checkpoint_dir", type=str, default="~/reseng202500013-ndd-ml/data/checkpoints_ad_cn")
-    parser.add_argument("--device",      type=str, default="cuda")
-    parser.add_argument("--learning_rate", type=float, default=3e-4)
-    parser.add_argument("--weight_decay", type=float, default=1e-5)
-    parser.add_argument("--k_folds",     type=int, default=5,
-                        help="Number of folds for cross-validation")
-    parser.add_argument("--labels",      type=int, nargs='+', required=True,
-                        help="Labels to include in training (e.g., 0 1 for AD vs CN)")
-    parser.add_argument("--val_ratio", type=float, default=0.2,
-                        help="Proportion for validation set inside each fold's training pool (default: 0.2 -> 80/20 train/val)")
-    parser.add_argument("--test_ratio", type=float, default=0.2,
-                        help="Unused in outer K-fold mode; effective test proportion is 1/k_folds (default k_folds=5 -> 0.2)")
-    parser.add_argument("--random_seed", type=int, default=None,
-                        help="Random seed for reproducible splits (None for random)")
-    parser.add_argument("--balance_dataset", action='store_true',
-                        help="Per-fold: undersample the training pool to the minority class; discard leftovers; then split Train/Val 80/20 (stratified)")
-    parser.add_argument("--optimize_threshold", action='store_true', default=True,
-                        help="Optimize decision threshold for accuracy (default: True)")
-    parser.add_argument("--test_strategy", type=str, default="best_fold", choices=["best_fold", "ensemble", "last_fold"],
-                        help="Strategy for test evaluation: best_fold (default), ensemble, or last_fold")
-    # Training controls
-    parser.add_argument("--grad_clip_max_norm", type=float, default=0.0,
-                        help="Max norm for gradient clipping (<=0 disables clipping)")
-    parser.add_argument("--lr_scheduler_factor", type=float, default=0.5,
-                        help="ReduceLROnPlateau factor (e.g., 0.5 drops LR by 50%)")
-    parser.add_argument("--lr_scheduler_patience", type=int, default=5,
-                        help="ReduceLROnPlateau patience in epochs")
-    # Vision Transformer dropout controls
-    parser.add_argument("--vit_drop_rate", type=float, default=0.0,
-                        help="VisionTransformer3D embedding/MLP dropout rate")
-    parser.add_argument("--vit_attn_drop_rate", type=float, default=0.0,
-                        help="VisionTransformer3D attention dropout rate")
-    parser.add_argument("--vit_drop_path_rate", type=float, default=0.0,
-                        help="VisionTransformer3D stochastic depth (drop path) rate")
-    # Simple CNN dropout control
-    parser.add_argument("--cnn_drop_rate", type=float, default=0.0,
-                        help="Simple3DCNN dropout rate (applied to conv blocks and classifier)")
+def get_gpu_memory_info(device):
+    """
+    Get current GPU memory usage information.
     
-    # New arguments for model selection
-    parser.add_argument("--model",       type=str, default=None,
-                        help="Single model to train (e.g., 'Simple3DCNN', 'ResNet18_3D', 'DenseNet121_3D', 'EfficientNetB0_3D', 'VisionTransformer3D', 'SwinUNETRClassifier', 'FullSwinUNETRClassifier')")
-    parser.add_argument("--models",      type=str, nargs='+', default=None,
-                        help="Specific models to train (e.g., 'Simple3DCNN' 'EfficientNetB0_3D')")
-    parser.add_argument("--run_all",     action='store_true',
-                        help="Run all available models (default behavior)")
+    Args:
+        device: CUDA device string (e.g., 'cuda:3')
+    
+    Returns:
+        dict: Memory usage information
+    """
+    if not torch.cuda.is_available():
+        return {'error': 'CUDA not available'}
+    
+    try:
+        gpu_id = int(device.split(':')[1]) if ':' in device else 0
+        memory_allocated = torch.cuda.memory_allocated(gpu_id) / 1024**3  # GB
+        memory_reserved = torch.cuda.memory_reserved(gpu_id) / 1024**3    # GB
+        memory_free = torch.cuda.get_device_properties(gpu_id).total_memory / 1024**3 - memory_reserved  # GB
+        
+        return {
+            'gpu_id': gpu_id,
+            'allocated_gb': round(memory_allocated, 2),
+            'reserved_gb': round(memory_reserved, 2),
+            'free_gb': round(memory_free, 2),
+            'total_gb': round(torch.cuda.get_device_properties(gpu_id).total_memory / 1024**3, 2)
+        }
+    except Exception as e:
+        return {'error': str(e)}
+
+
+def print_memory_status(device, prefix="[MEMORY]"):
+    """
+    Print current GPU memory status.
+    
+    Args:
+        device: CUDA device string
+        prefix: Prefix for the log message
+    """
+    memory_info = get_gpu_memory_info(device)
+    if 'error' not in memory_info:
+        print(f"{prefix} GPU {memory_info['gpu_id']}: "
+              f"Allocated: {memory_info['allocated_gb']}GB, "
+              f"Reserved: {memory_info['reserved_gb']}GB, "
+              f"Free: {memory_info['free_gb']}GB, "
+              f"Total: {memory_info['total_gb']}GB")
+    else:
+        print(f"{prefix} {memory_info['error']}")
+
+
+def auto_reduce_batch_size(model, initial_batch_size, min_batch_size, device, args):
+    """
+    Automatically reduce batch size if CUDA out of memory occurs.
+    
+    Args:
+        model: The model to test
+        initial_batch_size: Starting batch size
+        min_batch_size: Minimum batch size to try
+        device: Device to test on
+        args: Training arguments
+    
+    Returns:
+        int: Working batch size
+    """
+    print(f"[MEMORY] Testing batch size {initial_batch_size}...")
+    
+    for batch_size in range(initial_batch_size, min_batch_size - 1, -4):
+        try:
+            # Create a dummy batch to test memory
+            dummy_input = torch.randn(batch_size, 1, 96, 112, 96).to(device)
+            
+            # Test forward pass
+            with torch.no_grad():
+                _ = model(dummy_input)
+            
+            # Test backward pass with a dummy loss
+            dummy_loss = torch.tensor(0.0, requires_grad=True, device=device)
+            dummy_loss.backward()
+            
+            print(f"[MEMORY] ✅ Batch size {batch_size} works! Using this for training.")
+            return batch_size
+            
+        except torch.cuda.OutOfMemoryError as e:
+            print(f"[MEMORY] ❌ Batch size {batch_size} failed: {e}")
+            
+            # Clear GPU memory
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            if batch_size <= min_batch_size:
+                print(f"[MEMORY] ⚠️  Reached minimum batch size {min_batch_size}. Training may be slow.")
+                return min_batch_size
+    
+    print(f"[MEMORY] ⚠️  Could not find working batch size. Using minimum: {min_batch_size}")
+    return min_batch_size
+
+
+def create_data_loaders_with_memory_optimization(train_dataset, val_dataset, test_dataset, args, model):
+    """
+    Create data loaders with automatic batch size optimization.
+    
+    Args:
+        train_dataset: Training dataset
+        val_dataset: Validation dataset  
+        test_dataset: Test dataset
+        args: Training arguments
+        model: Model to test memory usage with
+    
+    Returns:
+        tuple: (train_loader, val_loader, test_loader, working_batch_size)
+    """
+    working_batch_size = args.batch_size
+    
+    if args.auto_batch_size:
+        print(f"[MEMORY] Auto-batch size optimization enabled.")
+        print(f"[MEMORY] Testing memory usage with model: {type(model).__name__}")
+        
+        # Test with current batch size
+        working_batch_size = auto_reduce_batch_size(
+            model, args.batch_size, args.min_batch_size, args.device, args
+        )
+        
+        if working_batch_size != args.batch_size:
+            print(f"[MEMORY] Reduced batch size from {args.batch_size} to {working_batch_size}")
+    
+    # Create data loaders with working batch size
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=working_batch_size, 
+        shuffle=True, 
+        num_workers=args.num_workers,
+        pin_memory=True if 'cuda' in args.device else False
+    )
+    
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=working_batch_size, 
+        shuffle=False, 
+        num_workers=args.num_workers,
+        pin_memory=True if 'cuda' in args.device else False
+    )
+    
+    test_loader = DataLoader(
+        test_dataset, 
+        batch_size=working_batch_size, 
+        shuffle=False, 
+        num_workers=args.num_workers,
+        pin_memory=True if 'cuda' in args.device else False
+    )
+    
+    return train_loader, val_loader, test_loader, working_batch_size
+
+def main():
+    parser = argparse.ArgumentParser(description='Train sMRI models with k-fold cross-validation')
+    
+    # Data arguments
+    parser.add_argument("--master_csv", type=str, required=True,
+                        help="Path to master CSV file with subject IDs and labels")
+    parser.add_argument("--data_root", type=str, required=True,
+                        help="Root directory containing preprocessed sMRI data")
+    parser.add_argument("--checkpoint_dir", type=str, required=True,
+                        help="Directory to save model checkpoints and results")
+    
+    # Model arguments
+    parser.add_argument("--labels", nargs='+', type=int, required=True,
+                        help="List of label values to use for classification")
+    parser.add_argument("--models", nargs='+', type=str, required=True,
+                        choices=['Simple3DCNN', 'VisionTransformer3D', 'SwinUNETRClassifier', 'FullSwinUNETRClassifier'],
+                        help="List of models to train")
+    parser.add_argument("--use_pretrained", action='store_true', default=False,
+                        help="Use pretrained weights for models that support it")
+    
+    # Training arguments
+    parser.add_argument("--epochs", type=int, default=100, help="Number of training epochs")
+    parser.add_argument("--batch_size", type=int, default=32, help="Training batch size")
+    parser.add_argument("--learning_rate", type=float, default=0.0003, help="Learning rate")
+    parser.add_argument("--weight_decay", type=float, default=0.00001, help="Weight decay for CNN models")
+    parser.add_argument("--lr_scheduler_patience", type=int, default=5, help="LR scheduler patience")
+    parser.add_argument("--lr_scheduler_factor", type=float, default=0.5, help="LR scheduler factor (0.5 = halve LR)")
+    
+    # Hardware arguments
+    parser.add_argument("--device", type=str, default="cuda", help="Device to use (cuda, cpu, or specific GPU)")
+    parser.add_argument("--k_folds", type=int, default=5, help="Number of k-folds for cross-validation")
+    parser.add_argument("--random_seed", type=int, default=42, help="Random seed for reproducibility")
+    parser.add_argument("--base_channels", type=int, default=64, help="Base number of channels for CNN models")
+    parser.add_argument("--num_workers", type=int, default=4, help="Number of data loader workers")
+    
+    # Data split arguments
+    parser.add_argument("--val_ratio", type=float, default=0.2, help="Validation set ratio")
+    parser.add_argument("--test_ratio", type=float, default=0.2, help="Test set ratio")
+    
+    # CNN-specific arguments
+    parser.add_argument("--cnn_drop_rate", type=float, default=0.0, help="Dropout rate for CNN models")
     
     # Vision Transformer specific arguments
     parser.add_argument("--vit_warmup_epochs", type=int, default=5,
@@ -2096,10 +2227,30 @@ Examples:
                         help="Optimizer for Vision Transformer models")
     parser.add_argument("--vit_weight_decay", type=float, default=0.05,
                         help="Weight decay for Vision Transformer models (0.02-0.1 recommended)")
+    parser.add_argument("--vit_drop_rate", type=float, default=0.1,
+                        help="Dropout rate for Vision Transformer models (0.1-0.3 recommended)")
+    parser.add_argument("--vit_attn_drop_rate", type=float, default=0.0,
+                        help="Attention dropout rate for Vision Transformer models (0.0-0.1 recommended)")
+    parser.add_argument("--vit_drop_path_rate", type=float, default=0.1,
+                        help="Stochastic depth rate for Vision Transformer models (0.1-0.2 recommended)")
     
-    # Temperature scaling for multiclass calibration
+    # General training arguments
+    parser.add_argument("--grad_clip_max_norm", type=float, default=0.0,
+                        help="Gradient clipping max norm (1.0 recommended for ViT)")
+    parser.add_argument("--optimize_threshold", action='store_true', default=True,
+                        help="Optimize classification threshold on validation set")
     parser.add_argument("--use_temperature_scaling", action='store_true', default=True,
                         help="Enable temperature scaling for multiclass calibration (improves accuracy by 2-5%)")
+    
+    # Memory optimization arguments
+    parser.add_argument("--auto_batch_size", action='store_true', default=True,
+                        help="Automatically reduce batch size if CUDA out of memory occurs")
+    parser.add_argument("--max_batch_size", type=int, default=32,
+                        help="Maximum batch size to try during auto-reduction")
+    parser.add_argument("--min_batch_size", type=int, default=4,
+                        help="Minimum batch size to try during auto-reduction")
+    parser.add_argument("--memory_efficient", action='store_true', default=False,
+                        help="Enable memory-efficient training (gradient checkpointing, etc.)")
     
     args = parser.parse_args()
 
