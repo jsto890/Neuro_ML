@@ -4,7 +4,7 @@ import os
 import argparse
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, SubsetRandomSampler, WeightedRandomSampler
+from torch.utils.data import DataLoader, SubsetRandomSampler
 import numpy as np
 from sklearn.metrics import roc_auc_score, accuracy_score, confusion_matrix, classification_report, precision_recall_fscore_support, matthews_corrcoef
 import csv
@@ -825,11 +825,8 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         labels = mapped_labels
     
     class_counts = np.bincount(labels)
-    num_classes = len(class_counts)
-    # Avoid division by zero if any class absent (should be rare)
-    safe_counts = np.where(class_counts == 0, 1, class_counts)
-    inv_freq = 1.0 / safe_counts.astype(np.float64)
-    class_weights = inv_freq / inv_freq.sum()
+    class_weights = 1.0 / class_counts
+    class_weights = class_weights / class_weights.sum()
     class_weights = torch.FloatTensor(class_weights).to(device)
     
     # Check if this is a Vision Transformer model
@@ -837,30 +834,26 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                        ['visiontransformer3d', 'swinunetrclassifier', 'fullswinunetrclassifier'])
     
     # Use appropriate loss function based on model type
-    if is_vit_model:
-        # CrossEntropy for ViT (with label smoothing)
+    if is_vit_model and args.label_smoothing > 0:
+        # Use CrossEntropyLoss with label smoothing for ViT models
         criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
         print(f"[INFO] Using CrossEntropyLoss with label smoothing {args.label_smoothing} for ViT model")
     else:
-        if num_classes > 2:
-            # Multiclass CNN: weighted CE with label smoothing
-            criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=args.label_smoothing)
-            print(f"[INFO] Using CrossEntropyLoss (weighted, ls={args.label_smoothing}) for multiclass CNN")
-        else:
-            # Binary CNN: Focal loss
-            class FocalLoss(nn.Module):
-                def __init__(self, alpha=0.25, gamma=2.0):
-                    super().__init__()
-                    self.alpha = alpha
-                    self.gamma = gamma
+        # Use FocalLoss for CNN models (original behavior)
+        class FocalLoss(nn.Module):
+            def __init__(self, alpha=0.25, gamma=2):
+                super().__init__()
+                self.alpha = alpha
+                self.gamma = gamma
+            
+            def forward(self, inputs, targets):
+                ce_loss = nn.CrossEntropyLoss(reduction='none')(inputs, targets)
+                pt = torch.exp(-ce_loss)
+                focal_loss = self.alpha * (1-pt)**self.gamma * ce_loss
+                return focal_loss.mean()
 
-                def forward(self, inputs, targets):
-                    ce = nn.CrossEntropyLoss(reduction='none')(inputs, targets)
-                    pt = torch.exp(-ce)
-                    loss = (self.alpha * (1 - pt) ** self.gamma * ce).mean()
-                    return loss
-            criterion = FocalLoss(alpha=0.25, gamma=2.0)
-            print(f"[INFO] Using FocalLoss for binary CNN")
+        criterion = FocalLoss(alpha=0.25, gamma=2)
+        print(f"[INFO] Using FocalLoss for CNN model")
 
     model.to(device)
     best_val_auc = 0.0
@@ -957,21 +950,11 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             )
             print(f"[INFO] Using plateau scheduler for ViT model")
     else:
-        # CNN optimizer/scheduler
+        # Original CNN behavior
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
         print(f"[INFO] Using AdamW optimizer with weight decay {args.weight_decay} for CNN model")
+        
         # Plateau LR scheduler on validation AUC for CNN models
-    try:
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode='max',
-            factor=args.lr_scheduler_factor,
-            patience=args.lr_scheduler_patience,
-            threshold=1e-4,
-            min_lr=1e-5,
-            verbose=False,
-        )
-    except TypeError:
         try:
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer,
@@ -980,14 +963,25 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 patience=args.lr_scheduler_patience,
                 threshold=1e-4,
                 min_lr=1e-5,
+                verbose=False,
             )
         except TypeError:
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer,
-                mode='max',
-                factor=args.lr_scheduler_factor,
-                patience=args.lr_scheduler_patience,
-            )
+            try:
+                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer,
+                    mode='max',
+                    factor=args.lr_scheduler_factor,
+                    patience=args.lr_scheduler_patience,
+                    threshold=1e-4,
+                    min_lr=1e-5,
+                )
+            except TypeError:
+                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer,
+                    mode='max',
+                    factor=args.lr_scheduler_factor,
+                    patience=args.lr_scheduler_patience,
+                )
     
     current_eval_weights = 'raw'  # track which weights are used for eval
 
@@ -1729,14 +1723,13 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         
         # Handle threshold aggregation (only for binary classification)
         if num_classes == 2:
-            if num_classes == 2:
-                avg_threshold = float(np.mean([r.get('best_threshold', 0.5) for r in fold_results if r.get('best_threshold') is not None]))
-                avg_accuracy_improvement = float(np.mean([r.get('threshold_optimization', {}).get('improvement', 0.0) for r in fold_results]))
-            else:
-                avg_threshold = None
-                avg_accuracy_improvement = None
-
-            evaluation_dir = os.path.join(model_dir, "evaluation_plots")
+            avg_threshold = float(np.mean([r.get('best_threshold', 0.5) for r in fold_results if r.get('best_threshold') is not None]))
+            avg_accuracy_improvement = float(np.mean([r.get('threshold_optimization', {}).get('improvement', 0.0) for r in fold_results]))
+        else:
+            avg_threshold = None
+            avg_accuracy_improvement = None
+        
+        evaluation_dir = os.path.join(model_dir, "evaluation_plots")
         create_training_plots(folds_data, evaluation_dir, model_name)
         # Create aggregated test plots and summary
         classification_description = get_label_description(args.labels)
@@ -1818,7 +1811,6 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         if avg_accuracy_improvement is not None:
             print(f"Average accuracy improvement: {avg_accuracy_improvement:.4f}")
         else:
-            print("Average accuracy improvement: Not applicable (multiclass)")
             print("Average accuracy improvement: Not applicable (multiclass)")
         
     # Clean up temporary CSVs created for this run
@@ -2255,46 +2247,14 @@ def create_data_loaders_with_memory_optimization(train_dataset, val_dataset, tes
         if working_batch_size != args.batch_size:
             print(f"[MEMORY] Reduced batch size from {args.batch_size} to {working_batch_size}")
     
-    # Build weighted sampler for multiclass to mitigate collapse
-    # Determine if multiclass from train dataset labels
-    try:
-        train_labels_np = train_dataset.df['label'].to_numpy()
-    except Exception:
-        # Fallback: extract from dataset items (slower)
-        tmp_labels = []
-        for i in range(len(train_dataset)):
-            _, y = train_dataset[i]
-            tmp_labels.append(int(y))
-        train_labels_np = np.array(tmp_labels)
-    unique_train_labels = np.unique(train_labels_np)
-    use_weighted_sampler = len(unique_train_labels) > 2
-
-    sampler = None
-    if use_weighted_sampler:
-        from collections import Counter
-        counts = Counter(train_labels_np.tolist())
-        sample_weights = np.array([1.0 / counts[l] for l in train_labels_np], dtype=np.float64)
-        weights_tensor = torch.from_numpy(sample_weights)
-        sampler = WeightedRandomSampler(weights=weights_tensor, num_samples=len(train_labels_np), replacement=True)
-
     # Create data loaders with working batch size
-    if sampler is not None:
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=working_batch_size,
-            sampler=sampler,
-            shuffle=False,
-            num_workers=args.num_workers,
-            pin_memory=True if 'cuda' in args.device else False
-        )
-    else:
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=working_batch_size,
-            shuffle=True,
-            num_workers=args.num_workers,
-            pin_memory=True if 'cuda' in args.device else False
-        )
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=working_batch_size, 
+        shuffle=True, 
+        num_workers=args.num_workers,
+        pin_memory=True if 'cuda' in args.device else False
+    )
     
     val_loader = DataLoader(
         val_dataset, 
