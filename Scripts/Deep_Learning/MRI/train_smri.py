@@ -946,18 +946,21 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             )
             print(f"[INFO] Using Adam optimizer with weight decay {args.vit_weight_decay} for ViT model")
         
-        # Cosine schedule with warmup for ViT models
+        # Cosine schedule with warmup for ViT models (epoch-based)
         if args.vit_use_cosine_schedule:
-            total_steps = len(train_loader) * epochs
-            warmup_steps = len(train_loader) * args.vit_warmup_epochs
-            
-            def lr_lambda(step):
-                if step < warmup_steps:
-                    return float(step) / float(max(1, warmup_steps))
-                return max(0.0, 0.5 * (1.0 + math.cos(math.pi * (step - warmup_steps) / float(max(1, total_steps - warmup_steps)))))
-            
+            total_epochs = epochs
+            warmup_epochs = args.vit_warmup_epochs
+
+            def lr_lambda(current_epoch: int):
+                # Linear warmup for the first warmup_epochs
+                if current_epoch < warmup_epochs:
+                    return float(current_epoch + 1) / float(max(1, warmup_epochs))
+                # Cosine decay for the remaining epochs
+                progress = float(current_epoch - warmup_epochs) / float(max(1, total_epochs - warmup_epochs))
+                return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
+
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-            print(f"[INFO] Using cosine schedule with {args.vit_warmup_epochs} epoch warmup for ViT model")
+            print(f"[INFO] Using cosine schedule (epoch-based) with {args.vit_warmup_epochs} epoch warmup for ViT model")
         else:
             # Fallback to plateau scheduler for ViT
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
