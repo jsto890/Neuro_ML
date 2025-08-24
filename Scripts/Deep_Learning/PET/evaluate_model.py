@@ -23,6 +23,8 @@ from torch.utils.data import DataLoader
 import json
 from pathlib import Path
 import pandas as pd
+from sklearn.calibration import calibration_curve
+from scipy.optimize import minimize_scalar
 
 from dataset import PETDataset
 from models_pet import Simple3DCNN
@@ -30,6 +32,152 @@ from models_pet import Simple3DCNN
 # Set style for plots
 plt.style.use('default')
 sns.set_palette("husl")
+
+def temperature_scaling(logits, temperature):
+    """
+    Apply temperature scaling to logits.
+    
+    Args:
+        logits: Raw model outputs [N, num_classes]
+        temperature: Temperature parameter (T > 0)
+    
+    Returns:
+        Calibrated probabilities [N, num_classes]
+    """
+    return nn.Softmax(dim=1)(logits / temperature)
+
+def find_optimal_temperature(logits, labels, max_iter=1000):
+    """
+    Find optimal temperature parameter for calibration using validation set.
+    
+    Args:
+        logits: Raw model outputs [N, num_classes]
+        labels: Ground truth labels [N]
+        max_iter: Maximum iterations for optimization
+    
+    Returns:
+        optimal_temperature: Optimal temperature value
+        calibrated_probs: Probabilities after temperature scaling
+    """
+    def objective(t):
+        """Objective function: negative log-likelihood."""
+        if t <= 0:
+            return 1e10  # Penalty for invalid temperature
+        
+        # Apply temperature scaling
+        probs = temperature_scaling(torch.from_numpy(logits), t).numpy()
+        
+        # Calculate negative log-likelihood
+        nll = 0
+        for i, label in enumerate(labels):
+            nll -= np.log(probs[i, label] + 1e-15)  # Add small epsilon for numerical stability
+        
+        return nll
+    
+    # Find optimal temperature using scipy optimization
+    result = minimize_scalar(objective, bounds=(0.1, 10.0), method='bounded', options={'maxiter': max_iter})
+    
+    if result.success:
+        optimal_temperature = result.x
+        calibrated_probs = temperature_scaling(torch.from_numpy(logits), optimal_temperature).numpy()
+        return optimal_temperature, calibrated_probs
+    else:
+        print(f"Warning: Temperature optimization failed. Using default temperature 1.0")
+        return 1.0, nn.Softmax(dim=1)(torch.from_numpy(logits)).numpy()
+
+def evaluate_model_with_temperature_scaling(model, test_loader, device, val_loader=None, label_mapping=None, threshold: float | None = None):
+    """
+    Evaluate model with optional temperature scaling for better calibration.
+    
+    Args:
+        model: trained model
+        test_loader: test data loader
+        device: device to run inference on
+        val_loader: validation data loader for temperature calibration (optional)
+        label_mapping: label mapping if provided
+        threshold: threshold for binary classification (ignored for multiclass)
+    
+    Returns:
+        tuple: (predictions, probabilities, labels, temperature_info)
+    """
+    model.eval()
+    all_logits = []
+    all_probabilities = []
+    all_predictions = []
+    all_labels = []
+    
+    # First pass: collect logits and probabilities
+    with torch.no_grad():
+        for smri, labels in test_loader:
+            smri = smri.to(device)
+            
+            # Apply label mapping if provided
+            if label_mapping is not None:
+                labels = torch.tensor([label_mapping[label.item()] for label in labels], device=device)
+            
+            logits = model(smri)
+            probabilities = nn.Softmax(dim=1)(logits)
+            
+            all_logits.append(logits.cpu())
+            all_probabilities.append(probabilities.cpu())
+            all_labels.append(labels.cpu())
+    
+    # Concatenate all batches
+    all_logits = torch.cat(all_logits, dim=0).numpy()
+    all_probabilities = torch.cat(all_probabilities, dim=0).numpy()
+    all_labels = torch.cat(all_labels, dim=0).numpy()
+    
+    # Temperature scaling if validation data is provided
+    temperature_info = {'temperature': 1.0, 'calibrated': False}
+    
+    if val_loader is not None and all_logits.shape[1] > 2:  # Only for multiclass
+        print("Applying temperature scaling for multiclass calibration...")
+        
+        # Collect validation logits and labels
+        val_logits = []
+        val_labels = []
+        
+        with torch.no_grad():
+            for smri, labels in val_loader:
+                smri = smri.to(device)
+                
+                if label_mapping is not None:
+                    labels = torch.tensor([label_mapping[label.item()] for label in labels], device=device)
+                
+                logits = model(smri)
+                val_logits.append(logits.cpu())
+                val_labels.append(labels.cpu())
+        
+        val_logits = torch.cat(val_logits, dim=0).numpy()
+        val_labels = torch.cat(val_labels, dim=0).numpy()
+        
+        # Find optimal temperature
+        optimal_temperature, calibrated_probs = find_optimal_temperature(val_logits, val_labels)
+        
+        # Apply temperature scaling to test set
+        test_calibrated_probs = temperature_scaling(torch.from_numpy(all_logits), optimal_temperature).numpy()
+        
+        # Update probabilities and temperature info
+        all_probabilities = test_calibrated_probs
+        temperature_info = {
+            'temperature': float(optimal_temperature),
+            'calibrated': True,
+            'validation_logits': val_logits,
+            'validation_labels': val_labels
+        }
+        
+        print(f"Temperature scaling applied: T = {optimal_temperature:.3f}")
+    
+    # Make predictions
+    if threshold is not None and all_probabilities.shape[1] == 2:
+        # Binary classification with threshold
+        pred_pos = (all_probabilities[:, 1] >= threshold).astype(int)
+        all_predictions = pred_pos
+    else:
+        # Multiclass or binary without threshold: use argmax
+        all_predictions = np.argmax(all_probabilities, axis=1)
+    
+    return np.array(all_predictions), np.array(all_probabilities), np.array(all_labels), temperature_info
 
 def load_model(model_path, num_classes=2, device='cpu'):
     """Load a trained model from .pth file."""
@@ -52,68 +200,79 @@ def load_model(model_path, num_classes=2, device='cpu'):
     model.eval()
     return model
 
-def evaluate_model(model, test_loader, device='cpu', label_mapping=None):
-    """Evaluate model and return predictions and metrics."""
-    model.eval()
-    all_predictions = []
-    all_probabilities = []
-    all_labels = []
+def evaluate_model(model, test_loader, device='cpu', label_mapping=None, threshold: float | None = None, use_temperature_scaling=False, val_loader=None):
+    """
+    Evaluate model and return predictions and metrics.
     
-    with torch.no_grad():
-        for pet, labels in test_loader:
-            pet = pet.to(device)
-            
-            # Apply label mapping if provided
-            if label_mapping is not None:
-                labels = torch.tensor([label_mapping[label.item()] for label in labels], device=device)
-            
-            logits = model(pet)
-            probabilities = nn.Softmax(dim=1)(logits)
-            predictions = torch.argmax(logits, dim=1)
-            
-            all_predictions.extend(predictions.cpu().numpy())
-            all_probabilities.extend(probabilities.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
+    Args:
+        model: trained model
+        test_loader: test data loader
+        device: device to run inference on
+        label_mapping: label mapping if provided
+        threshold: threshold for binary classification
+        use_temperature_scaling: whether to apply temperature scaling for multiclass
+        val_loader: validation data loader for temperature calibration (required if use_temperature_scaling=True)
     
-    return np.array(all_predictions), np.array(all_probabilities), np.array(all_labels)
+    Returns:
+        tuple: (predictions, probabilities, labels) or (predictions, probabilities, labels, temperature_info)
+    """
+    if use_temperature_scaling and val_loader is not None:
+        return evaluate_model_with_temperature_scaling(
+            model, test_loader, device, val_loader, label_mapping, threshold
+        )
+    else:
+        # Original evaluation logic
+        model.eval()
+        all_predictions = []
+        all_probabilities = []
+        all_labels = []
+        
+        with torch.no_grad():
+            for smri, labels in test_loader:
+                smri = smri.to(device)
+                
+                # Apply label mapping if provided
+                if label_mapping is not None:
+                    labels = torch.tensor([label_mapping[label.item()] for label in labels], device=device)
+                
+                logits = model(smri)
+                probabilities = nn.Softmax(dim=1)(logits)
+                if threshold is not None and probabilities.shape[1] == 2:
+                    # Use provided threshold on positive class prob for binary case
+                    pred_pos = (probabilities[:, 1] >= threshold).long()
+                    predictions = pred_pos
+                else:
+                    predictions = torch.argmax(logits, dim=1)
+                
+                all_predictions.extend(predictions.cpu().numpy())
+                all_probabilities.extend(probabilities.cpu().numpy())
+                all_labels.extend(labels.cpu().numpy())
+        
+        return np.array(all_predictions), np.array(all_probabilities), np.array(all_labels)
 
 def calculate_metrics(predictions, probabilities, labels):
     """Calculate comprehensive evaluation metrics."""
-    # Ensure labels are in the correct format for binary classification
-    unique_labels = np.unique(labels)
-    if len(unique_labels) == 2 and probabilities.shape[1] == 2:
-        # For binary classification, ensure labels are in {0, 1} format
-        if not (0 in unique_labels and 1 in unique_labels):
-            # Map labels to {0, 1} if they're not already
-            label_mapping = {old_label: new_label for new_label, old_label in enumerate(sorted(unique_labels))}
-            mapped_labels = np.array([label_mapping[label] for label in labels])
-            mapped_predictions = np.array([label_mapping[pred] for pred in predictions])
-        else:
-            mapped_labels = labels
-            mapped_predictions = predictions
-    else:
-        mapped_labels = labels
-        mapped_predictions = predictions
-    
     # Basic metrics
-    accuracy = accuracy_score(mapped_labels, mapped_predictions)
-    precision = precision_score(mapped_labels, mapped_predictions, average='weighted', zero_division=0)
-    recall = recall_score(mapped_labels, mapped_predictions, average='weighted', zero_division=0)
-    f1 = f1_score(mapped_labels, mapped_predictions, average='weighted', zero_division=0)
+    accuracy = accuracy_score(labels, predictions)
+    precision = precision_score(labels, predictions, average='weighted', zero_division=0)
+    recall = recall_score(labels, predictions, average='weighted', zero_division=0)
+    f1 = f1_score(labels, predictions, average='weighted', zero_division=0)
     
     # AUC for binary classification
     if probabilities.shape[1] == 2:
-        auc = roc_auc_score(mapped_labels, probabilities[:, 1])
+        auc = roc_auc_score(labels, probabilities[:, 1])
     else:
-        auc = roc_auc_score(mapped_labels, probabilities, multi_class='ovr')
+        auc = roc_auc_score(labels, probabilities, multi_class='ovr')
     
-    # Confusion matrix
-    cm = confusion_matrix(mapped_labels, mapped_predictions)
+    # Confusion matrix (ensure all classes appear, even if zero count)
+    n_classes = probabilities.shape[1] if len(probabilities.shape) > 1 else int(np.max(predictions)) + 1
+    all_class_labels = list(range(n_classes))
+    cm = confusion_matrix(labels, predictions, labels=all_class_labels)
     
-    # Classification report
-    report = classification_report(mapped_labels, mapped_predictions, output_dict=True, zero_division=0)
+    # Classification report (ensure all classes included)
+    report = classification_report(labels, predictions, labels=all_class_labels, output_dict=True, zero_division=0)
     
-    mcc = matthews_corrcoef(mapped_labels, mapped_predictions)
+    mcc = matthews_corrcoef(labels, predictions)
     
     return {
         'accuracy': accuracy,
@@ -131,59 +290,98 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
-    # Disease label mapping
-    label_to_disease = {0: 'AD', 1: 'CN', 2: 'PD'}
+    # Disease label mapping - Updated for proper CN, AD, PD ordering
+    # This assumes labels are in order: [CN, AD, PD] or [0, 1, 2]
+    n_classes = probabilities.shape[1]
+    if n_classes == 3:
+        # For 3-class: CN, AD, PD
+        label_to_disease = {0: 'CN', 1: 'AD', 2: 'PD'}
+        disease_names = ['CN', 'AD', 'PD']
+    elif n_classes == 2:
+        # For binary classification
+        label_to_disease = {0: 'Class 0', 1: 'Class 1'}
+        disease_names = ['Class 0', 'Class 1']
+    else:
+        # For other multiclass scenarios
+        label_to_disease = {i: f'Class {i}' for i in range(n_classes)}
+        disease_names = [f'Class {i}' for i in range(n_classes)]
     
     # Create comprehensive plot
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    fig.suptitle('Model Evaluation Results - Disease Classification (PET)', fontsize=16, fontweight='bold')
+    if n_classes == 2:
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    else:
+        # For multiclass, we need more space for ROC curves
+        fig, axes = plt.subplots(3, 3, figsize=(20, 18))
+    
+    fig.suptitle('Model Evaluation Results - Disease Classification', fontsize=16, fontweight='bold')
     
     # 1. ROC Curve
     ax1 = axes[0, 0]
-    if probabilities.shape[1] == 2:
-        # Ensure labels are in {0, 1} format for ROC curve
-        unique_labels = np.unique(labels)
-        if len(unique_labels) == 2 and not (0 in unique_labels and 1 in unique_labels):
-            # Map labels to {0, 1} if they're not already
-            label_mapping = {old_label: new_label for new_label, old_label in enumerate(sorted(unique_labels))}
-            mapped_labels = np.array([label_mapping[label] for label in labels])
-        else:
-            mapped_labels = labels
-            
-        fpr, tpr, _ = roc_curve(mapped_labels, probabilities[:, 1])
+    if n_classes == 2:
+        # Binary classification
+        fpr, tpr, _ = roc_curve(labels, probabilities[:, 1])
         ax1.plot(fpr, tpr, color='blue', lw=2, label=f'ROC Curve (AUC = {metrics["auc"]:.3f})')
         ax1.plot([0, 1], [0, 1], color='red', lw=1, linestyle='--', alpha=0.8)
         ax1.set_xlabel('False Positive Rate')
         ax1.set_ylabel('True Positive Rate')
-        ax1.set_title('ROC Curve')
+        ax1.set_title('ROC Curve (Binary)')
         ax1.legend()
         ax1.grid(True, alpha=0.3)
     else:
-        ax1.text(0.5, 0.5, 'ROC Curve\n(Not available for multi-class)', 
-                ha='center', va='center', transform=ax1.transAxes)
-        ax1.set_title('ROC Curve')
+        # Multiclass: One-vs-Rest ROC curves
+        from sklearn.metrics import roc_curve, auc
+        colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown']
+        
+        for i in range(n_classes):
+            # One-vs-rest: class i vs all others
+            y_true_binary = (labels == i).astype(int)
+            fpr, tpr, _ = roc_curve(y_true_binary, probabilities[:, i])
+            roc_auc = auc(fpr, tpr)
+            
+            ax1.plot(fpr, tpr, color=colors[i % len(colors)], lw=2, 
+                    label=f'{disease_names[i]} vs Rest (AUC = {roc_auc:.3f})')
+        
+        ax1.plot([0, 1], [0, 1], color='black', lw=1, linestyle='--', alpha=0.8)
+        ax1.set_xlabel('False Positive Rate')
+        ax1.set_ylabel('True Positive Rate')
+        ax1.set_title('ROC Curves (One-vs-Rest)')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
     
     # 2. Precision-Recall Curve
     ax2 = axes[0, 1]
-    if probabilities.shape[1] == 2:
-        # Use the same mapped labels for consistency
-        precision_curve, recall_curve, _ = precision_recall_curve(mapped_labels, probabilities[:, 1])
+    if n_classes == 2:
+        # Binary classification
+        precision_curve, recall_curve, _ = precision_recall_curve(labels, probabilities[:, 1])
         ax2.plot(recall_curve, precision_curve, color='green', lw=2)
         ax2.set_xlabel('Recall')
         ax2.set_ylabel('Precision')
-        ax2.set_title('Precision-Recall Curve')
+        ax2.set_title('Precision-Recall Curve (Binary)')
         ax2.grid(True, alpha=0.3)
     else:
-        ax2.text(0.5, 0.5, 'Precision-Recall Curve\n(Not available for multi-class)', 
-                ha='center', va='center', transform=ax2.transAxes)
-        ax2.set_title('Precision-Recall Curve')
+        # Multiclass: One-vs-Rest Precision-Recall curves
+        from sklearn.metrics import precision_recall_curve, average_precision_score
+        
+        for i in range(n_classes):
+            y_true_binary = (labels == i).astype(int)
+            precision_curve, recall_curve, _ = precision_recall_curve(y_true_binary, probabilities[:, i])
+            avg_precision = average_precision_score(y_true_binary, probabilities[:, i])
+            
+            ax2.plot(recall_curve, precision_curve, color=colors[i % len(colors)], lw=2,
+                    label=f'{disease_names[i]} vs Rest (AP = {avg_precision:.3f})')
+        
+        ax2.set_xlabel('Recall')
+        ax2.set_ylabel('Precision')
+        ax2.set_title('Precision-Recall Curves (One-vs-Rest)')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
     
     # 3. Confusion Matrix
     ax3 = axes[0, 2]
     cm = metrics['confusion_matrix']
     # Get disease labels for the confusion matrix
-    n_classes = len(cm)
-    disease_labels = [label_to_disease.get(i, f'Class {i}') for i in range(n_classes)]
+    n_classes_actual = len(cm)
+    disease_labels = [label_to_disease.get(i, f'Class {i}') for i in range(n_classes_actual)]
     
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax3,
                xticklabels=disease_labels, yticklabels=disease_labels)
@@ -226,13 +424,13 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     
     # 6. Probability Distribution
     ax6 = axes[1, 2]
-    if probabilities.shape[1] == 2:
+    if n_classes == 2:
         # For binary classification, show probability distribution
         positive_probs = probabilities[:, 1]
         ax6.hist(positive_probs, bins=20, alpha=0.7, color='orange', edgecolor='black')
         ax6.set_xlabel('Probability of Positive Class')
         ax6.set_ylabel('Count')
-        ax6.set_title('Probability Distribution')
+        ax6.set_title('Probability Distribution (Binary)')
         ax6.grid(True, alpha=0.3)
     else:
         # For multi-class, show max probability distribution
@@ -240,8 +438,59 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         ax6.hist(max_probs, bins=20, alpha=0.7, color='orange', edgecolor='black')
         ax6.set_xlabel('Maximum Probability')
         ax6.set_ylabel('Count')
-        ax6.set_title('Probability Distribution')
+        ax6.set_title('Probability Distribution (Multiclass)')
         ax6.grid(True, alpha=0.3)
+    
+    # 7. Per-class Performance (only for multiclass)
+    if n_classes > 2:
+        ax7 = axes[2, 0]
+        # Calculate per-class metrics
+        from sklearn.metrics import precision_recall_fscore_support
+        precision_per_class, recall_per_class, f1_per_class, _ = precision_recall_fscore_support(
+            labels, predictions, average=None, zero_division=0
+        )
+        
+        x = np.arange(len(disease_names))
+        width = 0.25
+        
+        ax7.bar(x - width, precision_per_class, width, label='Precision', alpha=0.7)
+        ax7.bar(x, recall_per_class, width, label='Recall', alpha=0.7)
+        ax7.bar(x + width, f1_per_class, width, label='F1-Score', alpha=0.7)
+        
+        ax7.set_xlabel('Classes')
+        ax7.set_ylabel('Score')
+        ax7.set_title('Per-Class Performance Metrics')
+        ax7.set_xticks(x)
+        ax7.set_xticklabels(disease_names)
+        ax7.legend()
+        ax7.grid(True, alpha=0.3)
+        ax7.set_ylim(0, 1)
+        
+        # 8. Class Balance Analysis
+        ax8 = axes[2, 1]
+        unique_labels_actual, counts_actual = np.unique(labels, return_counts=True)
+        disease_labels_actual = [label_to_disease.get(label, f'Class {label}') for label in unique_labels_actual]
+        
+        ax8.bar(range(len(unique_labels_actual)), counts_actual, alpha=0.7, color='lightgreen', edgecolor='black')
+        ax8.set_xlabel('Actual Class')
+        ax8.set_ylabel('Count')
+        ax8.set_title('Class Distribution in Test Set')
+        ax8.set_xticks(range(len(unique_labels_actual)))
+        ax8.set_xticklabels(disease_labels_actual)
+        ax8.grid(True, alpha=0.3)
+        
+        # 9. Confidence Analysis
+        ax9 = axes[2, 2]
+        # Show confidence distribution for each class
+        for i in range(n_classes):
+            class_probs = probabilities[:, i]
+            ax9.hist(class_probs, bins=20, alpha=0.5, label=disease_names[i], density=True)
+        
+        ax9.set_xlabel('Predicted Probability')
+        ax9.set_ylabel('Density')
+        ax9.set_title('Class-wise Confidence Distribution')
+        ax9.legend()
+        ax9.grid(True, alpha=0.3)
     
     plt.tight_layout()
     plot_path = output_path / 'model_evaluation_analysis.png'
@@ -305,6 +554,10 @@ def main():
                         help="Device to use (cpu/cuda)")
     parser.add_argument("--num_classes", type=int, default=2,
                         help="Number of classes in the model")
+    parser.add_argument("--use_temperature_scaling", action="store_true",
+                        help="Whether to apply temperature scaling for multiclass calibration")
+    parser.add_argument("--val_csv", type=str,
+                        help="Path to validation labels CSV file for temperature scaling (required if --use_temperature_scaling is True)")
     
     args = parser.parse_args()
     
@@ -321,10 +574,26 @@ def main():
         shuffle=False,
         num_workers=args.num_workers
     )
+
+    # Create validation dataset if temperature scaling is used
+    val_dataset = None
+    val_loader = None
+    if args.use_temperature_scaling and args.val_csv:
+        print(f"Loading validation data from: {args.val_csv}")
+        val_dataset = PETDataset(csv_path=args.val_csv, data_root=args.data_root)
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.num_workers
+        )
     
     # Evaluate model
     print("Running evaluation...")
-    predictions, probabilities, labels = evaluate_model(model, test_loader, args.device)
+    predictions, probabilities, labels, temperature_info = evaluate_model(
+        model, test_loader, args.device, label_mapping=None, threshold=None,
+        use_temperature_scaling=args.use_temperature_scaling, val_loader=val_loader
+    )
     
     # Calculate metrics
     print("Calculating metrics...")
