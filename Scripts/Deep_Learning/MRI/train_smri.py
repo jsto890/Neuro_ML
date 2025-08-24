@@ -1729,14 +1729,14 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         
         # Handle threshold aggregation (only for binary classification)
         if num_classes == 2:
-            if num_classes == 2:
-                avg_threshold = float(np.mean([r.get('best_threshold', 0.5) for r in fold_results if r.get('best_threshold') is not None]))
-                avg_accuracy_improvement = float(np.mean([r.get('threshold_optimization', {}).get('improvement', 0.0) for r in fold_results]))
-            else:
-                avg_threshold = None
-                avg_accuracy_improvement = None
+            avg_threshold = float(np.mean([r.get('best_threshold', 0.5) for r in fold_results if r.get('best_threshold') is not None]))
+            avg_accuracy_improvement = float(np.mean([r.get('threshold_optimization', {}).get('improvement', 0.0) for r in fold_results]))
+        else:
+            avg_threshold = None
+            avg_accuracy_improvement = None
 
-            evaluation_dir = os.path.join(model_dir, "evaluation_plots")
+        evaluation_dir = os.path.join(model_dir, "evaluation_plots")
+        os.makedirs(evaluation_dir, exist_ok=True)
         create_training_plots(folds_data, evaluation_dir, model_name)
         # Create aggregated test plots and summary
         classification_description = get_label_description(args.labels)
