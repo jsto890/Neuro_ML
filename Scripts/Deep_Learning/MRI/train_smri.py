@@ -681,7 +681,16 @@ def create_test_summary_plots(fold_test_metrics, output_dir="./deep_learning_plo
     # 5. Average Confusion Matrix
     ax5 = axes[1, 1]
     if avg_cm is not None:
-        sns.heatmap(avg_cm, annot=True, fmt='.1f', cmap='Blues', xticklabels=['CN', 'AD'], yticklabels=['CN', 'AD'], ax=ax5)
+        # Determine labels based on confusion matrix shape
+        n_classes = avg_cm.shape[0]
+        if n_classes == 2:
+            class_labels = ['CN', 'AD']
+        elif n_classes == 3:
+            class_labels = ['CN', 'AD', 'PD']
+        else:
+            class_labels = [f'Class {i}' for i in range(n_classes)]
+        
+        sns.heatmap(avg_cm, annot=True, fmt='.1f', cmap='Blues', xticklabels=class_labels, yticklabels=class_labels, ax=ax5)
         ax5.set_title('Average Confusion Matrix (Test)')
         ax5.set_xlabel('Predicted')
         ax5.set_ylabel('Actual')
