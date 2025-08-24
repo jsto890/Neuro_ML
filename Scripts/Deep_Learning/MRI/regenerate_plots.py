@@ -27,7 +27,49 @@ def load_folds_data(model_dir: str, model_name: str) -> Optional[List[Dict[str, 
     return None
 
 
-def load_fold_test_metrics(model_dir: str) -> List[Dict[str, Any]]:
+def _pad_metrics_with_all_labels(metrics: Dict[str, Any], all_labels: Optional[List[int]]) -> Dict[str, Any]:
+    """Ensure confusion matrix and classification report include all labels.
+    If all_labels is None, returns metrics unchanged.
+    """
+    if not all_labels:
+        return metrics
+    try:
+        # Confusion matrix padding
+        cm = metrics.get("confusion_matrix")
+        report = metrics.get("classification_report", {})
+        if cm is not None and isinstance(cm, list):
+            import numpy as np
+            present_labels = []
+            # Extract numeric class keys from classification_report if available
+            for k in report.keys():
+                if isinstance(k, str) and k.isdigit():
+                    present_labels.append(int(k))
+            # Fallback to range of current cm size if report absent
+            if not present_labels:
+                present_labels = list(range(len(cm)))
+            label_to_idx = {lbl: i for i, lbl in enumerate(all_labels)}
+            new_cm = np.zeros((len(all_labels), len(all_labels)), dtype=int)
+            cm_arr = np.array(cm)
+            for i_src, lbl_true in enumerate(present_labels):
+                for j_src, lbl_pred in enumerate(present_labels):
+                    if lbl_true in label_to_idx and lbl_pred in label_to_idx:
+                        new_cm[label_to_idx[lbl_true], label_to_idx[lbl_pred]] = int(cm_arr[i_src, j_src])
+            metrics["confusion_matrix"] = new_cm.tolist()
+
+        # Ensure each class exists in classification_report
+        if isinstance(report, dict):
+            for lbl in all_labels:
+                key = str(lbl)
+                if key not in report:
+                    report[key] = {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 0}
+            metrics["classification_report"] = report
+    except Exception:
+        # Do not fail regen if padding fails
+        return metrics
+    return metrics
+
+
+def load_fold_test_metrics(model_dir: str, all_labels: Optional[List[int]] = None) -> List[Dict[str, Any]]:
     """Reconstruct fold_test_metrics from per-fold test_metrics JSON files."""
     fold_test_metrics: List[Dict[str, Any]] = []
 
@@ -39,6 +81,7 @@ def load_fold_test_metrics(model_dir: str) -> List[Dict[str, Any]]:
             metrics_path = os.path.join(model_dir, fname)
             with open(metrics_path, "r") as f:
                 metrics = json.load(f)
+            metrics = _pad_metrics_with_all_labels(metrics, all_labels)
             fold_test_metrics.append({
                 "fold": fold_idx,
                 "metrics": metrics,
@@ -57,6 +100,7 @@ def load_fold_test_metrics(model_dir: str) -> List[Dict[str, Any]]:
                 continue
             with open(metrics_path, "r") as f:
                 metrics = json.load(f)
+            metrics = _pad_metrics_with_all_labels(metrics, all_labels)
             fold_test_metrics.append({
                 "fold": fold_idx,
                 "metrics": metrics,
@@ -100,7 +144,7 @@ def main():
         print("[INFO] Training folds data not found; skipping training plots.")
 
     # Rebuild fold_test_metrics and regenerate test summary plots
-    fold_test_metrics = load_fold_test_metrics(model_dir)
+    fold_test_metrics = load_fold_test_metrics(model_dir, args.labels)
     classification_description = get_label_description(args.labels) if (args.labels and get_label_description) else None
     create_test_summary_plots(fold_test_metrics, evaluation_dir, model_name, classification_description=classification_description)
 
