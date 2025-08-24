@@ -961,17 +961,6 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
         print(f"[INFO] Using AdamW optimizer with weight decay {args.weight_decay} for CNN model")
         # Plateau LR scheduler on validation AUC for CNN models
-    try:
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode='max',
-            factor=args.lr_scheduler_factor,
-            patience=args.lr_scheduler_patience,
-            threshold=1e-4,
-            min_lr=1e-5,
-            verbose=False,
-        )
-    except TypeError:
         try:
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer,
@@ -980,14 +969,25 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 patience=args.lr_scheduler_patience,
                 threshold=1e-4,
                 min_lr=1e-5,
+                verbose=False,
             )
         except TypeError:
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer,
-                mode='max',
-                factor=args.lr_scheduler_factor,
-                patience=args.lr_scheduler_patience,
-            )
+            try:
+                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer,
+                    mode='max',
+                    factor=args.lr_scheduler_factor,
+                    patience=args.lr_scheduler_patience,
+                    threshold=1e-4,
+                    min_lr=1e-5,
+                )
+            except TypeError:
+                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer,
+                    mode='max',
+                    factor=args.lr_scheduler_factor,
+                    patience=args.lr_scheduler_patience,
+                )
     
     current_eval_weights = 'raw'  # track which weights are used for eval
 
@@ -1130,15 +1130,12 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 'support': int(support[i])
             }
 
-        # Step plateau scheduler on val AUC
-        # Step scheduler based on model type
-        if is_vit_model and args.vit_use_cosine_schedule:
-            # Step-based scheduler for ViT with cosine schedule
-            scheduler.step()
+        # Step scheduler (handle both LambdaLR and ReduceLROnPlateau robustly)
+        if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            scheduler.step(val_auc)
             new_lr = optimizer.param_groups[0]['lr']
         else:
-            # Plateau scheduler for CNN models or ViT with plateau
-            scheduler.step(val_auc)
+            scheduler.step()
             new_lr = optimizer.param_groups[0]['lr']
         
         # Store epoch data
