@@ -3,6 +3,9 @@ import re
 import json
 import argparse
 from typing import List, Dict, Any, Optional
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # Reuse plotting helpers from training script
 try:
@@ -147,6 +150,53 @@ def main():
     fold_test_metrics = load_fold_test_metrics(model_dir, args.labels)
     classification_description = get_label_description(args.labels) if (args.labels and get_label_description) else None
     create_test_summary_plots(fold_test_metrics, evaluation_dir, model_name, classification_description=classification_description)
+
+    # Additionally, force per-fold confusion matrix labels to include all classes
+    def _disease_names_from_labels(lbls: Optional[List[int]]) -> List[str]:
+        if not lbls:
+            return []
+        name_map = {0: 'CN', 1: 'AD', 2: 'PD'}
+        return [name_map.get(i, f'Class {i}') for i in lbls]
+
+    disease_names = _disease_names_from_labels(args.labels)
+
+    def _save_fixed_cm(cm: List[List[int]], out_path: str, names: List[str]):
+        try:
+            cm_arr = np.array(cm)
+            fig, ax = plt.subplots(figsize=(5, 4))
+            sns.heatmap(cm_arr, annot=True, fmt='d', cmap='Blues', ax=ax,
+                        xticklabels=names if names else 'auto',
+                        yticklabels=names if names else 'auto')
+            ax.set_xlabel('Predicted')
+            ax.set_ylabel('Actual')
+            ax.set_title('Confusion Matrix (Fixed Labels)')
+            fig.tight_layout()
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            fig.savefig(out_path, dpi=200, bbox_inches='tight')
+            plt.close(fig)
+        except Exception:
+            pass
+
+    # Write per-fold fixed confusion matrices
+    for item in fold_test_metrics:
+        fold_idx = item.get('fold')
+        metrics = item.get('metrics', {})
+        cm = metrics.get('confusion_matrix')
+        if cm is None:
+            continue
+        fold_dir = os.path.join(model_dir, f"test_evaluation_plots_fold_{fold_idx}")
+        out_path = os.path.join(fold_dir, 'confusion_matrix_fixed.png')
+        _save_fixed_cm(cm, out_path, disease_names)
+
+    # Also write an aggregated (sum) confusion matrix across folds
+    try:
+        cms = [np.array(item['metrics']['confusion_matrix']) for item in fold_test_metrics if 'metrics' in item and 'confusion_matrix' in item['metrics']]
+        if cms:
+            agg_cm = np.sum(cms, axis=0)
+            out_path_summary = os.path.join(evaluation_dir, 'confusion_matrix_summary_fixed.png')
+            _save_fixed_cm(agg_cm.tolist(), out_path_summary, disease_names)
+    except Exception:
+        pass
 
     print(f"Regenerated plots saved to: {evaluation_dir}")
 
