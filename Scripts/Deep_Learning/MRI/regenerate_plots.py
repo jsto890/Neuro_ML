@@ -149,7 +149,40 @@ def main():
     # Rebuild fold_test_metrics and regenerate test summary plots
     fold_test_metrics = load_fold_test_metrics(model_dir, args.labels)
     classification_description = get_label_description(args.labels) if (args.labels and get_label_description) else None
+    # Generate the default summary first
     create_test_summary_plots(fold_test_metrics, evaluation_dir, model_name, classification_description=classification_description)
+    
+    # Now create an alternate summary PNG that replaces the confusion matrix panel
+    # with the cumulative (sum) confusion matrix using fixed labels
+    try:
+        # Import plotting helper from evaluation
+        from evaluate_model import create_evaluation_plots as _create_eval_plot
+    except Exception:
+        _create_eval_plot = None
+
+    # Build cumulative metrics from fold_test_metrics
+    try:
+        cms = [np.array(item['metrics']['confusion_matrix']) for item in fold_test_metrics if 'metrics' in item and 'confusion_matrix' in item['metrics']]
+        if cms:
+            agg_cm = np.sum(cms, axis=0)
+            # Build a pseudo metrics dict using averaged scalar metrics but cumulative CM
+            # Use the first fold's scalar metrics as a baseline
+            base = fold_test_metrics[0]['metrics']
+            pseudo_metrics = {
+                'accuracy': float(np.mean([m['metrics']['accuracy'] for m in fold_test_metrics])),
+                'precision': float(np.mean([m['metrics']['precision'] for m in fold_test_metrics])),
+                'recall': float(np.mean([m['metrics']['recall'] for m in fold_test_metrics])),
+                'f1_score': float(np.mean([m['metrics']['f1_score'] for m in fold_test_metrics])),
+                'auc': float(np.mean([m['metrics']['auc'] for m in fold_test_metrics])),
+                'mcc': float(np.mean([m['metrics']['mcc'] for m in fold_test_metrics])),
+                'confusion_matrix': agg_cm,
+                'classification_report': base.get('classification_report', {})
+            }
+            # Create a replacement panel PNG to be used alongside the default summary
+            cm_summary_path = os.path.join(evaluation_dir, 'confusion_matrix_summary_fixed.png')
+            _save_fixed_cm(agg_cm.tolist(), cm_summary_path, disease_names)
+    except Exception:
+        pass
 
     # Additionally, force per-fold confusion matrix labels to include all classes
     def _disease_names_from_labels(lbls: Optional[List[int]]) -> List[str]:
