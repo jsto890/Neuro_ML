@@ -68,7 +68,7 @@ def main():
                         suvr_found = False
                         for site in sites:
                             for disease in diseases:
-                                suvr_file = subject_dir / f"{subject_id}_{site}_PET_{disease}_SUVR.nii.gz"
+                                suvr_file = subject_dir / f"{subject_id}_{site}_PET_{disease}_SUVR_s2_brain_soft4.nii.gz"
                                 if suvr_file.exists():
                                     pet_files.append(suvr_file)
                                     subject_ids.add(subject_id)
@@ -80,7 +80,7 @@ def main():
                         
                         if not suvr_found:
                             print(f"[WARNING] No SUVR file found for {subject_id} in {subject_dir}")
-                            print(f"[WARNING] Expected pattern: {subject_id}_<SITE>_PET_<DISEASE>_SUVR.nii.gz")
+                            print(f"[WARNING] Expected pattern: {subject_id}_<SITE>_PET_<DISEASE>_SUVR_s2_brain_soft4.nii.gz")
                             print(f"[WARNING] Available files in {subject_dir}:")
                             for file in subject_dir.iterdir():
                                 if file.is_file():

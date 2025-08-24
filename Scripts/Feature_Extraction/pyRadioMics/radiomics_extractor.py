@@ -43,8 +43,11 @@ class RadiomicsExtractor:
             },
             'PET': {
                 'data_path': self.config['preprocessed_data']['pet_p'],
-                'file_pattern': 'pet_mni_crop.nii.gz',  # Final preprocessed PET
-                'subdir': '{site}/{dx}/{subject_id}'
+                # PET layout (radiomics): data/preprocessed/PET/{disease}/{subject_id}/
+                # Filename: {sid}_{site}_PET_{disease}_SUVR_s2_brain_soft4.nii.gz
+                # We will search with a wildcard for {site}
+                'file_pattern': None,
+                'subdir': '{dx}/{subject_id}'
             },
             'SPECT': {
                 'data_path': self.config['preprocessed_data']['spect_p'],
@@ -70,19 +73,28 @@ class RadiomicsExtractor:
         file_pattern = config['file_pattern']
         subdir = config['subdir']
         
-        # Handle different subdirectory patterns
-        if '{site}' in subdir and '{dx}' in subdir:
-            # For PET data, we need to find the site and diagnosis
-            # This is a simplified approach - you might need to adjust based on your actual structure
-            for site_dir in Path(data_path).iterdir():
-                if site_dir.is_dir():
-                    for dx_dir in site_dir.iterdir():
-                        if dx_dir.is_dir():
-                            subject_dir = dx_dir / subject_id
-                            if subject_dir.exists():
-                                image_path = subject_dir / file_pattern
-                                if image_path.exists():
-                                    return str(image_path)
+        # PET: data/preprocessed/PET/{disease}/{subject_id}/{sid}_{site}_PET_{disease}_SUVR_s2_brain_soft4.nii.gz
+        if modality.upper() == 'PET':
+            base = Path(os.path.expanduser(data_path))
+            if not base.exists():
+                return None
+            # Iterate diseases (subdirs)
+            for dx_dir in base.iterdir():
+                if not dx_dir.is_dir():
+                    continue
+                subject_dir = dx_dir / subject_id
+                if not subject_dir.exists():
+                    continue
+                # Prefer SUVR_s2_brain_soft4 pattern; wildcard site
+                candidates = list(subject_dir.glob(f"{subject_id}_*_PET_{dx_dir.name}_SUVR_s2_brain_soft4.nii.gz"))
+                if not candidates:
+                    # Fallback to legacy SUVR name
+                    candidates = list(subject_dir.glob(f"{subject_id}_*_PET_{dx_dir.name}_SUVR.nii.gz"))
+                if candidates:
+                    return str(candidates[0])
+            return None
+        
+        # Handle different subdirectory patterns (MRI/SPECT)
         else:
             # For MRI and SPECT data
             subdir_path = Path(data_path) / subdir.format(subject_id=subject_id)
@@ -155,8 +167,12 @@ class RadiomicsExtractor:
         # Save results
         if all_features:
             results_df = pd.DataFrame(all_features)
-            output_filename = f"radiomics_{modality}_{Path(labels_path).stem}.csv"
-            output_path = Path(output_dir) / output_filename
+            # Save PET radiomics to a fixed filename as requested
+            if modality.upper() == 'PET':
+                output_path = Path(output_dir) / "radiomics_pet.csv"
+            else:
+                output_filename = f"radiomics_{modality}_{Path(labels_path).stem}.csv"
+                output_path = Path(output_dir) / output_filename
             results_df.to_csv(output_path, index=False)
             
             logger.info(f"\n💾 Saved {len(all_features)} feature sets to {output_path}")

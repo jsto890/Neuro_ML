@@ -1,16 +1,43 @@
 import os
 import re
+import argparse
 import nibabel as nib
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from ipywidgets import interact, IntSlider
+
+def _resolve_nii_path() -> str:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--nii", type=str, default=None,
+                        help="Path to a NIfTI file (.nii or .nii.gz)")
+    args, _ = parser.parse_known_args()
+    if args.nii:
+        return os.path.expanduser(args.nii)
+    # Fallback to previous default path (edit if desired)
+    return "/Volumes/reseng202500013-ndd-ml/data/Final_SPECT/CN_SPECT_PPMI_postprocessed/Subject_3204/5. finalised.nii.gz"
 
 # Load the NIfTI file
-nii_file = "/Volumes/reseng202500013-ndd-ml/data/preprocessed/PET/CN/sub-I1515935_ADNI_PET_CN/sub-I1515935_ADNI_PET_CN_SUVR_s2_brain.nii.gz"
+nii_file = _resolve_nii_path()
 
 img = nib.load(nii_file)
 data = img.get_fdata()
+
+# If 4D (e.g., dynamic PET), reduce to 3D for display
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument("--reduce", type=str, default="mean", choices=["mean", "first", "last", "frame"],
+                    help="How to reduce a 4D volume to 3D for display")
+_parser.add_argument("--frame", type=int, default=0, help="Frame index when --reduce=frame")
+_args, _ = _parser.parse_known_args()
+if data.ndim == 4:
+    if _args.reduce == "mean":
+        data = data.mean(axis=-1)
+    elif _args.reduce == "first":
+        data = data[..., 0]
+    elif _args.reduce == "last":
+        data = data[..., -1]
+    elif _args.reduce == "frame":
+        fi = max(0, min(_args.frame, data.shape[-1] - 1))
+        data = data[..., fi]
 
 print("  shape:", img.shape)
 print("  affine:\n", img.affine)
@@ -62,29 +89,21 @@ init_axial = shape[2] // 2    # Axial plane (Z-axis)
 init_coronal = shape[1] // 3   # Coronal plane (Y-axis)
 init_sagittal = shape[0] // 2  # Sagittal plane (X-axis)
 
-def view_slices(axial_idx, coronal_idx, sagittal_idx):
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    fig.suptitle(
-        f"SubjectID: {metadata['SubjectID']} | Dataset: {metadata['Dataset']} | Modality: {metadata['Modality']} | Disease: {metadata['Disease']}",
-        fontsize=12
-    )
+# Static 3-panel figure (no sliders)
+fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+fig.suptitle(
+    f"SubjectID: {metadata['SubjectID']} | Dataset: {metadata['Dataset']} | Modality: {metadata['Modality']} | Disease: {metadata['Disease']}",
+    fontsize=12
+)
 
-    # Axial view (Top-down)
-    axes[0].imshow(data[:, :, axial_idx].T, cmap="gray", origin="lower")
-    axes[0].set_title(f"Axial View (slice {axial_idx})")
+axes[0].imshow(data[:, :, init_axial].T, cmap="gray", origin="lower")
+axes[0].set_title(f"Axial View (slice {init_axial})")
 
-    # Coronal view (Front-facing)
-    axes[1].imshow(data[:, coronal_idx, :].T, cmap="gray", origin="lower")
-    axes[1].set_title(f"Coronal View (slice {coronal_idx})")
+axes[1].imshow(data[:, init_coronal, :].T, cmap="gray", origin="lower")
+axes[1].set_title(f"Coronal View (slice {init_coronal})")
 
-    # Sagittal view (Side-facing)
-    axes[2].imshow(data[sagittal_idx, :, :].T, cmap="gray", origin="lower")
-    axes[2].set_title(f"Sagittal View (slice {sagittal_idx})")
+axes[2].imshow(data[init_sagittal, :, :].T, cmap="gray", origin="lower")
+axes[2].set_title(f"Sagittal View (slice {init_sagittal})")
 
-    plt.show()
-
-# Create interactive sliders for each plane
-interact(view_slices,
-         axial_idx=IntSlider(min=0, max=shape[2]-1, step=1, value=init_axial, description="Axial"),
-         coronal_idx=IntSlider(min=0, max=shape[1]-1, step=1, value=init_coronal, description="Coronal"),
-         sagittal_idx=IntSlider(min=0, max=shape[0]-1, step=1, value=init_sagittal, description="Sagittal"))
+plt.tight_layout()
+plt.show()
