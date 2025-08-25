@@ -12,7 +12,12 @@ OUTPUT_LABELS_PATH = DATA_DIR / "pet_labels.csv"
 label_map = {"AD": 0, "CN": 1, "PD": 2}
 
 # Required file pattern for PET subjects
-# Only subjects with this file will be included: {subject_id}_{site}_PET_{disease}_SUVR.nii.gz
+# Includes subjects with files like:
+#   {subject_id}_{site}_PET_{disease}_SUVR_s2_brain_soft4.nii.gz
+#   {subject_id}_{site}_PET_{disease}_SUVR_s2_brain_soft4.nii
+#   {subject_id}_{site}_PET_{disease}_SUVR.nii.gz
+#   {subject_id}_{site}_PET_{disease}_SUVR.nii
+
 
 def main():
     print(f"[INFO] Scanning directory: {PREPROCESSED_PET_DIR}")
@@ -31,60 +36,52 @@ def main():
         print(f"[INFO] Will remove subjects without PET SUVR files")
     
     # Find all PET SUVR files in the preprocessed directory
-    # Structure: PET/(site)/(disease)/((sub-id)_SITE_PET_DISEASE)/(sub-id)_SITE_PET_DISEASE_SUVR.nii.gz
+    # Expected structure: PET/{disease}/{subject_dir}/
     pet_files = []
     subject_ids = set()
-    
-    for site_dir in PREPROCESSED_PET_DIR.iterdir():
-        if not site_dir.is_dir():
+
+    for disease_dir in PREPROCESSED_PET_DIR.iterdir():
+        if not disease_dir.is_dir():
             continue
-            
-        site_name = site_dir.name
-        print(f"[INFO] Scanning site: {site_name}")
-        
-        for disease_dir in site_dir.iterdir():
-            if not disease_dir.is_dir():
+
+        disease_folder_name = disease_dir.name
+        print(f"[INFO] Scanning disease: {disease_folder_name}")
+
+        for subject_dir in disease_dir.iterdir():
+            if not subject_dir.is_dir():
                 continue
-                
-            disease_name = disease_dir.name
-            print(f"[INFO] Scanning disease: {disease_name}")
-            
-            for subject_dir in disease_dir.iterdir():
-                if not subject_dir.is_dir():
-                    continue
-                    
-                # Extract subject ID from directory name (e.g., "sub-001_ADNI_PET_CN" -> "sub-001")
-                subject_dir_name = subject_dir.name
-                if subject_dir_name.startswith('sub-'):
-                    # Extract the subject ID part before the first underscore after sub-
-                    parts = subject_dir_name.split('_')
-                    if len(parts) >= 2:
-                        subject_id = parts[0]  # This will be "sub-001"
-                        
-                        # Look for SUVR files with the exact pattern: {subject_id}_{site}_PET_{disease}_SUVR.nii.gz
-                        sites = ['ADNI', 'PPMI']
-                        diseases = ['CN', 'PD', 'AD']
-                        
-                        suvr_found = False
-                        for site in sites:
-                            for disease in diseases:
-                                suvr_file = subject_dir / f"{subject_id}_{site}_PET_{disease}_SUVR_s2_brain_soft4.nii.gz"
-                                if suvr_file.exists():
-                                    pet_files.append(suvr_file)
-                                    subject_ids.add(subject_id)
-                                    suvr_found = True
-                                    print(f"[INFO] Found PET SUVR file: {suvr_file}")
-                                    break
-                            if suvr_found:
-                                break
-                        
-                        if not suvr_found:
-                            print(f"[WARNING] No SUVR file found for {subject_id} in {subject_dir}")
-                            print(f"[WARNING] Expected pattern: {subject_id}_<SITE>_PET_<DISEASE>_SUVR_s2_brain_soft4.nii.gz")
-                            print(f"[WARNING] Available files in {subject_dir}:")
-                            for file in subject_dir.iterdir():
-                                if file.is_file():
-                                    print(f"    {file.name}")
+
+            subject_dir_name = subject_dir.name
+            if not subject_dir_name.startswith('sub-'):
+                continue
+
+            # Derive subject_id and disease token from directory name, e.g., sub-XXX_ADNI_PET_CN
+            parts = subject_dir_name.split('_')
+            subject_id = parts[0] if parts else subject_dir_name
+            disease_token = parts[-1].upper() if len(parts) >= 4 else disease_folder_name.upper()
+
+            # Prefer soft4, then legacy; prefer .nii.gz, then .nii
+            patterns = [
+                f"{subject_id}_*_PET_{disease_token}_SUVR_s2_brain_soft4.nii.gz",
+                f"{subject_id}_*_PET_{disease_token}_SUVR_s2_brain_soft4.nii",
+                f"{subject_id}_*_PET_{disease_token}_SUVR.nii.gz",
+                f"{subject_id}_*_PET_{disease_token}_SUVR.nii",
+            ]
+
+            found_path = None
+            for pat in patterns:
+                matches = list(subject_dir.glob(pat))
+                if matches:
+                    found_path = matches[0]
+                    break
+
+            if found_path is not None:
+                pet_files.append(found_path)
+                subject_ids.add(subject_id)
+                print(f"[INFO] Found PET SUVR file: {found_path}")
+            else:
+                print(f"[WARNING] No SUVR file found for {subject_id} in {subject_dir}")
+                print(f"[WARNING] Tried patterns: {patterns}")
     
     print(f"[INFO] Found {len(subject_ids)} unique subjects with PET SUVR files")
     print(f"[INFO] Found {len(pet_files)} PET SUVR files")
@@ -133,45 +130,37 @@ def main():
         subjects_to_remove = []
         for i, label_entry in enumerate(existing_labels_data):
             subject_name = label_entry['subject_id']
-            # Check if this subject has a SUVR file
+            # Check if this subject has a SUVR file in any disease folder
             subject_found = False
-            for site_dir in PREPROCESSED_PET_DIR.iterdir():
-                if not site_dir.is_dir():
+            for disease_dir in PREPROCESSED_PET_DIR.iterdir():
+                if not disease_dir.is_dir():
                     continue
-                for disease_dir in site_dir.iterdir():
-                    if not disease_dir.is_dir():
+                for subject_dir in disease_dir.iterdir():
+                    if not subject_dir.is_dir():
                         continue
-                    for subject_dir in disease_dir.iterdir():
-                        if not subject_dir.is_dir():
-                            continue
-                        subject_dir_name = subject_dir.name
-                        if subject_dir_name.startswith('sub-'):
-                            parts = subject_dir_name.split('_')
-                            if len(parts) >= 2:
-                                subject_id_check = parts[0]
-                                if subject_id_check == subject_name:
-                                    # Check for SUVR files
-                                    sites = ['ADNI', 'PPMI']
-                                    diseases = ['CN', 'PD', 'AD']
-                                    for site in sites:
-                                        for disease in diseases:
-                                            suvr_file = subject_dir / f"{subject_id_check}_{site}_PET_{disease}_SUVR.nii.gz"
-                                            if suvr_file.exists():
-                                                subject_found = True
-                                                break
-                                        if subject_found:
-                                            break
-                                    if subject_found:
-                                        break
-                            if subject_found:
-                                break
-                        if subject_found:
+                    subject_dir_name = subject_dir.name
+                    if not subject_dir_name.startswith('sub-'):
+                        continue
+                    parts = subject_dir_name.split('_')
+                    subject_id_check = parts[0] if parts else subject_dir_name
+                    if subject_id_check != subject_name:
+                        continue
+                    disease_token = parts[-1].upper() if len(parts) >= 4 else disease_dir.name.upper()
+                    patterns = [
+                        f"{subject_id_check}_*_PET_{disease_token}_SUVR_s2_brain_soft4.nii.gz",
+                        f"{subject_id_check}_*_PET_{disease_token}_SUVR_s2_brain_soft4.nii",
+                        f"{subject_id_check}_*_PET_{disease_token}_SUVR.nii.gz",
+                        f"{subject_id_check}_*_PET_{disease_token}_SUVR.nii",
+                    ]
+                    for pat in patterns:
+                        if list(subject_dir.glob(pat)):
+                            subject_found = True
                             break
                     if subject_found:
                         break
                 if subject_found:
                     break
-            
+
             if not subject_found:
                 subjects_to_remove.append(i)
                 print(f"[INFO] Removing: {subject_name} (no SUVR file)")
