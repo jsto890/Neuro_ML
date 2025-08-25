@@ -11,6 +11,16 @@ OUTPUT_LABELS_PATH = DATA_DIR / "pet_labels.csv"
 # Disease label mapping
 label_map = {"AD": 0, "CN": 1, "PD": 2}
 
+def normalize_disease(disease_raw):
+    s = str(disease_raw).strip().upper()
+    if s.startswith("AD"):
+        return "AD"
+    if s.startswith("CN"):
+        return "CN"
+    if s.startswith("PD"):
+        return "PD"
+    return s
+
 # Required file pattern for PET subjects
 # Includes subjects with files like:
 #   {subject_id}_{site}_PET_{disease}_SUVR_s2_brain_soft4.nii.gz
@@ -111,19 +121,20 @@ def main():
         
         # Get the disease label
         disease = subject_record.iloc[0]['Disease']
+        disease_norm = normalize_disease(disease)
         
-        if disease not in label_map:
+        if disease_norm not in label_map:
             print(f"[WARNING] Unknown disease '{disease}' for subject {subject_numeric}, skipping")
             continue
         
-        label = label_map[disease]
+        label = label_map[disease_norm]
         labels_data.append({
             'subject_id': subject_id,
             'label': label
         })
         
         new_subjects_count += 1
-        print(f"[INFO] Added: {subject_id} -> {disease} (label {label})")
+        print(f"[INFO] Added: {subject_id} -> {disease_norm} (label {label})")
     
     # Remove subjects from existing data that don't have SUVR files
     if OUTPUT_LABELS_PATH.exists():
@@ -160,7 +171,7 @@ def main():
                         break
                 if subject_found:
                     break
-
+            
             if not subject_found:
                 subjects_to_remove.append(i)
                 print(f"[INFO] Removing: {subject_name} (no SUVR file)")
