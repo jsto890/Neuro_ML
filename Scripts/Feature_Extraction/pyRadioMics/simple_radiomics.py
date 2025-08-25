@@ -110,10 +110,8 @@ def find_mri_path(data_root, subject_id):
 
 def find_pet_path(data_root, subject_id):
     """Find the PET image path for a given subject.
-    Looks in data/preprocessed/PET/{disease}/{subject_id}/ for:
-      {sid}_*_PET_{disease}_SUVR_s2_brain_soft4.nii.gz
-    Falls back to:
-      {sid}_*_PET_{disease}_SUVR.nii.gz
+    Scans data/preprocessed/PET/{disease}/{subject_dir}/ where subject_dir starts with subject_id,
+    e.g., sub-XXXX_ADNI_PET_CN, and matches preferred/legacy SUVR filenames.
     """
     try:
         from pathlib import Path
@@ -123,14 +121,26 @@ def find_pet_path(data_root, subject_id):
         for dx_dir in base.iterdir():
             if not dx_dir.is_dir():
                 continue
-            subject_dir = dx_dir / subject_id
-            if not subject_dir.exists():
-                continue
-            candidates = list(subject_dir.glob(f"{subject_id}_*_PET_{dx_dir.name}_SUVR_s2_brain_soft4.nii.gz"))
-            if not candidates:
-                candidates = list(subject_dir.glob(f"{subject_id}_*_PET_{dx_dir.name}_SUVR.nii.gz"))
-            if candidates:
-                return str(candidates[0])
+            # Find subject-specific directory by prefix match (subject_id + "_")
+            for subject_dir in dx_dir.iterdir():
+                if not subject_dir.is_dir():
+                    continue
+                name = subject_dir.name
+                if not name.startswith(f"{subject_id}_"):
+                    continue
+                parts = name.split('_')
+                disease_token = parts[-1] if len(parts) >= 4 else dx_dir.name
+                disease_token_upper = str(disease_token).upper()
+                patterns = [
+                    f"{subject_id}_*_PET_{disease_token_upper}_SUVR_s2_brain_soft4.nii.gz",
+                    f"{subject_id}_*_PET_{disease_token_upper}_SUVR_s2_brain_soft4.nii",
+                    f"{subject_id}_*_PET_{disease_token_upper}_SUVR.nii.gz",
+                    f"{subject_id}_*_PET_{disease_token_upper}_SUVR.nii",
+                ]
+                for pat in patterns:
+                    matches = list(subject_dir.glob(pat))
+                    if matches:
+                        return str(matches[0])
         return None
     except Exception:
         return None
