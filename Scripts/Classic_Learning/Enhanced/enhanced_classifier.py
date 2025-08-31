@@ -162,13 +162,32 @@ class EnhancedRadiomicsClassifier:
                 
                 self.logger.info(f"Label remapping: {self.original_to_training_labels}")
             
-            # Extract components
+            # Extract components (ensure features are numeric only)
             self.subject_ids = self.data['subject_id'].values
             self.y = self.data['label'].values.astype(int)  # Ensure labels are integers
-            self.feature_names = [col for col in self.data.columns if col not in ['subject_id', 'label']]
+
+            # Start from all feature columns except identifiers/labels
+            feature_cols = [col for col in self.data.columns if col not in ['subject_id', 'label']]
+
+            # Drop known non-numeric columns if present (e.g., PET image_path)
+            if 'image_path' in feature_cols:
+                feature_cols.remove('image_path')
+                self.logger.info("Removed non-numeric column: 'image_path'")
+
+            # Coerce all feature columns to numeric; invalid parsing -> NaN
+            features_df = self.data[feature_cols].apply(pd.to_numeric, errors='coerce')
+
+            # Drop columns that are entirely NaN after coercion (non-numeric across all rows)
+            all_nan_cols = features_df.columns[features_df.isna().all()].tolist()
+            if all_nan_cols:
+                features_df = features_df.drop(columns=all_nan_cols)
+                self.logger.info(f"Removed {len(all_nan_cols)} non-numeric/empty feature columns: {all_nan_cols[:10]}{'...' if len(all_nan_cols) > 10 else ''}")
+
+            # Set final features
+            self.feature_names = list(features_df.columns)
             # Preserve full list for per-fold resets in outer CV
             self._original_feature_names = list(self.feature_names)
-            self.X = self.data[self.feature_names].values
+            self.X = features_df.values
             
             self.logger.info(f"Data shape: {self.X.shape}")
             unique_labels = np.unique(self.y)
