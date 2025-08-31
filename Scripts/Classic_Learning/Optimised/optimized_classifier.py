@@ -149,6 +149,11 @@ class ImprovedOptimizedRadiomicsClassifier:
         self.top_feature_indices: List[int] = []
         self.mi_selector = None
         self.rfecv_selector = None
+        # Speed safeguards: enable fast SVM settings unless explicitly disabled
+        try:
+            self.fast_svm = (os.environ.get('P4P_DISABLE_FAST_SVM', '0') != '1')
+        except Exception:
+            self.fast_svm = True
         
         # Setup logging
         self.setup_logging()
@@ -527,6 +532,13 @@ class ImprovedOptimizedRadiomicsClassifier:
         
         try:
             X_train, y_train, _ = self.splits['train']
+            n_train = X_train.shape[0]
+            # Decide fast settings for large training sets
+            use_fast = self.fast_svm and (n_train > 1000)
+            cv_folds = 3 if use_fast else 5
+            bayes_n_iter = 20 if use_fast else 30
+            if use_fast:
+                self.logger.info(f"Fast SVM mode enabled (n_train={n_train}): cv={cv_folds}, n_iter={bayes_n_iter}, kernel=['linear']")
             
             # Create base SVM with improved settings
             base_svm = SVC(probability=True, random_state=self.random_state)
@@ -534,20 +546,20 @@ class ImprovedOptimizedRadiomicsClassifier:
             if BAYESIAN_AVAILABLE:
                 # Improved search space for better convergence
                 search_spaces = {
-                    'C': Real(0.1, 50.0, prior='log-uniform'),  # Reduced upper bound
+                    'C': Real(0.1, (10.0 if use_fast else 50.0), prior='log-uniform'),
                     'gamma': Categorical(['scale', 'auto']),
-                    'kernel': Categorical(['linear', 'rbf']),  # Removed poly kernel
+                    'kernel': Categorical(['linear'] if use_fast else ['linear', 'rbf']),
                     'class_weight': Categorical(['balanced']),
-                    'max_iter': Integer(5000, 15000),  # Reduced max_iter
-                    'tol': Real(1e-4, 1e-2, prior='log-uniform')  # Increased tolerance
+                    'max_iter': Integer(5000, 15000),
+                    'tol': Real(1e-4, 1e-2, prior='log-uniform')
                 }
                 
                 # Bayesian optimization with fewer iterations (silence repetitive CV fit logs)
                 bayes_search = BayesSearchCV(
                     estimator=base_svm,
                     search_spaces=search_spaces,
-                    n_iter=30,  # Reduced iterations
-                    cv=5,
+                    n_iter=bayes_n_iter,
+                    cv=cv_folds,
                     scoring='roc_auc',  # Changed to roc_auc
                     n_jobs=-1,
                     verbose=0,
@@ -576,9 +588,9 @@ class ImprovedOptimizedRadiomicsClassifier:
             else:
                 # Fallback to grid search
                 param_grid = {
-                    'C': [0.1, 1.0, 10.0, 50.0],
-                    'gamma': ['scale', 'auto'],
-                    'kernel': ['linear', 'rbf'],
+                    'C': ([0.1, 1.0, 10.0] if use_fast else [0.1, 1.0, 10.0, 50.0]),
+                    'gamma': (['scale'] if use_fast else ['scale', 'auto']),
+                    'kernel': (['linear'] if use_fast else ['linear', 'rbf']),
                     'class_weight': ['balanced'],
                     'max_iter': [10000],
                     'tol': [1e-3]
@@ -588,7 +600,7 @@ class ImprovedOptimizedRadiomicsClassifier:
                 grid_search = GridSearchCV(
                     estimator=base_svm,
                     param_grid=param_grid,
-                    cv=5,
+                    cv=cv_folds,
                     scoring='roc_auc',
                     n_jobs=-1,
                     verbose=0
@@ -622,25 +634,21 @@ class ImprovedOptimizedRadiomicsClassifier:
         
         try:
             X_train, y_train, _ = self.splits['train']
+            n_train = X_train.shape[0]
+            use_fast = self.fast_svm and (n_train > 1000)
+            cv_folds = 3 if use_fast else 5
+            if use_fast:
+                self.logger.info(f"Fast ensemble CV enabled (n_train={n_train}): cv={cv_folds}, dropping svm_rbf for speed")
             
             # Simplified base models with regularization
             base_models = {
                 'svm_linear': SVC(
                     kernel='linear', 
                     probability=True, 
-                        random_state=self.random_state,
+                    random_state=self.random_state,
                     max_iter=10000, 
                     tol=1e-3,
-                    C=1.0  # Conservative C value
-                ),
-                'svm_rbf': SVC(
-                    kernel='rbf', 
-                    probability=True, 
-                        random_state=self.random_state,
-                    max_iter=10000, 
-                    tol=1e-3,
-                    C=1.0,  # Conservative C value
-                    gamma='scale'
+                    C=1.0
                 ),
                 'logistic_regression': LogisticRegression(
                     C=1.0, 
@@ -649,6 +657,16 @@ class ImprovedOptimizedRadiomicsClassifier:
                     max_iter=1000
                 )
             }
+            if not use_fast:
+                base_models['svm_rbf'] = SVC(
+                    kernel='rbf', 
+                    probability=True, 
+                    random_state=self.random_state,
+                    max_iter=10000, 
+                    tol=1e-3,
+                    C=1.0,
+                    gamma='scale'
+                )
             
             # Add XGBoost with regularization if available
             if XGBOOST_AVAILABLE:
@@ -672,8 +690,8 @@ class ImprovedOptimizedRadiomicsClassifier:
                 self.logger.info(f"Training base model: {name}")
                 
                 # Get cross-validation predictions
-                cv_predictions = cross_val_predict(model, X_train, y_train, cv=5, method='predict')
-                cv_probabilities = cross_val_predict(model, X_train, y_train, cv=5, method='predict_proba')
+                cv_predictions = cross_val_predict(model, X_train, y_train, cv=cv_folds, method='predict')
+                cv_probabilities = cross_val_predict(model, X_train, y_train, cv=cv_folds, method='predict_proba')
                 
                 base_predictions[name] = cv_predictions
                 base_probabilities[name] = cv_probabilities[:, 1]
