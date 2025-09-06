@@ -85,12 +85,24 @@ class Simple3DCNN(nn.Module):
 
     def forward(self, x):
         # x shape = [B, 1, D, H, W]
+        # Ensure classifier matches current feature size (handles dynamic input shapes)
         if not self._initialized:
             self._initialize_classifier(x)
-            
-        x = self.features(x)
-        x = x.view(x.size(0), -1)
-        logits = self.classifier(x)
+        
+        features = self.features(x)
+        flat = features.view(features.size(0), -1)
+        
+        # If feature size changed (e.g., different input dims), reinitialize first FC layer on-the-fly
+        expected_in_features = self.classifier[0].in_features if isinstance(self.classifier[0], nn.Linear) else None
+        current_in_features = flat.size(1)
+        if expected_in_features is None or expected_in_features != current_in_features:
+            device = features.device
+            self.classifier[0] = nn.Linear(current_in_features, 256).to(device)
+            for layer in self.classifier:
+                layer.to(device)
+            self._initialized = True
+        
+        logits = self.classifier(flat)
         return logits
 
 
