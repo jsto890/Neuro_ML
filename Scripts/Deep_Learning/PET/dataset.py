@@ -11,11 +11,13 @@ class PETDataset(Dataset):
     PyTorch Dataset for loading single-channel PET volumes and labels.
     Expects:
       - A CSV file with columns 'subject_id' and 'label' (headered or headerless).
-      - A data_root directory containing PET/(site)/(disease)/((sub-id)_SITE_PET_DISEASE)/(sub-id)_SITE_PET_DISEASE_SUVR_s2_brain_soft4.nii.gz files
-      - Sites: ADNI, PPMI
-      - Diseases: CN, PD, AD
-      - Dynamic naming: sub-{ID}_{SITE}_PET_{DISEASE}_SUVR_s2_brain_soft4.nii.gz
-      - Fallback naming: sub-{ID}_{SITE}_PET_{DISEASE}_SUVR.nii.gz (for backward compatibility)
+      - Supports multiple on-disk layouts under data_root/PET:
+        1) PET/(site)/(disease)/((sub-id)_SITE_PET_DISEASE)/(sub-id)_SITE_PET_DISEASE_*.nii.gz
+        2) PET/(disease)/((sub-id)_SITE_PET_DISEASE)/(sub-id)_SITE_PET_DISEASE_*.nii.gz
+        3) PET/(disease)/(sub-id)_SITE_PET_DISEASE_*.nii.gz
+         Where Sites ∈ {ADNI, PPMI} and Diseases ∈ {CN, PD, AD}
+      - Preferred naming: sub-{ID}_{SITE}_PET_{DISEASE}_SUVR_s2_brain_soft4.nii.gz
+      - Fallback naming:  sub-{ID}_{SITE}_PET_{DISEASE}_SUVR.nii.gz (for backward compatibility)
     """
 
     def __init__(self, csv_path: str, data_root: str):
@@ -58,33 +60,65 @@ class PETDataset(Dataset):
         label = torch.tensor(self.labels[idx], dtype=torch.long)
 
         # Construct the path to the PET SUVR image
-        # Updated pattern: *_SUVR_s2_brain_soft4.nii.gz
+        # Updated to robustly handle multiple directory layouts
         possible_paths = []
         
         # Try different combinations of site and disease
         sites = ['ADNI', 'PPMI']
         diseases = ['CN', 'PD', 'AD']
         
+        # 1) Original layout: PET/(site)/(disease)/subdir/file
         for site in sites:
             for disease in diseases:
-                # Try the new naming pattern with _SUVR_s2_brain_soft4.nii.gz
                 possible_paths.append(os.path.join(
-                    self.data_root,
-                    "PET",
-                    site,
-                    disease,
+                    self.data_root, "PET", site, disease,
                     f"{sid}_{site}_PET_{disease}",
                     f"{sid}_{site}_PET_{disease}_SUVR_s2_brain_soft4.nii.gz"
                 ))
-                # Also try the old pattern as fallback
                 possible_paths.append(os.path.join(
-                    self.data_root,
-                    "PET",
-                    site,
-                    disease,
+                    self.data_root, "PET", site, disease,
                     f"{sid}_{site}_PET_{disease}",
                     f"{sid}_{site}_PET_{disease}_SUVR.nii.gz"
                 ))
+
+        # 2) Layout: PET/(disease)/subdir/file (no site level)
+        for disease in diseases:
+            for site in sites:
+                possible_paths.append(os.path.join(
+                    self.data_root, "PET", disease,
+                    f"{sid}_{site}_PET_{disease}",
+                    f"{sid}_{site}_PET_{disease}_SUVR_s2_brain_soft4.nii.gz"
+                ))
+                possible_paths.append(os.path.join(
+                    self.data_root, "PET", disease,
+                    f"{sid}_{site}_PET_{disease}",
+                    f"{sid}_{site}_PET_{disease}_SUVR.nii.gz"
+                ))
+
+                # 3) Layout: PET/(disease)/file (no subdir)
+                possible_paths.append(os.path.join(
+                    self.data_root, "PET", disease,
+                    f"{sid}_{site}_PET_{disease}_SUVR_s2_brain_soft4.nii.gz"
+                ))
+                possible_paths.append(os.path.join(
+                    self.data_root, "PET", disease,
+                    f"{sid}_{site}_PET_{disease}_SUVR.nii.gz"
+                ))
+
+        # 4) Defensive: some datasets may place subdir disease under a different top-level folder
+        for top_dir in diseases:
+            for site in sites:
+                for disease in diseases:
+                    possible_paths.append(os.path.join(
+                        self.data_root, "PET", top_dir,
+                        f"{sid}_{site}_PET_{disease}",
+                        f"{sid}_{site}_PET_{disease}_SUVR_s2_brain_soft4.nii.gz"
+                    ))
+                    possible_paths.append(os.path.join(
+                        self.data_root, "PET", top_dir,
+                        f"{sid}_{site}_PET_{disease}",
+                        f"{sid}_{site}_PET_{disease}_SUVR.nii.gz"
+                    ))
         
         # Try to find the file
         img_path = None
