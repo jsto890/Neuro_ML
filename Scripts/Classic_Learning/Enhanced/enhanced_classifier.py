@@ -494,11 +494,18 @@ class EnhancedRadiomicsClassifier:
                     # For multiclass, use accuracy which is more reliable
                     scoring = 'accuracy'
                 
-                search = RandomizedSearchCV(
-                    model, param_grid, n_iter=20, cv=5,
-                    scoring=scoring, n_jobs=search_n_jobs,
+                # Default search config
+                search_kwargs = dict(
+                    n_iter=20, cv=5, scoring=scoring, n_jobs=search_n_jobs,
                     random_state=self.random_state, verbose=0
                 )
+                
+                # SVM-specific: increase verbosity and cap parallelism
+                is_svm = (name == 'SVM')
+                if is_svm:
+                    search_kwargs.update(dict(n_jobs=2, verbose=2))
+                
+                search = RandomizedSearchCV(model, param_grid, **search_kwargs)
                 
                 # Suppress verbose library-level stdout for certain learners
                 if (LIGHTGBM_AVAILABLE and 'LightGBM' in name) or (XGBOOST_AVAILABLE and 'XGBoost' in name):
@@ -507,7 +514,30 @@ class EnhancedRadiomicsClassifier:
                         with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
                             search.fit(X_train, y_train_remapped)
                 else:
-                    search.fit(X_train, y_train_remapped)
+                    # For SVM, cap BLAS/threads to avoid oversubscription
+                    if is_svm:
+                        import os
+                        old_env = {
+                            'OMP_NUM_THREADS': os.environ.get('OMP_NUM_THREADS'),
+                            'MKL_NUM_THREADS': os.environ.get('MKL_NUM_THREADS'),
+                            'OPENBLAS_NUM_THREADS': os.environ.get('OPENBLAS_NUM_THREADS'),
+                            'LOKY_MAX_CPU_COUNT': os.environ.get('LOKY_MAX_CPU_COUNT'),
+                        }
+                        os.environ['OMP_NUM_THREADS'] = '1'
+                        os.environ['MKL_NUM_THREADS'] = '1'
+                        os.environ['OPENBLAS_NUM_THREADS'] = '1'
+                        os.environ['LOKY_MAX_CPU_COUNT'] = '8'
+                        try:
+                            search.fit(X_train, y_train_remapped)
+                        finally:
+                            # Restore environment
+                            for k, v in old_env.items():
+                                if v is None:
+                                    os.environ.pop(k, None)
+                                else:
+                                    os.environ[k] = v
+                    else:
+                        search.fit(X_train, y_train_remapped)
                 
                 # Check if we got a valid score
                 if np.isnan(search.best_score_):
