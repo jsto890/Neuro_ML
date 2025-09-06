@@ -177,6 +177,18 @@ class PETDataset(Dataset):
         # Standardize shape for training consistency
         data = self._pad_or_crop_center(data, self.target_shape)
 
+        # Sanitize NaNs/Infs and normalize (similar spirit to sMRI z-scored inputs)
+        data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+        nonzero_mask = data != 0
+        if np.any(nonzero_mask):
+            mu = float(data[nonzero_mask].mean())
+            sigma = float(data[nonzero_mask].std())
+            if sigma < 1e-6:
+                sigma = 1.0
+            data = (data - mu) / sigma
+            # Optional clipping to avoid extreme tails
+            data = np.clip(data, -5.0, 5.0)
+
         # Convert to a torch.FloatTensor with shape [1, D, H, W]
         pet = torch.from_numpy(data.astype(np.float32)).unsqueeze(0)
 
