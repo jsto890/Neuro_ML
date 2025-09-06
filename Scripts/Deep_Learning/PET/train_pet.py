@@ -1119,12 +1119,22 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
         print(f"[DEBUG] optimal_threshold: {optimal_threshold}")
         
         # Calculate additional metrics using optimal threshold (binary) or argmax (multiclass)
-        if optimal_threshold is not None and probs.shape[1] == 2:
-            # Binary classification with threshold optimization
-            optimal_preds = (probs >= optimal_threshold).astype(int)
+        is_binary = bool(val_results.get('is_binary', probs.ndim == 1))
+        if is_binary:
+            threshold_to_use = optimal_threshold if optimal_threshold is not None else 0.5
+            # probs can be (N,) for positive-class probs or (N,2) for full probs
+            if probs.ndim == 2 and probs.shape[1] == 2:
+                pos_probs = probs[:, 1]
+            else:
+                pos_probs = probs
+            optimal_preds = (pos_probs >= threshold_to_use).astype(int)
         else:
-            # Multiclass or no threshold: use argmax
-            optimal_preds = np.argmax(probs, axis=1)
+            # Multiclass: use argmax over classes
+            if probs.ndim == 1:
+                # Defensive: if somehow 1D, fallback to binary behavior at 0.5
+                optimal_preds = (probs >= 0.5).astype(int)
+            else:
+                optimal_preds = np.argmax(probs, axis=1)
         
         precision, recall, f1, support = precision_recall_fscore_support(val_labels, optimal_preds, average=None, zero_division=0)
         cm = confusion_matrix(val_labels, optimal_preds)
