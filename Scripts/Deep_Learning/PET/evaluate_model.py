@@ -334,7 +334,6 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         ax1.grid(True, alpha=0.3)
     else:
         # Multiclass: One-vs-Rest ROC curves
-        from sklearn.metrics import roc_curve, auc
         colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown']
         
         for i in range(n_classes):
@@ -369,7 +368,6 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         ax2.grid(True, alpha=0.3)
     else:
         # Multiclass: One-vs-Rest Precision-Recall curves
-        from sklearn.metrics import precision_recall_curve, average_precision_score
         
         for i in range(n_classes):
             y_true_binary = (labels == i).astype(int)
