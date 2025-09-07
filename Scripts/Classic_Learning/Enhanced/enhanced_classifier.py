@@ -414,7 +414,8 @@ class EnhancedRadiomicsClassifier:
             'RandomForest': (RandomForestClassifier(random_state=self.random_state), rf_params),
             'ExtraTrees': (ExtraTreesClassifier(random_state=self.random_state), et_params),
             'LogisticRegression': (LogisticRegression(random_state=self.random_state), lr_params),
-            'SVM': (SVC(random_state=self.random_state, probability=True), svm_params),
+            # Make search cheaper: disable probability during search, cap cache and iterations
+            'SVM': (SVC(random_state=self.random_state, probability=False, cache_size=2000, max_iter=50000), svm_params),
             'LinearSVC_Calibrated': (linsvc_calibrated, linsvc_params),
             'GradientBoosting': (GradientBoostingClassifier(random_state=self.random_state), gb_params),
             'KNN': (KNeighborsClassifier(), knn_params)
@@ -503,7 +504,7 @@ class EnhancedRadiomicsClassifier:
                 # SVM-specific: increase verbosity and cap parallelism
                 is_svm = (name == 'SVM')
                 if is_svm:
-                    search_kwargs.update(dict(n_jobs=2, verbose=2))
+                    search_kwargs.update(dict(n_jobs=2, verbose=2, pre_dispatch='2*n_jobs'))
                 
                 search = RandomizedSearchCV(model, param_grid, **search_kwargs)
                 
