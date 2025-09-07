@@ -729,7 +729,7 @@ class EnhancedRadiomicsClassifier:
                             if set(np.unique(y_split_original)) != {0, 1}:
                                 y_binary = (y_split_original == y_split_original.max()).astype(int)
                                 auc = roc_auc_score(y_binary, ensemble_probs)
-                                self.logger.debug(f"Binary: converted labels {np.unique(y_split_original)} to {y_binary} for AUC")
+                                self.logger.debug(f"Binary: converted labels {np.unique(y_split_original)} to {np.unique(y_binary)} for AUC")
                             else:
                                 auc = roc_auc_score(y_split_original, ensemble_probs)
                         else:
@@ -1455,7 +1455,7 @@ class EnhancedRadiomicsClassifier:
                                 y_prob_class = y_prob
                             
                             # Compute ROC curve for this class vs rest
-                            fpr, tpr, _ = roc_curve(y_true_binary, y_prob_class)
+                            fpr, tpr, _ = roc_curve(y_true_binary, y_prob_class, pos_label=1)
                             auc_score = roc_auc_score(y_true_binary, y_prob_class)
                             class_aucs.append(auc_score)
                             
@@ -1485,14 +1485,20 @@ class EnhancedRadiomicsClassifier:
             else:
                 # Binary: plot ROC curves
                 for i, (y_true, y_prob) in enumerate(ensemble_rocs):
+                    # Map labels to {0,1} if needed
+                    uniq = sorted(np.unique(y_true))
+                    if set(uniq) != {0, 1}:
+                        y_bin = (y_true == uniq[-1]).astype(int)
+                    else:
+                        y_bin = y_true
                     # Ensure y_prob is 1D for binary classification
                     if y_prob.ndim > 1:
                         y_prob_1d = y_prob[:, 1]  # Extract probability of positive class
                     else:
                         y_prob_1d = y_prob
                     
-                    fpr, tpr, _ = roc_curve(y_true, y_prob_1d)
-                    auc_score = roc_auc_score(y_true, y_prob_1d)
+                    fpr, tpr, _ = roc_curve(y_bin, y_prob_1d, pos_label=1)
+                    auc_score = roc_auc_score(y_bin, y_prob_1d)
                     ax3.plot(fpr, tpr, label=f'Fold {i+1} (AUC = {auc_score:.3f})', alpha=0.8, linewidth=2)
                 
                 ax3.plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Random')
