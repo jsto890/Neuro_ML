@@ -27,7 +27,7 @@ from sklearn.model_selection import (
 )
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC, LinearSVC
+from sklearn.svm import SVC
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler, RobustScaler
@@ -330,12 +330,6 @@ class EnhancedRadiomicsClassifier:
             'gamma': ['scale', 'auto'],
             'class_weight': ['balanced']
         }
-        # Calibrated LinearSVC (probabilistic)
-        linsvc_calibrated = CalibratedClassifierCV(estimator=LinearSVC(max_iter=10000), cv=5, method='sigmoid')
-        linsvc_params = {
-            'estimator__C': [0.1, 1.0, 10.0],
-            'estimator__loss': ['squared_hinge']
-        }
         
         # Gradient Boosting
         gb_params = {
@@ -414,9 +408,7 @@ class EnhancedRadiomicsClassifier:
             'RandomForest': (RandomForestClassifier(random_state=self.random_state), rf_params),
             'ExtraTrees': (ExtraTreesClassifier(random_state=self.random_state), et_params),
             'LogisticRegression': (LogisticRegression(random_state=self.random_state), lr_params),
-            # Make search cheaper: disable probability during search, cap cache and iterations
             'SVM': (SVC(random_state=self.random_state, probability=False, cache_size=2000, max_iter=50000), svm_params),
-            'LinearSVC_Calibrated': (linsvc_calibrated, linsvc_params),
             'GradientBoosting': (GradientBoostingClassifier(random_state=self.random_state), gb_params),
             'KNN': (KNeighborsClassifier(), knn_params)
         }
