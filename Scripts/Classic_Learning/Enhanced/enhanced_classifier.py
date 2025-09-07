@@ -558,6 +558,36 @@ class EnhancedRadiomicsClassifier:
                 self.best_models[name] = search.best_estimator_
                 self.logger.info(f"{name} - Best CV score: {fallback_score:.4f}")
                 self.logger.info(f"{name} - Best params: {search.best_params_}")
+                
+                # If SVM, calibrate once to enable predict_proba
+                if name == 'SVM':
+                    try:
+                        self.logger.info("Calibrating best SVM with sigmoid on 5-fold CV (single pass)...")
+                        from sklearn.calibration import CalibratedClassifierCV
+                        calibrated = CalibratedClassifierCV(estimator=self.best_models[name], method='sigmoid', cv=5)
+                        import os
+                        old_env = {
+                            'OMP_NUM_THREADS': os.environ.get('OMP_NUM_THREADS'),
+                            'MKL_NUM_THREADS': os.environ.get('MKL_NUM_THREADS'),
+                            'OPENBLAS_NUM_THREADS': os.environ.get('OPENBLAS_NUM_THREADS'),
+                            'LOKY_MAX_CPU_COUNT': os.environ.get('LOKY_MAX_CPU_COUNT'),
+                        }
+                        os.environ['OMP_NUM_THREADS'] = '1'
+                        os.environ['MKL_NUM_THREADS'] = '1'
+                        os.environ['OPENBLAS_NUM_THREADS'] = '1'
+                        os.environ['LOKY_MAX_CPU_COUNT'] = '8'
+                        try:
+                            calibrated.fit(X_train, y_train_remapped)
+                            self.best_models[name] = calibrated
+                            self.logger.info("Calibration complete for SVM; predict_proba available.")
+                        finally:
+                            for k, v in old_env.items():
+                                if v is None:
+                                    os.environ.pop(k, None)
+                                else:
+                                    os.environ[k] = v
+                    except Exception as e:
+                        self.logger.warning(f"SVM calibration failed; proceeding without calibrated probabilities: {e}")
             
             return True
             
