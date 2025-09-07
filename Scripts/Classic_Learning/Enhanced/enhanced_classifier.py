@@ -801,8 +801,15 @@ class EnhancedRadiomicsClassifier:
                 for name in model_names:
                     y_true = self.results[name]['test']['true_labels']
                     y_probs = self.results[name]['test']['probabilities']
-                    
-                    fpr, tpr, _ = roc_curve(y_true, y_probs)
+                    # Ensure binary labels are 0/1; map {min_label,max_label} -> {0,1}
+                    unique_lbls = sorted(np.unique(y_true))
+                    if set(unique_lbls) != {0, 1}:
+                        y_bin = (y_true == unique_lbls[-1]).astype(int)
+                        pos_label = 1
+                    else:
+                        y_bin = y_true
+                        pos_label = 1
+                    fpr, tpr, _ = roc_curve(y_bin, y_probs, pos_label=pos_label)
                     auc_score = self.results[name]['test']['auc']
                     axes[0, 1].plot(fpr, tpr, label=f'{name} (AUC = {auc_score:.3f})')
             else:
