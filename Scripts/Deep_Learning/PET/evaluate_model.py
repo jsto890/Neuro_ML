@@ -17,7 +17,7 @@ import seaborn as sns
 from sklearn.metrics import (
     roc_auc_score, accuracy_score, precision_score, recall_score, f1_score,
     confusion_matrix, classification_report, roc_curve, precision_recall_curve,
-    matthews_corrcoef
+    matthews_corrcoef, auc, average_precision_score
 )
 from torch.utils.data import DataLoader
 import json
@@ -319,7 +319,12 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     ax1 = axes[0, 0]
     if n_classes == 2:
         # Binary classification
-        fpr, tpr, _ = roc_curve(labels, probabilities[:, 1])
+        try:
+            pos_probs = probabilities[:, 1]
+        except Exception:
+            # Handle shape (N,)
+            pos_probs = probabilities
+        fpr, tpr, _ = roc_curve(labels, pos_probs)
         ax1.plot(fpr, tpr, color='blue', lw=2, label=f'ROC Curve (AUC = {metrics["auc"]:.3f})')
         ax1.plot([0, 1], [0, 1], color='red', lw=1, linestyle='--', alpha=0.8)
         ax1.set_xlabel('False Positive Rate')
@@ -352,7 +357,11 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     ax2 = axes[0, 1]
     if n_classes == 2:
         # Binary classification
-        precision_curve, recall_curve, _ = precision_recall_curve(labels, probabilities[:, 1])
+        try:
+            pos_probs = probabilities[:, 1]
+        except Exception:
+            pos_probs = probabilities
+        precision_curve, recall_curve, _ = precision_recall_curve(labels, pos_probs)
         ax2.plot(recall_curve, precision_curve, color='green', lw=2)
         ax2.set_xlabel('Recall')
         ax2.set_ylabel('Precision')
@@ -426,7 +435,10 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     ax6 = axes[1, 2]
     if n_classes == 2:
         # For binary classification, show probability distribution
-        positive_probs = probabilities[:, 1]
+        try:
+            positive_probs = probabilities[:, 1]
+        except Exception:
+            positive_probs = probabilities
         ax6.hist(positive_probs, bins=20, alpha=0.7, color='orange', edgecolor='black')
         ax6.set_xlabel('Probability of Positive Class')
         ax6.set_ylabel('Count')
