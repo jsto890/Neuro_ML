@@ -4,6 +4,7 @@ import os
 import torch
 from torch.utils.data import Dataset
 import nibabel as nib
+from nibabel.filebasedimages import ImageFileError
 import pandas as pd
 import numpy as np
 
@@ -171,8 +172,13 @@ class PETDataset(Dataset):
         if img_path is None:
             raise FileNotFoundError(f"PET file not found for subject {sid}. Tried paths: {possible_paths}")
 
-        img = nib.load(img_path)
-        data = img.get_fdata()  # shape: (D, H, W) (may vary by site)
+        # Load image robustly; if corrupted/unreadable, return a zero placeholder
+        try:
+            img = nib.load(img_path)
+            data = img.get_fdata()  # shape: (D, H, W) (may vary by site)
+        except (ImageFileError, Exception) as e:
+            print(f"[WARN] Failed to load NIfTI for {sid} at {img_path}: {e}. Using zero volume placeholder.")
+            data = np.zeros(self.target_shape, dtype=np.float32)
 
         # Standardize shape for training consistency
         data = self._pad_or_crop_center(data, self.target_shape)
