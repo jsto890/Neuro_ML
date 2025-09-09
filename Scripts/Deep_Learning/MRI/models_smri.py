@@ -169,19 +169,19 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
         
         if use_pretrained:
             print("Loading pretrained ResNet18_3D...")
-            # Ensure classifier head is included and matches num_classes
+            # MONAI MedicalNet pretrained requires feed_forward=False
             model = resnet18(
                 pretrained=True,
                 spatial_dims=3,
                 n_input_channels=in_channels,
                 num_classes=num_classes,
-                feed_forward=True,
+                feed_forward=False,
                 shortcut_type='A',
                 bias_downsample=True,
             )
         else:
             print("Creating ResNet18_3D from scratch...")
-            model = resnet18(pretrained=False, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes, feed_forward=True)
+            model = resnet18(pretrained=False, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes, feed_forward=False)
         # Defensive: force final classifier to correct number of classes
         if hasattr(model, 'fc') and isinstance(model.fc, nn.Linear) and model.fc.out_features != num_classes:
             model.fc = nn.Linear(model.fc.in_features, num_classes)
@@ -198,13 +198,13 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
                 spatial_dims=3,
                 n_input_channels=in_channels,
                 num_classes=num_classes,
-                feed_forward=True,
+                feed_forward=False,
                 shortcut_type='B',
                 bias_downsample=False,
             )
         else:
             print("Creating ResNet50_3D from scratch...")
-            model = resnet50(pretrained=False, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes, feed_forward=True)
+            model = resnet50(pretrained=False, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes, feed_forward=False)
         # Defensive: force final classifier to correct number of classes
         if hasattr(model, 'fc') and isinstance(model.fc, nn.Linear) and model.fc.out_features != num_classes:
             model.fc = nn.Linear(model.fc.in_features, num_classes)
