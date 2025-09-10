@@ -21,6 +21,7 @@ FLATTEN_OUTPUT = os.getenv("P4P_FLATTEN", "0").lower() in ("1", "y", "yes", "tru
 # Provide a way to pass custom dcm2niix flags (space-separated) via env var
 _extra_flags = os.getenv("P4P_DCM2NIIX_FLAGS", "").strip()
 DCM2NIIX_EXTRA_FLAGS = _extra_flags.split() if _extra_flags else []
+OVERWRITE = os.getenv("P4P_OVERWRITE", "0").lower() in ("1", "y", "yes", "true")
 # ────────────────────────────────────────────────────────────────────────────────
 
 # Expand user (~) in configured paths
@@ -62,6 +63,7 @@ def convert_dicom(dicom_dir: Path, out_dir: Path, prefix: str) -> bool:
         "-m", "y",   # merge 2D slices/frames into 3D
         "-x", "n",   # do NOT crop
         "-r", "y",   # reorient to closest orthogonal if needed
+        "-w", "1" if OVERWRITE else "0",  # overwrite vs skip duplicates
         "-f", prefix, # filename prefix
         "-o", str(out_dir),
     ] + DCM2NIIX_EXTRA_FLAGS + [str(dicom_dir)]
@@ -78,6 +80,7 @@ def convert_dicom(dicom_dir: Path, out_dir: Path, prefix: str) -> bool:
             "-m", "y",
             "-x", "n",
             "-r", "y",
+            "-w", "1" if OVERWRITE else "0",
             "-i", "y",  # ignore derived/localizer/2D images
             "-f", prefix,
             "-o", str(out_dir),
@@ -117,6 +120,9 @@ def main():
             if FLATTEN_OUTPUT:
                 out_prefix = f"sub-{subject_id}_{site}_{modality}_{diagnosis}"
                 dest_folder = DEST_ROOT / out_prefix
+                if dest_folder.exists() and not OVERWRITE:
+                    print(f"[skip] Exists: {dest_folder}")
+                    continue
             else:
                 out_prefix = f"sub-{subject_id}_{site}_{modality}_{diagnosis}"
                 dest_folder = (
@@ -126,6 +132,9 @@ def main():
                     / diagnosis
                     / out_prefix
                 )
+                if dest_folder.exists() and not OVERWRITE:
+                    print(f"[skip] Exists: {dest_folder}")
+                    continue
 
             print(f"Converting {ds_name}/{subj_dir.relative_to(ds_root)} → {dest_folder}")
             convert_dicom(subj_dir, dest_folder, out_prefix)
