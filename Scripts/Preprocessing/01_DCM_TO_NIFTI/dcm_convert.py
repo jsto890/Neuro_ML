@@ -5,14 +5,17 @@ from pathlib import Path
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
 DATASETS = {
-    "PPMI": Path("~/reseng202500013-ndd-ml/PPMI"),
-    "ADNI": Path("~/reseng202500013-ndd-ml/data/raw/PET/ADNI/AD"),
+    "ADNI": Path("~/reseng202500013-ndd-ml/data/raw/PET/ADNI/AD/ADNI_PET_AD"),
 }
-DEST_ROOT = Path("~/reseng202500013-ndd-ml/data/raw/PET/ADNI/AD/ADNI")
+DEST_ROOT = Path("~/reseng202500013-ndd-ml/data/raw")
 DICOM_EXT  = ".dcm"
 # Regex to catch “site_modality_diagnosis” or with “_1” suffix
 SMD_RE     = re.compile(r"^([^_]+)_([^_]+)_([^_]+)(?:_\d+)?$")
 # ────────────────────────────────────────────────────────────────────────────────
+
+# Expand user (~) in configured paths
+DATASETS = {k: Path(str(v)).expanduser() for k, v in DATASETS.items()}
+DEST_ROOT = Path(str(DEST_ROOT)).expanduser()
 
 def find_subject_dirs(root: Path):
     """Yield any folder that contains DICOM files directly under it."""
