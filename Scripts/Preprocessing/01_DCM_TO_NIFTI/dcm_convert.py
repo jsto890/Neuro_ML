@@ -5,10 +5,10 @@ from pathlib import Path
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
 DATASETS = {
-    "PPMI": Path("/Volumes/reseng202500013-ndd-ml/PPMI"),
-    "ADNI": Path("/Volumes/reseng202500013-ndd-ml/ADNI"),
+    "PPMI": Path("~/reseng202500013-ndd-ml/PPMI"),
+    "ADNI": Path("~/reseng202500013-ndd-ml/data/raw/PET/ADNI/AD"),
 }
-DEST_ROOT = Path("/Volumes/reseng202500013-ndd-ml/data/raw")
+DEST_ROOT = Path("/Volumes/reseng202500013-ndd-ml/data/raw/PET/ADNI/AD")
 DICOM_EXT  = ".dcm"
 # Regex to catch “site_modality_diagnosis” or with “_1” suffix
 SMD_RE     = re.compile(r"^([^_]+)_([^_]+)_([^_]+)(?:_\d+)?$")
