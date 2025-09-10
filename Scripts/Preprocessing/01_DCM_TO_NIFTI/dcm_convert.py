@@ -22,6 +22,7 @@ FLATTEN_OUTPUT = os.getenv("P4P_FLATTEN", "0").lower() in ("1", "y", "yes", "tru
 _extra_flags = os.getenv("P4P_DCM2NIIX_FLAGS", "").strip()
 DCM2NIIX_EXTRA_FLAGS = _extra_flags.split() if _extra_flags else []
 OVERWRITE = os.getenv("P4P_OVERWRITE", "0").lower() in ("1", "y", "yes", "true")
+NAME_SUFFIX = os.getenv("P4P_NAME_SUFFIX", "")  # e.g., "_%s" to append series number
 # ────────────────────────────────────────────────────────────────────────────────
 
 # Expand user (~) in configured paths
@@ -56,15 +57,17 @@ def convert_dicom(dicom_dir: Path, out_dir: Path, prefix: str) -> bool:
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     # PET-friendly defaults: merge slices, do not crop, allow reorient
+    # Effective filename template
+    filename_template = prefix + NAME_SUFFIX
+
     cmd = [
         "dcm2niix",
         "-b", "y",   # write JSON sidecar
         "-z", "y",   # gzip
         "-m", "y",   # merge 2D slices/frames into 3D
         "-x", "n",   # do NOT crop
-        "-r", "y",   # reorient to closest orthogonal if needed
         "-w", "1" if OVERWRITE else "0",  # overwrite vs skip duplicates
-        "-f", prefix, # filename prefix
+        "-f", filename_template,  # filename template
         "-o", str(out_dir),
     ] + DCM2NIIX_EXTRA_FLAGS + [str(dicom_dir)]
 
@@ -79,10 +82,9 @@ def convert_dicom(dicom_dir: Path, out_dir: Path, prefix: str) -> bool:
             "-z", "y",
             "-m", "y",
             "-x", "n",
-            "-r", "y",
             "-w", "1" if OVERWRITE else "0",
             "-i", "y",  # ignore derived/localizer/2D images
-            "-f", prefix,
+            "-f", filename_template,
             "-o", str(out_dir),
         ] + DCM2NIIX_EXTRA_FLAGS + [str(dicom_dir)]
         try:
