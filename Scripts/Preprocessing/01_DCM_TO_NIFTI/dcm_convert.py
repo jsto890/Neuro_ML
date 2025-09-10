@@ -18,7 +18,6 @@ SMD_RE     = re.compile(r"^([A-Za-z][^_]*)_([A-Za-z][^_]*)_([A-Za-z][^_]*)(?:_\d
 #   P4P_DEST_ROOT: override destination root path
 FORCED_SMD = os.getenv("P4P_FORCED_SMD")
 FLATTEN_OUTPUT = os.getenv("P4P_FLATTEN", "0").lower() in ("1", "y", "yes", "true")
-ADNI_SUBJECT_RE = re.compile(r"^\d{3}_S_\d{4}$")
 # ────────────────────────────────────────────────────────────────────────────────
 
 # Expand user (~) in configured paths
@@ -44,12 +43,7 @@ def extract_smd(folder: Path):
     raise RuntimeError(f"Could not find site_modality_diagnosis for {folder}")
 
 def derive_subject_id(dicom_leaf_dir: Path) -> str:
-    """Return a stable subject identifier.
-    Prefer an ancestor matching the ADNI pattern (e.g., 022_S_0543); fallback to the leaf folder name.
-    """
-    for anc in dicom_leaf_dir.parents:
-        if ADNI_SUBJECT_RE.match(anc.name):
-            return anc.name
+    """Return the immediate folder name that contains the DICOM files (e.g., I334249)."""
     return dicom_leaf_dir.name
 
 def convert_dicom(dicom_dir: Path, out_dir: Path, prefix: str):
@@ -83,7 +77,7 @@ def main():
             subject_id = derive_subject_id(subj_dir)
 
             if FLATTEN_OUTPUT:
-                out_prefix = f"{subject_id}_{site}_{modality}_{diagnosis}"
+                out_prefix = f"sub-{subject_id}_{site}_{modality}_{diagnosis}"
                 dest_folder = DEST_ROOT / out_prefix
             else:
                 out_prefix = f"sub-{subject_id}_{site}_{modality}_{diagnosis}"
