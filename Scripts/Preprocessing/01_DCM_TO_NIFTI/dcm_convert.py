@@ -18,6 +18,9 @@ SMD_RE     = re.compile(r"^([A-Za-z][^_]*)_([A-Za-z][^_]*)_([A-Za-z][^_]*)(?:_\d
 #   P4P_DEST_ROOT: override destination root path
 FORCED_SMD = os.getenv("P4P_FORCED_SMD")
 FLATTEN_OUTPUT = os.getenv("P4P_FLATTEN", "0").lower() in ("1", "y", "yes", "true")
+# Provide a way to pass custom dcm2niix flags (space-separated) via env var
+_extra_flags = os.getenv("P4P_DCM2NIIX_FLAGS", "").strip()
+DCM2NIIX_EXTRA_FLAGS = _extra_flags.split() if _extra_flags else []
 # ────────────────────────────────────────────────────────────────────────────────
 
 # Expand user (~) in configured paths
@@ -46,17 +49,52 @@ def derive_subject_id(dicom_leaf_dir: Path) -> str:
     """Return the immediate folder name that contains the DICOM files (e.g., I334249)."""
     return dicom_leaf_dir.name
 
-def convert_dicom(dicom_dir: Path, out_dir: Path, prefix: str):
-    """Run dcm2niix to convert and name the outputs with our prefix."""
+def convert_dicom(dicom_dir: Path, out_dir: Path, prefix: str) -> bool:
+    """Run dcm2niix to convert and name the outputs with our prefix.
+    Returns True if conversion succeeded, False otherwise.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run([
+    # PET-friendly defaults: merge slices, do not crop, allow reorient
+    cmd = [
         "dcm2niix",
-        "-b", "y",                     # write JSON sidecar
-        "-z", "y",                     # gzip
-        "-f", prefix,                  # filename prefix
+        "-b", "y",   # write JSON sidecar
+        "-z", "y",   # gzip
+        "-m", "y",   # merge 2D slices/frames into 3D
+        "-x", "n",   # do NOT crop
+        "-r", "y",   # reorient to closest orthogonal if needed
+        "-f", prefix, # filename prefix
         "-o", str(out_dir),
-        str(dicom_dir)
-    ], check=True)
+    ] + DCM2NIIX_EXTRA_FLAGS + [str(dicom_dir)]
+
+    try:
+        subprocess.run(cmd, check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"[!] dcm2niix failed (rc={e.returncode}) for {dicom_dir}. Trying fallback with -i y (ignore derived/localizer).")
+        fallback_cmd = [
+            "dcm2niix",
+            "-b", "y",
+            "-z", "y",
+            "-m", "y",
+            "-x", "n",
+            "-r", "y",
+            "-i", "y",  # ignore derived/localizer/2D images
+            "-f", prefix,
+            "-o", str(out_dir),
+        ] + DCM2NIIX_EXTRA_FLAGS + [str(dicom_dir)]
+        try:
+            subprocess.run(fallback_cmd, check=True)
+            return True
+        except subprocess.CalledProcessError as e2:
+            # Log and skip this subject
+            try:
+                (out_dir / "conversion_failed.txt").write_text(
+                    f"Primary rc: {e.returncode}\nFallback rc: {e2.returncode}\nDirectory: {dicom_dir}\n"
+                )
+            except Exception:
+                pass
+            print(f"[!] FATAL: dcm2niix failed for {dicom_dir}. Skipping.")
+            return False
 
 def main():
     for ds_name, ds_root in DATASETS.items():
