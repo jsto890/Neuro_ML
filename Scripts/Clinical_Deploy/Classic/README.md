@@ -61,12 +61,6 @@ python validate_model.py
 
 ## 📊 **Clinical Performance**
 
-### **Model Performance Summary**
-| Model | Test Accuracy | AUC | Confidence | Clinical Use |
-|-------|---------------|-----|------------|--------------|
-| **Optimized SVM** | 78.0% | 0.839 | High | **Primary** |
-| **Stacking Ensemble** | 70.7% | 0.790 | Medium | **Backup** |
-
 ### **Confidence Guidelines**
 - **High Confidence (≥80%)**: Use for clinical decision making
 - **Medium Confidence (60-80%)**: Use with caution, consider additional context
