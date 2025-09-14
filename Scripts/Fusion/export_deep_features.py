@@ -68,7 +68,18 @@ def main():
     model = load_backbone(args.modality, args.model, num_classes=num_classes, base_channels=args.base_channels)
     ckpt = torch.load(args.checkpoint, map_location="cpu")
     state = ckpt.get("model_state_dict", ckpt)
-    model.load_state_dict(state, strict=False)
+    # Filter to load only matching shapes to avoid classifier/head mismatches
+    model_state = model.state_dict()
+    filtered = {}
+    skipped = []
+    for k, v in state.items():
+        if k in model_state and v.shape == model_state[k].shape:
+            filtered[k] = v
+        else:
+            skipped.append(k)
+    if skipped:
+        print(f"[INFO] Skipping {len(skipped)} keys due to shape mismatch or absence (e.g., {skipped[:3]}...)")
+    model.load_state_dict(filtered, strict=False)
     model.eval().to(args.device)
 
     # Forward and collect
