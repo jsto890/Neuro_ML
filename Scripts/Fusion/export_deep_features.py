@@ -31,13 +31,13 @@ def load_dataset(modality: str, csv_path: str, data_root: str):
     return ds
 
 
-def load_backbone(modality: str, backbone_name: str, num_classes: int):
+def load_backbone(modality: str, backbone_name: str, num_classes: int, base_channels: int):
     if modality.upper() == "PET":
         pet_models_mod = _import_from(PROJ_ROOT / 'Scripts/Deep_Learning/PET/models_pet.py')
-        model = pet_models_mod.get_3d_model(backbone_name, in_channels=1, num_classes=num_classes)
+        model = pet_models_mod.get_3d_model(backbone_name, in_channels=1, num_classes=num_classes, base_channels=base_channels)
     else:
         mri_models_mod = _import_from(PROJ_ROOT / 'Scripts/Deep_Learning/MRI/models_smri.py')
-        model = mri_models_mod.get_3d_model(backbone_name, in_channels=1, num_classes=num_classes)
+        model = mri_models_mod.get_3d_model(backbone_name, in_channels=1, num_classes=num_classes, base_channels=base_channels)
     return model
 
 
@@ -51,6 +51,7 @@ def main():
     p.add_argument("--data_root", required=True)
     p.add_argument("--out_csv", required=True)
     p.add_argument("--device", default="cuda:0")
+    p.add_argument("--base_channels", type=int, default=16)
     p.add_argument("--export", choices=["embeddings", "logits", "both"], default="embeddings")
     args = p.parse_args()
 
@@ -64,7 +65,7 @@ def main():
     loader = torch.utils.data.DataLoader(ds, batch_size=8, shuffle=False, num_workers=4)
 
     # Load model
-    model = load_backbone(args.modality, args.model, num_classes=num_classes)
+    model = load_backbone(args.modality, args.model, num_classes=num_classes, base_channels=args.base_channels)
     ckpt = torch.load(args.checkpoint, map_location="cpu")
     state = ckpt.get("model_state_dict", ckpt)
     model.load_state_dict(state, strict=False)

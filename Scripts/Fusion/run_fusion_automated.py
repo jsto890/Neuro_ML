@@ -29,7 +29,7 @@ def find_checkpoints(run_dir: Path, k_folds: int) -> dict:
     return found
 
 
-def export_features_for_split(split_csv: Path, ckpt_path: Path, args, tag: str) -> Path:
+def export_features_for_split(split_csv: Path, ckpt_path: Path, args, tag: str, base_channels: int) -> Path:
     out_csv = Path(args.out_dir) / f"deep_features_{args.modality.lower()}_{tag}.csv"
     cmd = [
         sys.executable, str(Path(__file__).parent / 'export_deep_features.py'),
@@ -39,6 +39,7 @@ def export_features_for_split(split_csv: Path, ckpt_path: Path, args, tag: str) 
         '--csv', str(split_csv),
         '--data_root', args.data_root,
         '--out_csv', str(out_csv),
+        '--base_channels', str(base_channels),
         '--export', args.export,
         '--device', args.device,
     ]
@@ -127,6 +128,7 @@ def main():
     ap.add_argument('--export', choices=['embeddings', 'logits', 'both'], default='embeddings')
     ap.add_argument('--k_folds', type=int, default=5)
     ap.add_argument('--val_ratio', type=float, default=0.2)
+    ap.add_argument('--base_channels', type=int, default=64)
     ap.add_argument('--multi_class', action='store_true')
     ap.add_argument('--ml_threads', type=int, default=4)
     ap.add_argument('--random_state', type=int, default=42)
@@ -172,9 +174,9 @@ def main():
 
         # 3) Export deep features per split using the fold checkpoint
         ckpt_path = ckpts[fold_idx]
-        deep_train = export_features_for_split(train_csv, ckpt_path, args, f'fold{fold_idx}_train')
-        deep_val   = export_features_for_split(val_csv,   ckpt_path, args, f'fold{fold_idx}_val')
-        deep_test  = export_features_for_split(test_csv,  ckpt_path, args, f'fold{fold_idx}_test')
+        deep_train = export_features_for_split(train_csv, ckpt_path, args, f'fold{fold_idx}_train', args.base_channels)
+        deep_val   = export_features_for_split(val_csv,   ckpt_path, args, f'fold{fold_idx}_val', args.base_channels)
+        deep_test  = export_features_for_split(test_csv,  ckpt_path, args, f'fold{fold_idx}_test', args.base_channels)
 
         # 4) Fuse with radiomics for classic training (train+val) and evaluation (test)
         fused_train = pd.concat([
