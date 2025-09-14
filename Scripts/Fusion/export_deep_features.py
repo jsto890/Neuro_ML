@@ -82,16 +82,38 @@ def main():
     model.load_state_dict(filtered, strict=False)
     model.eval().to(args.device)
 
+    # Prepare optional hook to capture last conv feature map if model does not return it
+    fmap_container = {}
+    hook_handle = None
+    if not hasattr(model, 'forward_returns_fmap'):
+        try:
+            target_module = getattr(model, 'features', None)
+            if isinstance(target_module, torch.nn.Module):
+                def _hook(_m, _i, o):
+                    fmap_container['fmap'] = o.detach()
+                hook_handle = target_module.register_forward_hook(_hook)
+        except Exception:
+            hook_handle = None
+
     # Forward and collect
     rows = []
     idx_offset = 0
     for images, labels in loader:
         images = images.to(args.device)
-        logits, fmap = model(images)
+        out = model(images)
+        if isinstance(out, (list, tuple)) and len(out) == 2:
+            logits, fmap = out
+        else:
+            logits = out
+            fmap = fmap_container.get('fmap')
         batch_size = images.shape[0]
 
         # Embedding from fmap
-        embed = torch.nn.functional.adaptive_avg_pool3d(fmap, 1).flatten(1)
+        if fmap is not None and fmap.ndim == 5:
+            embed = torch.nn.functional.adaptive_avg_pool3d(fmap, 1).flatten(1)
+        else:
+            # Fallback: use logits as embedding if fmap unavailable
+            embed = logits
 
         for i in range(batch_size):
             sid = ds.subjects[idx_offset + i]
@@ -106,6 +128,13 @@ def main():
                     row[f"logit_{j}"] = float(v)
             rows.append(row)
         idx_offset += batch_size
+
+    # Cleanup hook
+    if hook_handle is not None:
+        try:
+            hook_handle.remove()
+        except Exception:
+            pass
 
     # Save CSV
     if rows:
