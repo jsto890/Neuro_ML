@@ -74,17 +74,24 @@ def train_enhanced_on_train_only(fused_train_csv: Path, out_dir: Path, threads: 
 def enhanced_predict_proba(enhanced_dir: Path, X: pd.DataFrame) -> np.ndarray:
     # Load scaler and models saved by Enhanced pipeline
     import joblib
-    from glob import glob
-    scaler_path = enhanced_dir / 'scaler.pkl'
+    # Handle timestamped run subdirectory created by run_enhanced.py
+    base_dir = enhanced_dir
+    # If models not in enhanced_dir, pick the newest run_* subdir
+    if not any((enhanced_dir / name).exists() for name in ['randomforest_model.pkl', 'svm_model.pkl', 'logisticregression_model.pkl', 'gradientboosting_model.pkl', 'scaler.pkl']):
+        candidates = [d for d in enhanced_dir.iterdir() if d.is_dir() and d.name.startswith('run_')]
+        if candidates:
+            base_dir = sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0]
+
+    scaler_path = base_dir / 'scaler.pkl'
     scaler = joblib.load(scaler_path) if scaler_path.exists() else None
     # Gather model pkls
     model_paths = []
     for pat in ['randomforest_model.pkl', 'svm_model.pkl', 'logisticregression_model.pkl', 'gradientboosting_model.pkl']:
-        p = enhanced_dir / pat
+        p = base_dir / pat
         if p.exists():
             model_paths.append(p)
     if not model_paths:
-        raise RuntimeError(f"No models found in {enhanced_dir}")
+        raise RuntimeError(f"No models found in {base_dir}")
     models = [joblib.load(p) for p in model_paths]
     feats = X.copy()
     if scaler is not None:
