@@ -243,9 +243,69 @@ def compute_gradcam_volume(gradcam_module, model, input_tensor: torch.Tensor, ta
     elif arch_l in ['simple3dcnn', 'simple_3dcnn']:
         # Requires a wrapper returning (logits, fmap); not guaranteed. Best-effort fallback to generic.
         cam = gradcam_module.compute_gradcam_simple3d(model, input_tensor, target_class, device=device)
+        # Fallback: if CAM is all zeros (can happen with some checkpoints), compute using raw logits and last conv hook
+        try:
+            if not np.isfinite(cam).any() or float(np.max(cam) - np.min(cam)) < 1e-8:
+                cam = compute_gradcam_simple3d_local(model, input_tensor, target_class, device)
+        except Exception:
+            pass
     else:
         raise ValueError(f"Grad-CAM not implemented for architecture: {arch}")
     return normalize_map(cam)
+
+
+def compute_gradcam_simple3d_local(model: nn.Module, smri_tensor: torch.Tensor, target_class: int, device: str = "cpu") -> np.ndarray:
+    """
+    Grad-CAM for Simple3DCNN wrapper using raw logits and hooks on the last Conv3d.
+    More robust when softmax-based CAM yields near-constant maps.
+    Expects model(x) -> (logits, features).
+    """
+    model.to(device)
+    model.eval()
+
+    last_conv: Optional[nn.Module] = None
+    for m in model.features.modules():
+        if isinstance(m, nn.Conv3d):
+            last_conv = m
+    if last_conv is None:
+        raise RuntimeError("Could not locate last Conv3d layer for Grad-CAM")
+
+    activations: Optional[torch.Tensor] = None
+    gradients: Optional[torch.Tensor] = None
+
+    def fwd_hook(module, inp, out):
+        nonlocal activations
+        activations = out.detach()
+
+    def bwd_hook(module, grad_input, grad_output):
+        nonlocal gradients
+        gradients = grad_output[0].detach()
+
+    h1 = last_conv.register_forward_hook(fwd_hook)
+    h2 = last_conv.register_full_backward_hook(bwd_hook)
+
+    smri_tensor = smri_tensor.to(device).requires_grad_(True)
+    logits, _ = model(smri_tensor)
+    score = logits[0, target_class]
+    model.zero_grad()
+    score.backward(retain_graph=False)
+
+    if activations is None or gradients is None:
+        h1.remove(); h2.remove()
+        raise RuntimeError("Grad-CAM hooks did not capture activations/gradients")
+
+    weights = torch.mean(gradients, dim=(2, 3, 4)).squeeze(0)  # [C]
+    cam = torch.zeros_like(activations[0, 0])
+    for i, w in enumerate(weights):
+        cam += w * activations[0, i]
+    cam = F.relu(cam)
+    cam = cam.unsqueeze(0).unsqueeze(0)
+    target_size = smri_tensor.shape[-3:]
+    cam_upsampled = F.interpolate(cam, size=target_size, mode="trilinear", align_corners=False)
+    cam_np = cam_upsampled.squeeze().cpu().numpy()
+
+    h1.remove(); h2.remove()
+    return cam_np.astype(np.float32)
 
 
 def compute_saliency_volume(model, input_tensor: torch.Tensor, target_class: int) -> np.ndarray:
