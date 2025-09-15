@@ -27,6 +27,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 try:
     import nibabel as nib  # type: ignore
@@ -236,22 +239,37 @@ def normalize_map(arr: np.ndarray) -> np.ndarray:
     return (arr - amin) / (amax - amin)
 
 
+def robust_normalize_map(arr: np.ndarray, low_percentile: float = 1.0, high_percentile: float = 99.0) -> np.ndarray:
+    """
+    Normalize using robust percentiles to enhance contrast when most values are near-constant.
+    """
+    arr = arr.astype(np.float32)
+    lo = np.percentile(arr, low_percentile)
+    hi = np.percentile(arr, high_percentile)
+    if hi - lo < 1e-8:
+        return normalize_map(arr)
+    arr = np.clip(arr, lo, hi)
+    return (arr - lo) / (hi - lo)
+
+
 def compute_gradcam_volume(gradcam_module, model, input_tensor: torch.Tensor, target_class: int, arch: str, device: str) -> np.ndarray:
     arch_l = arch.lower()
     if arch_l in ['smri_gradcam_3dcnn', 'smri-gradcam-3dcnn']:
         cam = gradcam_module.compute_gradcam_3d(model, input_tensor, target_class, device=device)
+        return robust_normalize_map(cam)
     elif arch_l in ['simple3dcnn', 'simple_3dcnn']:
-        # Requires a wrapper returning (logits, fmap); not guaranteed. Best-effort fallback to generic.
-        cam = gradcam_module.compute_gradcam_simple3d(model, input_tensor, target_class, device=device)
-        # Fallback: if CAM is all zeros (can happen with some checkpoints), compute using raw logits and last conv hook
+        # Prefer robust local implementation (hooks last Conv3d pre-final pool → higher spatial resolution)
         try:
-            if not np.isfinite(cam).any() or float(np.max(cam) - np.min(cam)) < 1e-8:
-                cam = compute_gradcam_simple3d_local(model, input_tensor, target_class, device)
+            cam = compute_gradcam_simple3d_local(model, input_tensor, target_class, device)
+            return robust_normalize_map(cam)
         except Exception:
-            pass
+            # Fallback to module implementation
+            cam = gradcam_module.compute_gradcam_simple3d(model, input_tensor, target_class, device=device)
+            return robust_normalize_map(cam)
     else:
         raise ValueError(f"Grad-CAM not implemented for architecture: {arch}")
-    return normalize_map(cam)
+    # Unreachable
+    # return normalize_map(cam)
 
 
 def compute_gradcam_simple3d_local(model: nn.Module, smri_tensor: torch.Tensor, target_class: int, device: str = "cpu") -> np.ndarray:
@@ -382,6 +400,33 @@ def save_nifti(volume: np.ndarray, affine: np.ndarray, header, out_path: Path):
     nib.save(img, str(out_path))
 
 
+def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title: str = ""):
+    """
+    Save quick axial/coronal/sagittal overlays for visual sanity check.
+    """
+    anat = anat.astype(np.float32)
+    heat = robust_normalize_map(heat)
+    D, H, W = anat.shape
+    za, ya, xa = D // 2, H // 2, W // 2
+    fig, axs = plt.subplots(1, 3, figsize=(12, 4))
+    axs[0].imshow(anat[za].T, cmap='gray', origin='lower')
+    axs[0].imshow(heat[za].T, cmap='hot', alpha=0.4, origin='lower')
+    axs[0].set_title('Axial')
+    axs[0].axis('off')
+    axs[1].imshow(anat[:, ya, :].T, cmap='gray', origin='lower')
+    axs[1].imshow(heat[:, ya, :].T, cmap='hot', alpha=0.4, origin='lower')
+    axs[1].set_title('Coronal')
+    axs[1].axis('off')
+    axs[2].imshow(anat[:, :, xa].T, cmap='gray', origin='lower')
+    axs[2].imshow(heat[:, :, xa].T, cmap='hot', alpha=0.4, origin='lower')
+    axs[2].set_title('Sagittal')
+    axs[2].axis('off')
+    fig.suptitle(title)
+    fig.tight_layout()
+    plt.savefig(str(out_path), dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Deep clinical prediction with 3D interpretability')
     parser.add_argument('--image', required=True, help='Path to input NIfTI (.nii or .nii.gz)')
@@ -397,6 +442,7 @@ def main():
     parser.add_argument('--occ-stride', type=int, default=None)
     parser.add_argument('--occ-baseline', type=float, default=0.0)
     parser.add_argument('--all-classes-interpret', action='store_true', help='Produce Grad-CAM for all classes (default: predicted only)')
+    parser.add_argument('--save-overlay-pngs', action='store_true', help='Also save 2D slice overlays (axial/coronal/sagittal) as PNGs')
 
     args = parser.parse_args()
 
@@ -435,12 +481,20 @@ def main():
     # Interpretability maps
     gradcam_paths = {}
     classes_to_compute = range(args.num_classes) if args.all_classes_interpret else [pred_idx]
+    overlay_saved = False
     for c in classes_to_compute:
         try:
             cam = compute_gradcam_volume(gradcam_module, model, input_tensor, c, args.model_arch, device)
             cam_path = out_dir / f"{sid}_gradcam_class{c}.nii.gz"
             save_nifti(cam, affine, header, cam_path)
             gradcam_paths[str(c)] = str(cam_path)
+            # Optional overlays for predicted class
+            if args.save-overlay-pngs and c == pred_idx and not overlay_saved:
+                try:
+                    save_overlay_pngs(vol_np, cam, out_dir / f"{sid}_gradcam_overlay.png", title=f"Grad-CAM (class {c})")
+                    overlay_saved = True
+                except Exception:
+                    pass
         except Exception as e:
             print(f"Grad-CAM failed for class {c}: {e}")
 
@@ -449,6 +503,11 @@ def main():
         sal = compute_saliency_volume(model, input_tensor, pred_idx)
         sal_path = out_dir / f"{sid}_saliency.nii.gz"
         save_nifti(sal, affine, header, sal_path)
+        if args.save-overlay-pngs:
+            try:
+                save_overlay_pngs(vol_np, sal, out_dir / f"{sid}_saliency_overlay.png", title="Saliency")
+            except Exception:
+                pass
     except Exception as e:
         print(f"Saliency failed: {e}")
         sal_path = None
@@ -460,6 +519,11 @@ def main():
         )
         occ_path = out_dir / f"{sid}_occlusion.nii.gz"
         save_nifti(occ, affine, header, occ_path)
+        if args.save-overlay-pngs:
+            try:
+                save_overlay_pngs(vol_np, occ, out_dir / f"{sid}_occlusion_overlay.png", title="Occlusion")
+            except Exception:
+                pass
     except Exception as e:
         print(f"Occlusion failed: {e}")
         occ_path = None
