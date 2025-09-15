@@ -93,7 +93,7 @@ def enhanced_predict_proba(enhanced_dir: Path, X: pd.DataFrame) -> np.ndarray:
     if not model_paths:
         raise RuntimeError(f"No models found in {base_dir}")
     models = [joblib.load(p) for p in model_paths]
-    # Prepare features: select numeric and align to scaler's feature names if available
+    # Prepare features: select numeric and align to Enhanced's training feature names if available
     feats = X.copy()
     # Drop non-numeric columns proactively
     feats = feats.select_dtypes(include=[np.number]).copy()
@@ -106,6 +106,20 @@ def enhanced_predict_proba(enhanced_dir: Path, X: pd.DataFrame) -> np.ndarray:
                 if col not in feats.columns:
                     feats[col] = 0.0
             feats = feats[expected]
+        else:
+            # Fallback: try to read feature_names from enhanced_results_summary.json
+            summary_path = base_dir / 'enhanced_results_summary.json'
+            try:
+                with open(summary_path, 'r') as f:
+                    summary = json.load(f)
+                feat_names = summary.get('feature_names') or summary.get('preprocessing', {}).get('feature_names')
+                if isinstance(feat_names, list) and feat_names:
+                    for col in feat_names:
+                        if col not in feats.columns:
+                            feats[col] = 0.0
+                    feats = feats[feat_names]
+            except Exception:
+                pass
         # Transform to numpy
         feats_arr = feats.to_numpy(dtype=np.float32, copy=False)
         feats_arr = scaler.transform(feats_arr)
