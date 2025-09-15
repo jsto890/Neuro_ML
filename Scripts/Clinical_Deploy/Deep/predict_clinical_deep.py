@@ -344,7 +344,7 @@ def compute_saliency_volume(model, input_tensor: torch.Tensor, target_class: int
     score.backward()
     grad = x.grad.detach().squeeze(0).squeeze(0).cpu().numpy()
     sal = np.abs(grad)
-    return normalize_map(sal)
+    return sal.astype(np.float32)
 
 
 def compute_occlusion_volume(model, input_tensor: torch.Tensor, target_class: int, ksize: int = 16, stride: Optional[int] = None, baseline: float = 0.0) -> np.ndarray:
@@ -454,6 +454,18 @@ def resize_volume_to_shape(volume: np.ndarray, target_shape: Tuple[int, int, int
     return t.squeeze(0).squeeze(0).cpu().numpy().astype(np.float32)
 
 
+def compute_nonzero_bbox(volume: np.ndarray) -> Optional[Tuple[int, int, int, int, int, int]]:
+    """
+    Compute bounding box of non-zero voxels in [D,H,W] volume. Returns (z0,z1,y0,y1,x0,x1) or None if empty.
+    """
+    nz = np.argwhere(volume != 0)
+    if nz.size == 0:
+        return None
+    z0, y0, x0 = nz.min(axis=0)
+    z1, y1, x1 = nz.max(axis=0) + 1
+    return int(z0), int(z1), int(y0), int(y1), int(x0), int(x1)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Deep clinical prediction with 3D interpretability')
     parser.add_argument('--image', required=True, help='Path to input NIfTI (.nii or .nii.gz)')
@@ -471,6 +483,9 @@ def main():
     parser.add_argument('--occ-ksize', type=int, default=16)
     parser.add_argument('--occ-stride', type=int, default=None)
     parser.add_argument('--occ-baseline', type=float, default=0.0)
+    parser.add_argument('--gshap-samples', type=int, default=50, help='GradientSHAP samples per attribution')
+    parser.add_argument('--gshap-std', type=float, default=0.001, help='GradientSHAP noise stdev')
+    parser.add_argument('--num-threads', type=int, default=0, help='Torch set_num_threads (0=leave default)')
     parser.add_argument('--all-classes-interpret', action='store_true', help='Produce Grad-CAM for all classes (default: predicted only)')
     parser.add_argument('--save-overlay-pngs', action='store_true', help='Also save 2D slice overlays (axial/coronal/sagittal) as PNGs')
     parser.add_argument('--cam-layer', type=str, default='prepool', choices=['last', 'prepool', 'mid'], help='Which conv layer to use for Grad-CAM (Simple3DCNN)')
@@ -478,9 +493,14 @@ def main():
     args = parser.parse_args()
 
     device = get_device(args.device)
+    if isinstance(args.num_threads, int) and args.num_threads > 0:
+        try:
+            torch.set_num_threads(int(args.num_threads))
+        except Exception:
+            pass
 
-    # Label mapping (default: 0->AD, 1->CN, 2->PD)
-    label_map: Dict[int, str] = {0: 'AD', 1: 'CN', 2: 'PD'}
+    # Label mapping (default: 0->CN, 1->AD, 2->PD)
+    label_map: Dict[int, str] = {0: 'CN', 1: 'AD', 2: 'PD'}
     if args.label_map_json:
         try:
             with open(expand_path(args.label_map_json), 'r') as f:
@@ -575,7 +595,13 @@ def main():
             # Optional overlays for predicted class
             if args.save_overlay_pngs and c == pred_idx and not overlay_saved:
                 try:
-                    save_overlay_pngs(vol_np, cam_resized, out_dir / f"{sid}_gradcam_overlay.png", title=f"Grad-CAM (class {c})")
+                    class_name = label_map.get(int(c), str(c))
+                    save_overlay_pngs(
+                        vol_np,
+                        cam_resized,
+                        out_dir / f"{sid}_gradcam_overlay.png",
+                        title=f"{sid} • Grad-CAM • {class_name}"
+                    )
                     overlay_saved = True
                 except Exception:
                     pass
@@ -593,11 +619,20 @@ def main():
                 sal_accum = sal_i if sal_accum is None else (sal_accum + sal_i)
             sal = sal_accum / float(len(models))
         sal_resized = resize_volume_to_shape(sal, vol_np.shape)
+        # Clamp to brain ROI only: set outside to 0 but keep intensities inside
+        brain_mask = (vol_np != 0).astype(np.float32)
+        sal_resized = sal_resized * brain_mask
+        sal_resized = robust_normalize_map(sal_resized)
         sal_path = out_dir / f"{sid}_saliency.nii.gz"
         save_nifti(sal_resized, affine, header, sal_path)
         if args.save_overlay_pngs:
             try:
-                save_overlay_pngs(vol_np, sal_resized, out_dir / f"{sid}_saliency_overlay.png", title="Saliency")
+                save_overlay_pngs(
+                    vol_np,
+                    sal_resized,
+                    out_dir / f"{sid}_saliency_overlay.png",
+                    title=f"{sid} • Saliency • Pred={pred_name}"
+                )
             except Exception:
                 pass
     except Exception as e:
@@ -607,9 +642,9 @@ def main():
     # Occlusion sensitivity
     try:
         if not is_ensemble:
-            # Default to stride = ksize//2 if not provided, for finer occlusion map
+            # Default to stride = ksize//2 if not provided, and restrict occlusion to brain bbox
             stride_val = args.occ_stride if args.occ_stride is not None else max(1, int(args.occ_ksize)//2)
-            occ = compute_occlusion_volume(
+            occ_full = compute_occlusion_volume(
                 models[0], input_tensor, pred_idx, ksize=int(args.occ_ksize), stride=stride_val, baseline=float(args.occ_baseline)
             )
         else:
@@ -620,13 +655,21 @@ def main():
                     m, input_tensor, pred_idx, ksize=int(args.occ_ksize), stride=stride_val, baseline=float(args.occ_baseline)
                 )
                 occ_accum = occ_i if occ_accum is None else (occ_accum + occ_i)
-            occ = occ_accum / float(len(models))
-        occ_resized = resize_volume_to_shape(occ, vol_np.shape)
+            occ_full = occ_accum / float(len(models))
+        occ_resized = resize_volume_to_shape(occ_full, vol_np.shape)
+        # Zero outside brain to avoid out-of-brain tiles
+        occ_resized = occ_resized * (vol_np != 0).astype(np.float32)
+        occ_resized = robust_normalize_map(occ_resized)
         occ_path = out_dir / f"{sid}_occlusion.nii.gz"
         save_nifti(occ_resized, affine, header, occ_path)
         if args.save_overlay_pngs:
             try:
-                save_overlay_pngs(vol_np, occ_resized, out_dir / f"{sid}_occlusion_overlay.png", title="Occlusion")
+                save_overlay_pngs(
+                    vol_np,
+                    occ_resized,
+                    out_dir / f"{sid}_occlusion_overlay.png",
+                    title=f"{sid} • Occlusion • Pred={pred_name}"
+                )
             except Exception:
                 pass
     except Exception as e:
@@ -635,13 +678,41 @@ def main():
 
     # GradientSHAP (if captum available)
     try:
+        def _gshap_one(m):
+            try:
+                from captum.attr import GradientShap  # type: ignore
+            except Exception:
+                return None
+            m.eval()
+            baseline = torch.zeros_like(input_tensor)
+            gs = GradientShap(m)
+            attributions = gs.attribute(
+                input_tensor,
+                baselines=baseline,
+                target=pred_idx,
+                n_samples=int(args.gshap_samples),
+                stdevs=float(args.gshap_std),
+            )
+            attr = attributions.detach().squeeze(0).squeeze(0).cpu().numpy()
+            attr = np.abs(attr).astype(np.float32)
+            return attr
+
         if not is_ensemble:
-            gshap = compute_gradient_shap(models[0], input_tensor, pred_idx)
+            gattr = _gshap_one(models[0])
         else:
-            gshap = None
-        if gshap is not None:
+            g_list = []
+            for m in models:
+                g = _gshap_one(m)
+                if g is not None:
+                    g_list.append(g)
+            gattr = None if len(g_list) == 0 else np.mean(np.stack(g_list, axis=0), axis=0)
+
+        if gattr is not None:
+            gattr_resized = resize_volume_to_shape(gattr, vol_np.shape)
+            gattr_resized = gattr_resized * (vol_np != 0).astype(np.float32)
+            gattr_resized = robust_normalize_map(gattr_resized)
             gshap_path = out_dir / f"{sid}_gradientshap.nii.gz"
-            save_nifti(gshap, affine, header, gshap_path)
+            save_nifti(gattr_resized, affine, header, gshap_path)
         else:
             gshap_path = None
     except Exception as e:
