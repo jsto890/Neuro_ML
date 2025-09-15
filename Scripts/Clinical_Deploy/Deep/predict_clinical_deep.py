@@ -21,7 +21,7 @@ import json
 import math
 import argparse
 from pathlib import Path
-from typing import Tuple, Dict, Optional
+from typing import Tuple, Dict, Optional, List
 
 import numpy as np
 import torch
@@ -30,6 +30,7 @@ import torch.nn.functional as F
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import glob as glob_mod
 
 try:
     import nibabel as nib  # type: ignore
@@ -432,6 +433,9 @@ def main():
     parser.add_argument('--image', required=True, help='Path to input NIfTI (.nii or .nii.gz)')
     parser.add_argument('--model-arch', default='SMRI_GradCAM_3DCNN', help='Model architecture (SMRI_GradCAM_3DCNN, Simple3DCNN, ResNet18_3D)')
     parser.add_argument('--weights', required=True, help='Path to model weights (.pt/.pth) state_dict or checkpoint')
+    parser.add_argument('--weights-list', nargs='+', type=str, help='Additional weight files to ensemble (logits averaged)')
+    parser.add_argument('--weights-glob', type=str, help='Glob to collect multiple weight files for ensembling')
+    parser.add_argument('--ensemble-avg-method', choices=['logits', 'probs'], default='logits', help='Average logits (recommended) or probabilities across models')
     parser.add_argument('--num-classes', type=int, default=3)
     parser.add_argument('--label-map-json', type=str, help='Optional JSON mapping of numeric labels to names')
     parser.add_argument('--normalize', choices=['zscore', 'minmax', 'none'], default='zscore')
@@ -458,8 +462,34 @@ def main():
         except Exception as e:
             print(f"Warning: failed to load label map JSON ({e}). Using default mapping.")
 
-    # Load model + gradcam util
-    model, gradcam_module = load_model(args.model_arch, args.num_classes, in_channels=1, weights_path=args.weights, device=device)
+    # Collect weight paths (deduplicated, preserve order)
+    candidates: List[str] = []
+    if args.weights:
+        candidates.append(expand_path(args.weights))
+    if args.weights_list:
+        candidates.extend([expand_path(w) for w in args.weights_list])
+    if args.weights_glob:
+        candidates.extend(sorted(glob_mod.glob(expand_path(args.weights_glob))))
+    seen = set()
+    weight_paths: List[str] = []
+    for p in candidates:
+        if p not in seen and os.path.isfile(p):
+            seen.add(p)
+            weight_paths.append(p)
+    is_ensemble = len(weight_paths) > 1
+
+    # Load model(s)
+    if not is_ensemble:
+        model, gradcam_module = load_model(args.model_arch, args.num_classes, in_channels=1, weights_path=weight_paths[0], device=device)
+        models: List[object] = [model]
+    else:
+        models = []
+        gradcam_module = None
+        for w in weight_paths:
+            m, gm = load_model(args.model_arch, args.num_classes, in_channels=1, weights_path=w, device=device)
+            if gradcam_module is None:
+                gradcam_module = gm
+            models.append(m)
 
     # Load and preprocess image
     vol_np, affine, header = load_nifti(args.image)
@@ -467,7 +497,25 @@ def main():
     input_tensor = to_model_tensor(vol_np, device=device, resize_dims=tuple(args.resize_dims) if args.resize_dims else None)
 
     # Predict
-    pred_idx, probs, logits = predict(model, input_tensor)
+    if not is_ensemble:
+        pred_idx, probs, logits = predict(models[0], input_tensor)
+    else:
+        logits_list: List[torch.Tensor] = []
+        with torch.no_grad():
+            for m in models:
+                out = m(input_tensor)
+                lg = out[0] if isinstance(out, tuple) else out
+                logits_list.append(lg)
+        if args.ensemble-avg-method == 'probs':
+            probs_stack = torch.stack([F.softmax(lg, dim=1) for lg in logits_list], dim=0)
+            probs_t = torch.mean(probs_stack, dim=0)  # [1, C]
+            probs = probs_t.squeeze(0).cpu().numpy()
+            logits = torch.log(probs_t + 1e-12)
+        else:
+            logits_t = torch.mean(torch.stack(logits_list, dim=0), dim=0)
+            logits = logits_t
+            probs = softmax_probs(logits_t)
+        pred_idx = int(np.argmax(probs))
     pred_name = label_map.get(pred_idx, str(pred_idx))
     confidence = float(np.max(probs))
     prob_dict = {label_map.get(i, str(i)): float(p) for i, p in enumerate(probs)}
@@ -484,7 +532,14 @@ def main():
     overlay_saved = False
     for c in classes_to_compute:
         try:
-            cam = compute_gradcam_volume(gradcam_module, model, input_tensor, c, args.model_arch, device)
+            if not is_ensemble:
+                cam = compute_gradcam_volume(gradcam_module, models[0], input_tensor, c, args.model_arch, device)
+            else:
+                cam_accum = None
+                for m in models:
+                    cam_i = compute_gradcam_volume(gradcam_module, m, input_tensor, c, args.model_arch, device)
+                    cam_accum = cam_i if cam_accum is None else (cam_accum + cam_i)
+                cam = cam_accum / float(len(models))
             cam_path = out_dir / f"{sid}_gradcam_class{c}.nii.gz"
             save_nifti(cam, affine, header, cam_path)
             gradcam_paths[str(c)] = str(cam_path)
@@ -500,7 +555,14 @@ def main():
 
     # Saliency (absolute gradient)
     try:
-        sal = compute_saliency_volume(model, input_tensor, pred_idx)
+        if not is_ensemble:
+            sal = compute_saliency_volume(models[0], input_tensor, pred_idx)
+        else:
+            sal_accum = None
+            for m in models:
+                sal_i = compute_saliency_volume(m, input_tensor, pred_idx)
+                sal_accum = sal_i if sal_accum is None else (sal_accum + sal_i)
+            sal = sal_accum / float(len(models))
         sal_path = out_dir / f"{sid}_saliency.nii.gz"
         save_nifti(sal, affine, header, sal_path)
         if args.save-overlay-pngs:
@@ -514,9 +576,18 @@ def main():
 
     # Occlusion sensitivity
     try:
-        occ = compute_occlusion_volume(
-            model, input_tensor, pred_idx, ksize=int(args.occ_ksize), stride=args.occ_stride, baseline=float(args.occ_baseline)
-        )
+        if not is_ensemble:
+            occ = compute_occlusion_volume(
+                models[0], input_tensor, pred_idx, ksize=int(args.occ_ksize), stride=args.occ_stride, baseline=float(args.occ_baseline)
+            )
+        else:
+            occ_accum = None
+            for m in models:
+                occ_i = compute_occlusion_volume(
+                    m, input_tensor, pred_idx, ksize=int(args.occ_ksize), stride=args.occ_stride, baseline=float(args.occ_baseline)
+                )
+                occ_accum = occ_i if occ_accum is None else (occ_accum + occ_i)
+            occ = occ_accum / float(len(models))
         occ_path = out_dir / f"{sid}_occlusion.nii.gz"
         save_nifti(occ, affine, header, occ_path)
         if args.save-overlay-pngs:
