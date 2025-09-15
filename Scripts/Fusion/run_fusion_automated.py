@@ -136,6 +136,8 @@ def main():
     ap.add_argument('--k_folds', type=int, default=5)
     ap.add_argument('--val_ratio', type=float, default=0.2)
     ap.add_argument('--base_channels', type=int, default=64)
+    ap.add_argument('--prob_fusion', action='store_true', help='Fuse CNN and Enhanced probabilities at test time')
+    ap.add_argument('--prob_alpha', type=float, default=0.5, help='Weight for CNN probs in fusion: fused = alpha*CNN + (1-alpha)*Enhanced')
     ap.add_argument('--multi_class', action='store_true')
     ap.add_argument('--ml_threads', type=int, default=4)
     ap.add_argument('--random_state', type=int, default=42)
@@ -143,6 +145,11 @@ def main():
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # If probability-level fusion enabled, ensure we export logits from CNN
+    if args.prob_fusion and getattr(args, 'export', 'embeddings') != 'logits':
+        print('[INFO] --prob_fusion enabled; switching CNN feature export to logits')
+        args.export = 'logits'
 
     # 1) Find fold checkpoints
     ckpts = find_checkpoints(Path(args.dl_run_dir), args.k_folds)
@@ -205,12 +212,43 @@ def main():
         # Build features only (drop id/label)
         X_test = fused_test.drop(columns=['subject_id', 'label'])
         y_test = fused_test['label'].to_numpy(dtype=int)
-        prob = enhanced_predict_proba(enhanced_train_dir, X_test)
-        metrics = score_fold(y_test, prob)
+        prob_enh = enhanced_predict_proba(enhanced_train_dir, X_test)
+        metrics = score_fold(y_test, prob_enh)
+        # Optional probability-level fusion with CNN logits
+        if args.prob_fusion:
+            logits_df = pd.read_csv(deep_test)
+            # Align rows by subject_id
+            need = fused_test[['subject_id']].copy()
+            logits_aligned = pd.merge(need, logits_df, on='subject_id', how='left')
+            # Collect logit columns in numeric order
+            logit_cols = [c for c in logits_aligned.columns if c.startswith('logit_')]
+            # Ensure ordered by index number
+            logit_cols = sorted(logit_cols, key=lambda x: int(x.split('_')[1])) if logit_cols else []
+            if logit_cols:
+                arr = logits_aligned[logit_cols].to_numpy(dtype=np.float32)
+                arr = np.nan_to_num(arr, nan=0.0)
+                arr = arr - arr.max(axis=1, keepdims=True)
+                exp = np.exp(arr)
+                prob_cnn = exp / np.clip(exp.sum(axis=1, keepdims=True), 1e-8, None)
+                # Match class count
+                if prob_cnn.shape[1] == prob_enh.shape[1]:
+                    fused_prob = args.prob_alpha * prob_cnn + (1.0 - args.prob_alpha) * prob_enh
+                    fused_metrics = score_fold(y_test, fused_prob)
+                    # Save both
+                    metrics = {
+                        'enhanced_only': metrics,
+                        'fused': fused_metrics,
+                        'alpha': float(args.prob_alpha)
+                    }
         with open(fold_dir / 'metrics.json', 'w') as f:
             json.dump(metrics, f, indent=2)
-        fold_metrics.append(metrics)
-        print(f"Fold {fold_idx}: acc={metrics['acc']:.4f} auc={metrics['auc_ovr']:.4f} ap={metrics['ap_macro']:.4f}")
+        # For summary, prefer fused if available
+        if isinstance(metrics, dict) and 'fused' in metrics:
+            fold_metrics.append(metrics['fused'])
+            print(f"Fold {fold_idx} (fused): acc={metrics['fused']['acc']:.4f} auc={metrics['fused']['auc_ovr']:.4f} ap={metrics['fused']['ap_macro']:.4f}")
+        else:
+            fold_metrics.append(metrics)
+            print(f"Fold {fold_idx}: acc={metrics['acc']:.4f} auc={metrics['auc_ovr']:.4f} ap={metrics['ap_macro']:.4f}")
 
     # Summary across folds
     def avg(key):
