@@ -414,19 +414,26 @@ def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title:
     Save quick axial/coronal/sagittal overlays for visual sanity check.
     """
     anat = anat.astype(np.float32)
-    heat = robust_normalize_map(heat)
+    # Robust normalize anat and heat for visibility
+    a_lo, a_hi = np.percentile(anat, 2.0), np.percentile(anat, 98.0)
+    if a_hi - a_lo < 1e-6:
+        anat_n = anat
+    else:
+        anat_n = np.clip((anat - a_lo) / (a_hi - a_lo), 0.0, 1.0)
+    h_lo, h_hi = np.percentile(heat, 90.0), np.percentile(heat, 99.5)
+    heat = np.clip((heat - h_lo) / (h_hi - h_lo + 1e-8), 0.0, 1.0)
     D, H, W = anat.shape
     za, ya, xa = D // 2, H // 2, W // 2
     fig, axs = plt.subplots(1, 3, figsize=(12, 4))
-    axs[0].imshow(anat[za].T, cmap='gray', origin='lower')
+    axs[0].imshow(anat_n[za].T, cmap='gray', origin='lower')
     axs[0].imshow(heat[za].T, cmap='hot', alpha=0.4, origin='lower')
     axs[0].set_title('Axial')
     axs[0].axis('off')
-    axs[1].imshow(anat[:, ya, :].T, cmap='gray', origin='lower')
+    axs[1].imshow(anat_n[:, ya, :].T, cmap='gray', origin='lower')
     axs[1].imshow(heat[:, ya, :].T, cmap='hot', alpha=0.4, origin='lower')
     axs[1].set_title('Coronal')
     axs[1].axis('off')
-    axs[2].imshow(anat[:, :, xa].T, cmap='gray', origin='lower')
+    axs[2].imshow(anat_n[:, :, xa].T, cmap='gray', origin='lower')
     axs[2].imshow(heat[:, :, xa].T, cmap='hot', alpha=0.4, origin='lower')
     axs[2].set_title('Sagittal')
     axs[2].axis('off')
@@ -434,6 +441,17 @@ def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title:
     fig.tight_layout()
     plt.savefig(str(out_path), dpi=150, bbox_inches='tight')
     plt.close(fig)
+
+
+def resize_volume_to_shape(volume: np.ndarray, target_shape: Tuple[int, int, int]) -> np.ndarray:
+    """
+    Trilinear resize of a 3D volume to target shape.
+    """
+    if tuple(volume.shape) == tuple(target_shape):
+        return volume.astype(np.float32)
+    t = torch.from_numpy(volume.astype(np.float32)).unsqueeze(0).unsqueeze(0)
+    t = F.interpolate(t, size=tuple(target_shape), mode='trilinear', align_corners=False)
+    return t.squeeze(0).squeeze(0).cpu().numpy().astype(np.float32)
 
 
 def main():
@@ -549,13 +567,15 @@ def main():
                     cam_i = compute_gradcam_volume(gradcam_module, m, input_tensor, c, args.model_arch, device, cam_layer=args.cam_layer)
                     cam_accum = cam_i if cam_accum is None else (cam_accum + cam_i)
                 cam = cam_accum / float(len(models))
+            # Resize CAM back to the anatomy's original shape for NIfTI and overlays
+            cam_resized = resize_volume_to_shape(cam, vol_np.shape)
             cam_path = out_dir / f"{sid}_gradcam_class{c}.nii.gz"
-            save_nifti(cam, affine, header, cam_path)
+            save_nifti(cam_resized, affine, header, cam_path)
             gradcam_paths[str(c)] = str(cam_path)
             # Optional overlays for predicted class
             if args.save_overlay_pngs and c == pred_idx and not overlay_saved:
                 try:
-                    save_overlay_pngs(vol_np, cam, out_dir / f"{sid}_gradcam_overlay.png", title=f"Grad-CAM (class {c})")
+                    save_overlay_pngs(vol_np, cam_resized, out_dir / f"{sid}_gradcam_overlay.png", title=f"Grad-CAM (class {c})")
                     overlay_saved = True
                 except Exception:
                     pass
@@ -572,11 +592,12 @@ def main():
                 sal_i = compute_saliency_volume(m, input_tensor, pred_idx)
                 sal_accum = sal_i if sal_accum is None else (sal_accum + sal_i)
             sal = sal_accum / float(len(models))
+        sal_resized = resize_volume_to_shape(sal, vol_np.shape)
         sal_path = out_dir / f"{sid}_saliency.nii.gz"
-        save_nifti(sal, affine, header, sal_path)
+        save_nifti(sal_resized, affine, header, sal_path)
         if args.save_overlay_pngs:
             try:
-                save_overlay_pngs(vol_np, sal, out_dir / f"{sid}_saliency_overlay.png", title="Saliency")
+                save_overlay_pngs(vol_np, sal_resized, out_dir / f"{sid}_saliency_overlay.png", title="Saliency")
             except Exception:
                 pass
     except Exception as e:
@@ -586,22 +607,26 @@ def main():
     # Occlusion sensitivity
     try:
         if not is_ensemble:
+            # Default to stride = ksize//2 if not provided, for finer occlusion map
+            stride_val = args.occ_stride if args.occ_stride is not None else max(1, int(args.occ_ksize)//2)
             occ = compute_occlusion_volume(
-                models[0], input_tensor, pred_idx, ksize=int(args.occ_ksize), stride=args.occ_stride, baseline=float(args.occ_baseline)
+                models[0], input_tensor, pred_idx, ksize=int(args.occ_ksize), stride=stride_val, baseline=float(args.occ_baseline)
             )
         else:
             occ_accum = None
             for m in models:
+                stride_val = args.occ_stride if args.occ_stride is not None else max(1, int(args.occ_ksize)//2)
                 occ_i = compute_occlusion_volume(
-                    m, input_tensor, pred_idx, ksize=int(args.occ_ksize), stride=args.occ_stride, baseline=float(args.occ_baseline)
+                    m, input_tensor, pred_idx, ksize=int(args.occ_ksize), stride=stride_val, baseline=float(args.occ_baseline)
                 )
                 occ_accum = occ_i if occ_accum is None else (occ_accum + occ_i)
             occ = occ_accum / float(len(models))
+        occ_resized = resize_volume_to_shape(occ, vol_np.shape)
         occ_path = out_dir / f"{sid}_occlusion.nii.gz"
-        save_nifti(occ, affine, header, occ_path)
+        save_nifti(occ_resized, affine, header, occ_path)
         if args.save_overlay_pngs:
             try:
-                save_overlay_pngs(vol_np, occ, out_dir / f"{sid}_occlusion_overlay.png", title="Occlusion")
+                save_overlay_pngs(vol_np, occ_resized, out_dir / f"{sid}_occlusion_overlay.png", title="Occlusion")
             except Exception:
                 pass
     except Exception as e:
@@ -610,7 +635,10 @@ def main():
 
     # GradientSHAP (if captum available)
     try:
-        gshap = compute_gradient_shap(model, input_tensor, pred_idx)
+        if not is_ensemble:
+            gshap = compute_gradient_shap(models[0], input_tensor, pred_idx)
+        else:
+            gshap = None
         if gshap is not None:
             gshap_path = out_dir / f"{sid}_gradientshap.nii.gz"
             save_nifti(gshap, affine, header, gshap_path)
