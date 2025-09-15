@@ -25,6 +25,7 @@ from typing import Tuple, Dict, Optional
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 try:
@@ -98,34 +99,87 @@ def load_model(arch: str, num_classes: int, in_channels: int, weights_path: str,
     gradcam, models_smri = load_repo_modules()
     arch_l = arch.lower()
 
-    # Supported architectures
-    if arch_l in ['smri_gradcam_3dcnn', 'smri-gradcam-3dcnn']:
-        model = models_smri.SMRI_GradCAM_3DCNN(in_channels=in_channels, num_classes=num_classes)
-    elif arch_l in ['simple3dcnn', 'simple_3dcnn']:
-        model = models_smri.get_3d_model('simple3dcnn', num_classes=num_classes, in_channels=in_channels)
-    elif arch_l in ['resnet18_3d', 'resnet18']:
-        model = models_smri.get_3d_model('resnet18_3d', num_classes=num_classes, in_channels=in_channels)
-    else:
-        raise ValueError(f"Unsupported model architecture: {arch}")
-
-    model.to(device)
-    model.eval()
-
-    # Load weights (state dict or checkpoint with 'state_dict')
-    if weights_path:
-        state = torch.load(expand_path(weights_path), map_location=device)
+    # Helper to load and clean a checkpoint
+    def _load_clean_sd(path: str):
+        state = torch.load(expand_path(path), map_location=device)
         if isinstance(state, dict) and 'state_dict' in state:
             sd = state['state_dict']
         else:
             sd = state
-        # Some checkpoints may prefix with 'module.'
         clean_sd = {}
         for k, v in sd.items():
-            nk = k.replace('module.', '') if k.startswith('module.') else k
+            nk = k.replace('module.', '') if isinstance(k, str) and k.startswith('module.') else k
             clean_sd[nk] = v
-        model.load_state_dict(clean_sd, strict=False)
+        return clean_sd
 
-    return model, gradcam
+    # Supported architectures
+    if arch_l in ['smri_gradcam_3dcnn', 'smri-gradcam-3dcnn']:
+        model = models_smri.SMRI_GradCAM_3DCNN(in_channels=in_channels, num_classes=num_classes)
+        model.to(device)
+        model.eval()
+        if weights_path:
+            clean_sd = _load_clean_sd(weights_path)
+            model.load_state_dict(clean_sd, strict=False)
+        return model, gradcam
+
+    elif arch_l in ['simple3dcnn', 'simple_3dcnn']:
+        # Auto-detect base_channels and classifier input from checkpoint if available
+        base_channels = 16
+        classifier_in = None
+        clean_sd = None
+        if weights_path:
+            clean_sd = _load_clean_sd(weights_path)
+            try:
+                if 'features.0.weight' in clean_sd and hasattr(clean_sd['features.0.weight'], 'shape'):
+                    base_channels = int(clean_sd['features.0.weight'].shape[0])
+            except Exception:
+                pass
+            try:
+                if 'classifier.0.weight' in clean_sd and hasattr(clean_sd['classifier.0.weight'], 'shape'):
+                    classifier_in = int(clean_sd['classifier.0.weight'].shape[1])
+            except Exception:
+                pass
+
+        base_model = models_smri.get_3d_model('simple3dcnn', num_classes=num_classes, in_channels=in_channels, base_channels=base_channels)
+        base_model.to(device)
+        base_model.eval()
+
+        # If classifier input size is known from checkpoint, set it before loading
+        if classifier_in is not None:
+            base_model.classifier[0] = nn.Linear(classifier_in, 256).to(device)
+            base_model._initialized = True  # skip lazy init
+
+        if clean_sd is not None:
+            base_model.load_state_dict(clean_sd, strict=False)
+
+        # Wrap to expose feature maps for Grad-CAM
+        class GradCAMWrapper(nn.Module):
+            def __init__(self, model: nn.Module):
+                super().__init__()
+                self.model = model
+                self.features = model.features
+                self.classifier = model.classifier
+            def forward(self, x: torch.Tensor):
+                feats = self.features(x)
+                x_flat = feats.view(feats.size(0), -1)
+                logits = self.classifier(x_flat)
+                return logits, feats
+
+        wrapped = GradCAMWrapper(base_model).to(device)
+        wrapped.eval()
+        return wrapped, gradcam
+
+    elif arch_l in ['resnet18_3d', 'resnet18']:
+        model = models_smri.get_3d_model('resnet18_3d', num_classes=num_classes, in_channels=in_channels)
+        model.to(device)
+        model.eval()
+        if weights_path:
+            clean_sd = _load_clean_sd(weights_path)
+            model.load_state_dict(clean_sd, strict=False)
+        return model, gradcam
+
+    else:
+        raise ValueError(f"Unsupported model architecture: {arch}")
 
 
 def get_device(preferred: Optional[str] = None) -> str:
