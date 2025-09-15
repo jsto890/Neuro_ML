@@ -14,11 +14,13 @@ import os
 import sys
 import argparse
 from pathlib import Path
+from datetime import datetime
 
 # Add the current directory to Python path
 sys.path.append(str(Path(__file__).parent))
 
 from Scripts.Classic_Learning.Classic.radiomics_classifier import RadiomicsClassifier
+
 
 def main():
     parser = argparse.ArgumentParser(description='Run Radiomics Classical Learning Pipeline')
@@ -40,6 +42,10 @@ def main():
     parser.add_argument('--multi-class', 
                        action='store_true', default=False,
                        help='Use multi-class classification (all labels)')
+    parser.add_argument('--outer-k-folds', type=int, default=0,
+                        help='If >1, run outer Stratified K-Fold with this many folds (e.g., 5 for ~80/20 Test per fold)')
+    parser.add_argument('--val-ratio', type=float, default=0.0,
+                        help='Validation ratio within the training pool per outer fold (0.0 to disable)')
     
     args = parser.parse_args()
     
@@ -51,7 +57,10 @@ def main():
     
     # Expand user paths
     input_path = os.path.expanduser(args.input)
-    output_dir = os.path.expanduser(args.output_dir)
+    base_output_dir = Path(os.path.expanduser(args.output_dir))
+    # Create timestamped run directory
+    run_dir = base_output_dir / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    run_dir.mkdir(parents=True, exist_ok=True)
     config_path = os.path.expanduser(args.config) if args.config else None
     
     # Check if input file exists
@@ -64,19 +73,25 @@ def main():
     
     print("Starting Radiomics Classical Learning Pipeline")
     print(f"Input: {input_path}")
-    print(f"Output: {output_dir}")
+    print(f"Output: {str(run_dir)}")
     print(f"Random seed: {args.random_state}")
     print(f"Classification: {'Binary (0,1)' if binary_only else 'Multi-class'}")
     print("=" * 60)
     
-    # Initialize and run pipeline
-    classifier = RadiomicsClassifier(input_path, output_dir, args.random_state, binary_only)
-    success = classifier.run_pipeline()
+    # Initialize classifier
+    classifier = RadiomicsClassifier(input_path, str(run_dir), args.random_state, binary_only)
+
+    # Choose standard pipeline or outer CV
+    if args.outer_k_folds and args.outer_k_folds > 1:
+        print(f"Running Outer Stratified K-Fold: {args.outer_k_folds} folds | Val ratio: {args.val_ratio}")
+        success = classifier.run_outer_cv(k_folds=args.outer_k_folds, val_ratio=args.val_ratio)
+    else:
+        success = classifier.run_pipeline()
     
     if success:
         print("\n" + "=" * 60)
         print("Pipeline completed successfully!")
-        print(f"Results saved to: {output_dir}")
+        print(f"Results saved to: {str(run_dir)}")
         print("\nGenerated files:")
         print(f"  • random_forest_model.pkl - Trained model")
         print(f"  • scaler.pkl - Feature scaler")

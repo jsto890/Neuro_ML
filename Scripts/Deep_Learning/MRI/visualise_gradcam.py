@@ -9,7 +9,7 @@ import nibabel as nib
 
 from dataset import SMRIDataset
 from models_smri import SMRI_GradCAM_3DCNN
-from gradcam import compute_gradcam_3d
+from gradcam import compute_gradcam_3d, compute_gradcam_simple3d
 
 def overlay_heatmap_on_slice(mri_slice, cam_slice, cmap="hot", alpha=0.4):
     """
@@ -46,9 +46,54 @@ def main():
                                              num_workers=2)
 
     # 2) Instantiate and load model
-    model = SMRI_GradCAM_3DCNN(in_channels=1, base_channels=16, num_classes=3)
-    checkpoint = torch.load(args.checkpoint, map_location=args.device)
-    model.load_state_dict(checkpoint)
+    # Try to load as Simple3DCNN first (which is what was trained)
+    try:
+        from models_smri import Simple3DCNN
+        model = Simple3DCNN(num_classes=2)  # Binary classification
+        
+        # Load the state dict
+        state_dict = torch.load(args.checkpoint, map_location=args.device)
+        
+        # Extract the actual input size from the saved classifier weight
+        classifier_weight = state_dict['classifier.0.weight']
+        actual_input_size = classifier_weight.shape[1]
+        
+        # Update the classifier with the correct input size
+        model.classifier[0] = torch.nn.Linear(actual_input_size, 256)
+        model._initialized = True
+        
+        # Now load the state dict
+        model.load_state_dict(state_dict)
+        print("Loaded Simple3DCNN model successfully")
+        
+        # For GradCAM, we need to modify the model to expose the feature maps
+        # Create a wrapper that exposes the last conv layer
+        class GradCAMWrapper(torch.nn.Module):
+            def __init__(self, model):
+                super().__init__()
+                self.model = model
+                self.features = model.features
+                self.classifier = model.classifier
+                
+            def forward(self, x):
+                # Get features from the last conv layer
+                features = self.features(x)
+                # Flatten and classify
+                x = features.view(features.size(0), -1)
+                logits = self.classifier(x)
+                return logits, features
+        
+        model = GradCAMWrapper(model)
+        
+    except Exception as e:
+        print(f"Failed to load as Simple3DCNN: {e}")
+        print("Trying SMRI_GradCAM_3DCNN...")
+        
+        # Fallback to original GradCAM model
+        model = SMRI_GradCAM_3DCNN(in_channels=1, base_channels=16, num_classes=2)
+        checkpoint = torch.load(args.checkpoint, map_location=args.device)
+        model.load_state_dict(checkpoint)
+    
     model.to(args.device)
     model.eval()
 
@@ -60,13 +105,20 @@ def main():
         """
         smri = smri.to(args.device)
         true_label = label.item()
-
+        
+        print(f"\nProcessing subject {i+1}: {val_dataset.subjects[i]} (True label: {true_label})")
+        
         # 4) Compute Grad-CAM for the positive class (index=1)
-        cam_3d = compute_gradcam_3d(model, smri, target_class=1, device=args.device)
+        # Check if we're using the wrapped model
+        if hasattr(model, 'model'):  # Wrapped model
+            # Use a modified GradCAM function for Simple3DCNN
+            cam_3d = compute_gradcam_simple3d(model, smri, target_class=1, device=args.device)
+        else:  # Original GradCAM model
+            cam_3d = compute_gradcam_3d(model, smri, target_class=1, device=args.device)
         # cam_3d: numpy array [D, H, W], normalized [0,1]
 
         # 5) Extract original sMRI volume for overlay
-        smri_np = smri.squeeze().cpu().numpy()  # [D, H, W]
+        smri_np = smri.detach().squeeze().cpu().numpy()  # [D, H, W]
 
         # 6) Choose a slice to visualize (e.g., mid‐axial)
         D, H, W = smri_np.shape
@@ -84,10 +136,26 @@ def main():
 
         # 8) Optionally save the entire 3D heatmap as a NIfTI (use the same affine as input)
         #    We need the original affine → load from nibabel:
-        nifti_path = os.path.join(args.data_root, f"{val_dataset.subjects[i]}.nii.gz")
-        orig_nii = nib.load(nifti_path)
-        heatmap_nii = nib.Nifti1Image(cam_3d, affine=orig_nii.affine)
-        nib.save(heatmap_nii, os.path.join(args.output_dir, f"{val_dataset.subjects[i]}_gradcam.nii.gz"))
+        # Use the same path construction as the dataset
+        nifti_path = os.path.join(
+            args.data_root,
+            "smriprep",
+            val_dataset.subjects[i],
+            "anat",
+            f"{val_dataset.subjects[i]}_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w_brain_zscore.nii.gz"
+        )
+        try:
+            orig_nii = nib.load(nifti_path)
+            heatmap_nii = nib.Nifti1Image(cam_3d, affine=orig_nii.affine)
+            nifti_output_path = os.path.join(args.output_dir, f"{val_dataset.subjects[i]}_gradcam.nii.gz")
+            nib.save(heatmap_nii, nifti_output_path)
+            print(f"Saved NIfTI heatmap: {nifti_output_path}")
+        except FileNotFoundError:
+            print(f"Warning: Could not find original NIfTI file: {nifti_path}")
+            print(f"Skipping NIfTI save for subject: {val_dataset.subjects[i]}")
+        except Exception as e:
+            print(f"Warning: Error saving NIfTI for subject {val_dataset.subjects[i]}: {e}")
+            print("Continuing with PNG output only...")
 
         # 9) Break after a few subjects (remove this break to run on all)
         if i >= 4:

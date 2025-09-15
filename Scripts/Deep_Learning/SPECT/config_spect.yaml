@@ -1,0 +1,300 @@
+# SPECT Deep Learning Configuration
+# Optimized for CN vs PD classification on preprocessed SPECT images
+
+# Data Configuration
+data_root: "/Volumes/reseng202500013-ndd-ml/data/Final_SPECT"
+output_dir: "/Volumes/reseng202500013-ndd-ml/data/Final_SPECT/training_output"
+
+# Dataset Configuration
+train_ratio: 0.7
+val_ratio: 0.2
+test_ratio: 0.1
+random_seed: 42
+
+# Model Configuration
+model_type: "simple"  # Options: simple, resnet, efficient
+num_classes: 2  # CN vs PD
+
+# Model-specific parameters
+model_params:
+  # Simple3DCNN parameters
+  simple:
+    base_channels: 16
+    dropout_rate: 0.5
+    input_shape: [91, 109, 91]
+  
+  # ResNet3D parameters
+  resnet:
+    base_channels: 64
+    dropout_rate: 0.5
+  
+  # EfficientNet3D parameters
+  efficient:
+    base_channels: 32
+    dropout_rate: 0.3
+    input_shape: [91, 109, 91]
+
+# Training Configuration
+epochs: 100
+batch_size: 4  # Adjust based on GPU memory
+num_workers: 2
+learning_rate: 1e-4
+optimizer: "adam"  # Options: adam, sgd
+weight_decay: 1e-5
+momentum: 0.9  # Only used with SGD
+
+# Learning Rate Scheduler
+scheduler: "step"  # Options: step, cosine, plateau
+lr_step_size: 30
+lr_gamma: 0.1
+lr_factor: 0.5  # Only used with plateau scheduler
+lr_patience: 10  # Only used with plateau scheduler
+
+# Training Features
+use_class_weights: true  # Automatically calculate class weights
+gradient_clip: 1.0  # Gradient clipping value
+early_stopping_patience: 20  # Stop training if no improvement
+log_interval: 10  # Log every N batches
+
+# Hardware Configuration
+use_gpu: true  # Set to false for CPU-only training
+mixed_precision: false  # Enable for faster training on modern GPUs
+
+# Data Augmentation (if implemented)
+augmentation:
+  enabled: false
+  rotation_range: 10  # Degrees
+  zoom_range: 0.1
+  noise_factor: 0.05
+
+# Cross-Validation (if implemented)
+cross_validation:
+  enabled: false
+  n_folds: 5
+  stratified: true
+
+# Model Checkpointing
+checkpointing:
+  save_every_n_epochs: 10
+  keep_last_n_checkpoints: 5
+  save_best_only: true
+
+# Logging and Monitoring
+logging:
+  level: "INFO"
+  save_training_plots: true
+  tensorboard: true
+  wandb: false  # Weights & Biases integration
+  
+# Evaluation Configuration
+evaluation:
+  metrics: ["accuracy", "precision", "recall", "f1", "auc"]
+  confusion_matrix: true
+  roc_curve: true
+  pr_curve: true
+
+# Advanced Training Options
+advanced:
+  # Gradient accumulation for larger effective batch sizes
+  gradient_accumulation_steps: 1
+  
+  # Label smoothing for better generalization
+  label_smoothing: 0.0
+  
+  # Mixup augmentation (if implemented)
+  mixup_alpha: 0.0
+  
+  # CutMix augmentation (if implemented)
+  cutmix_prob: 0.0
+  
+  # Test time augmentation
+  tta_enabled: false
+  tta_ensemble_size: 5
+
+# Model Ensemble (if implemented)
+ensemble:
+  enabled: false
+  models: []
+  voting_method: "soft"  # soft, hard
+
+# Transfer Learning (if implemented)
+transfer_learning:
+  enabled: false
+  pretrained_model_path: ""
+  freeze_backbone: false
+  fine_tune_layers: []
+
+# Hyperparameter Optimization (if implemented)
+hyperopt:
+  enabled: false
+  trials: 100
+  optimization_metric: "val_accuracy"
+  search_space: {}
+
+# Deployment Configuration
+deployment:
+  model_format: "pytorch"  # pytorch, onnx, torchscript
+  quantization: false
+  pruning: false
+  model_compression: false
+
+# Environment-specific configurations
+environments:
+  # Local MacBook configuration
+  local:
+    batch_size: 2
+    num_workers: 1
+    use_gpu: false
+    mixed_precision: false
+  
+  # HPC GPU cluster configuration
+  hpc:
+    batch_size: 8
+    num_workers: 4
+    use_gpu: true
+    mixed_precision: true
+    gradient_accumulation_steps: 2
+  
+  # Cloud GPU configuration (e.g., Google Colab, AWS)
+  cloud:
+    batch_size: 4
+    num_workers: 2
+    use_gpu: true
+    mixed_precision: true
+
+# Model Architecture Presets
+model_presets:
+  # Lightweight model for quick experimentation
+  lightweight:
+    model_type: "simple"
+    model_params:
+      base_channels: 8
+      dropout_rate: 0.3
+    batch_size: 8
+    learning_rate: 1e-3
+  
+  # Balanced model for good performance/speed trade-off
+  balanced:
+    model_type: "simple"
+    model_params:
+      base_channels: 16
+      dropout_rate: 0.5
+    batch_size: 4
+    learning_rate: 1e-4
+  
+  # High-performance model for best results
+  high_performance:
+    model_type: "resnet"
+    model_params:
+      base_channels: 64
+      dropout_rate: 0.5
+    batch_size: 2
+    learning_rate: 5e-5
+    gradient_accumulation_steps: 2
+  
+  # Memory-efficient model for limited resources
+  memory_efficient:
+    model_type: "efficient"
+    model_params:
+      base_channels: 16
+      dropout_rate: 0.3
+    batch_size: 4
+    learning_rate: 1e-4
+
+# Training Presets
+training_presets:
+  # Quick training for development
+  quick:
+    epochs: 20
+    early_stopping_patience: 5
+    log_interval: 5
+  
+  # Standard training
+  standard:
+    epochs: 100
+    early_stopping_patience: 20
+    log_interval: 10
+  
+  # Extended training for best results
+  extended:
+    epochs: 200
+    early_stopping_patience: 30
+    log_interval: 20
+
+# Validation and Testing
+validation:
+  # Validation frequency
+  val_every_n_epochs: 1
+  
+  # Validation metrics
+  primary_metric: "accuracy"  # Metric used for model selection
+  
+  # Validation thresholds
+  min_accuracy: 0.5
+  min_f1: 0.3
+
+# Model Interpretability
+interpretability:
+  # Grad-CAM visualization
+  grad_cam: true
+  
+  # Feature importance analysis
+  feature_importance: true
+  
+  # Attention maps (if applicable)
+  attention_maps: false
+  
+  # Saliency maps
+  saliency_maps: true
+
+# Data Quality Checks
+data_quality:
+  # Validate data integrity before training
+  validate_before_training: true
+  
+  # Check for class imbalance
+  check_class_balance: true
+  
+  # Verify data dimensions
+  verify_dimensions: true
+  
+  # Check for missing or corrupted files
+  check_file_integrity: true
+
+# Performance Optimization
+performance:
+  # Memory optimization
+  pin_memory: true
+  persistent_workers: true
+  
+  # Data loading optimization
+  prefetch_factor: 2
+  
+  # Mixed precision training
+  autocast: false
+  
+  # Gradient checkpointing (memory vs speed trade-off)
+  gradient_checkpointing: false
+
+# Error Handling and Recovery
+error_handling:
+  # Continue training on errors
+  continue_on_error: false
+  
+  # Save intermediate results on error
+  save_on_error: true
+  
+  # Retry failed operations
+  retry_failed_ops: true
+  max_retries: 3
+
+# Backup and Recovery
+backup:
+  # Backup configuration before training
+  backup_config: true
+  
+  # Backup training state
+  backup_training_state: true
+  
+  # Auto-recovery from checkpoints
+  auto_recovery: true
