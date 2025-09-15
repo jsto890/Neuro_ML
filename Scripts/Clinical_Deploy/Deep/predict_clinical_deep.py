@@ -253,7 +253,7 @@ def robust_normalize_map(arr: np.ndarray, low_percentile: float = 1.0, high_perc
     return (arr - lo) / (hi - lo)
 
 
-def compute_gradcam_volume(gradcam_module, model, input_tensor: torch.Tensor, target_class: int, arch: str, device: str) -> np.ndarray:
+def compute_gradcam_volume(gradcam_module, model, input_tensor: torch.Tensor, target_class: int, arch: str, device: str, cam_layer: str = 'prepool') -> np.ndarray:
     arch_l = arch.lower()
     if arch_l in ['smri_gradcam_3dcnn', 'smri-gradcam-3dcnn']:
         cam = gradcam_module.compute_gradcam_3d(model, input_tensor, target_class, device=device)
@@ -261,7 +261,7 @@ def compute_gradcam_volume(gradcam_module, model, input_tensor: torch.Tensor, ta
     elif arch_l in ['simple3dcnn', 'simple_3dcnn']:
         # Prefer robust local implementation (hooks last Conv3d pre-final pool → higher spatial resolution)
         try:
-            cam = compute_gradcam_simple3d_local(model, input_tensor, target_class, device)
+            cam = compute_gradcam_simple3d_local(model, input_tensor, target_class, device, which_layer=cam_layer)
             return robust_normalize_map(cam)
         except Exception:
             # Fallback to module implementation
@@ -273,7 +273,20 @@ def compute_gradcam_volume(gradcam_module, model, input_tensor: torch.Tensor, ta
     # return normalize_map(cam)
 
 
-def compute_gradcam_simple3d_local(model: nn.Module, smri_tensor: torch.Tensor, target_class: int, device: str = "cpu") -> np.ndarray:
+def _select_conv_for_cam_simple3d(model: nn.Module, which: str) -> nn.Module:
+    # features = [Conv3d, BN, ReLU, (Dropout), MaxPool, Conv3d, BN, ReLU, (Dropout), MaxPool, Conv3d, BN, ReLU, (Dropout), MaxPool]
+    convs = [m for m in model.features.modules() if isinstance(m, nn.Conv3d)]
+    if not convs:
+        raise RuntimeError("No Conv3d layers found in features")
+    if which == 'last':
+        return convs[-1]
+    if which == 'mid':
+        return convs[len(convs)//2]
+    # 'prepool' → pick the last conv before final MaxPool (third block conv)
+    return convs[-1]
+
+
+def compute_gradcam_simple3d_local(model: nn.Module, smri_tensor: torch.Tensor, target_class: int, device: str = "cpu", which_layer: str = 'prepool') -> np.ndarray:
     """
     Grad-CAM for Simple3DCNN wrapper using raw logits and hooks on the last Conv3d.
     More robust when softmax-based CAM yields near-constant maps.
@@ -282,12 +295,7 @@ def compute_gradcam_simple3d_local(model: nn.Module, smri_tensor: torch.Tensor, 
     model.to(device)
     model.eval()
 
-    last_conv: Optional[nn.Module] = None
-    for m in model.features.modules():
-        if isinstance(m, nn.Conv3d):
-            last_conv = m
-    if last_conv is None:
-        raise RuntimeError("Could not locate last Conv3d layer for Grad-CAM")
+    last_conv = _select_conv_for_cam_simple3d(model, which_layer)
 
     activations: Optional[torch.Tensor] = None
     gradients: Optional[torch.Tensor] = None
@@ -447,6 +455,7 @@ def main():
     parser.add_argument('--occ-baseline', type=float, default=0.0)
     parser.add_argument('--all-classes-interpret', action='store_true', help='Produce Grad-CAM for all classes (default: predicted only)')
     parser.add_argument('--save-overlay-pngs', action='store_true', help='Also save 2D slice overlays (axial/coronal/sagittal) as PNGs')
+    parser.add_argument('--cam-layer', type=str, default='prepool', choices=['last', 'prepool', 'mid'], help='Which conv layer to use for Grad-CAM (Simple3DCNN)')
 
     args = parser.parse_args()
 
@@ -506,7 +515,7 @@ def main():
                 out = m(input_tensor)
                 lg = out[0] if isinstance(out, tuple) else out
                 logits_list.append(lg)
-        if args.ensemble-avg-method == 'probs':
+        if args.ensemble_avg_method == 'probs':
             probs_stack = torch.stack([F.softmax(lg, dim=1) for lg in logits_list], dim=0)
             probs_t = torch.mean(probs_stack, dim=0)  # [1, C]
             probs = probs_t.squeeze(0).cpu().numpy()
@@ -533,18 +542,18 @@ def main():
     for c in classes_to_compute:
         try:
             if not is_ensemble:
-                cam = compute_gradcam_volume(gradcam_module, models[0], input_tensor, c, args.model_arch, device)
+                cam = compute_gradcam_volume(gradcam_module, models[0], input_tensor, c, args.model_arch, device, cam_layer=args.cam_layer)
             else:
                 cam_accum = None
                 for m in models:
-                    cam_i = compute_gradcam_volume(gradcam_module, m, input_tensor, c, args.model_arch, device)
+                    cam_i = compute_gradcam_volume(gradcam_module, m, input_tensor, c, args.model_arch, device, cam_layer=args.cam_layer)
                     cam_accum = cam_i if cam_accum is None else (cam_accum + cam_i)
                 cam = cam_accum / float(len(models))
             cam_path = out_dir / f"{sid}_gradcam_class{c}.nii.gz"
             save_nifti(cam, affine, header, cam_path)
             gradcam_paths[str(c)] = str(cam_path)
             # Optional overlays for predicted class
-            if args.save-overlay-pngs and c == pred_idx and not overlay_saved:
+            if args.save_overlay_pngs and c == pred_idx and not overlay_saved:
                 try:
                     save_overlay_pngs(vol_np, cam, out_dir / f"{sid}_gradcam_overlay.png", title=f"Grad-CAM (class {c})")
                     overlay_saved = True
@@ -565,7 +574,7 @@ def main():
             sal = sal_accum / float(len(models))
         sal_path = out_dir / f"{sid}_saliency.nii.gz"
         save_nifti(sal, affine, header, sal_path)
-        if args.save-overlay-pngs:
+        if args.save_overlay_pngs:
             try:
                 save_overlay_pngs(vol_np, sal, out_dir / f"{sid}_saliency_overlay.png", title="Saliency")
             except Exception:
@@ -590,7 +599,7 @@ def main():
             occ = occ_accum / float(len(models))
         occ_path = out_dir / f"{sid}_occlusion.nii.gz"
         save_nifti(occ, affine, header, occ_path)
-        if args.save-overlay-pngs:
+        if args.save_overlay_pngs:
             try:
                 save_overlay_pngs(vol_np, occ, out_dir / f"{sid}_occlusion_overlay.png", title="Occlusion")
             except Exception:
