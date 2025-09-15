@@ -93,13 +93,28 @@ def enhanced_predict_proba(enhanced_dir: Path, X: pd.DataFrame) -> np.ndarray:
     if not model_paths:
         raise RuntimeError(f"No models found in {base_dir}")
     models = [joblib.load(p) for p in model_paths]
+    # Prepare features: select numeric and align to scaler's feature names if available
     feats = X.copy()
+    # Drop non-numeric columns proactively
+    feats = feats.select_dtypes(include=[np.number]).copy()
     if scaler is not None:
-        feats[feats.columns] = scaler.transform(feats)
+        expected_cols = getattr(scaler, 'feature_names_in_', None)
+        if expected_cols is not None:
+            # Keep only expected columns in the expected order; fill missing with 0
+            expected = list(expected_cols)
+            for col in expected:
+                if col not in feats.columns:
+                    feats[col] = 0.0
+            feats = feats[expected]
+        # Transform to numpy
+        feats_arr = feats.to_numpy(dtype=np.float32, copy=False)
+        feats_arr = scaler.transform(feats_arr)
+    else:
+        feats_arr = feats.to_numpy(dtype=np.float32, copy=False)
     # Average predict_proba across models
     probs = None
     for m in models:
-        p = m.predict_proba(feats)
+        p = m.predict_proba(feats_arr)
         probs = p if probs is None else (probs + p)
     probs /= len(models)
     return probs
