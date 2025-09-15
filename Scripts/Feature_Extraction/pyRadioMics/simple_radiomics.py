@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """
-Simple Radiomics Extractor for MRI Data
-=======================================
+Simple Radiomics Extractor for MRI/PET Data
+===========================================
 
-A simplified version that avoids pandas/NumPy compatibility issues.
-Now includes incremental processing to avoid reprocessing already analyzed images.
+• MRI: uses sMRIPrep brain mask if available; otherwise non-zero mask
+• PET: finds preprocessed PET under data/preprocessed/PET/{disease}/{subject_id}/
+       filename pattern: {sid}_*_PET_{disease}_SUVR_s2_brain_soft4.nii.gz (fallback to *_SUVR.nii.gz)
+
+Outputs:
+• MRI: radiomics_MRI_{labels_stem}.csv (unchanged)
+• PET: radiomics_pet.csv (as requested)
 """
 
 import os
@@ -102,6 +107,55 @@ def find_mri_path(data_root, subject_id):
     if os.path.exists(image_path):
         return image_path
     return None
+
+def find_pet_path(data_root, subject_id):
+    """Find the PET image path for a given subject.
+    Scans data/preprocessed/PET/{disease}/{subject_dir}/ where subject_dir starts with subject_id,
+    e.g., sub-XXXX_ADNI_PET_CN, and matches preferred/legacy SUVR filenames.
+    """
+    try:
+        from pathlib import Path
+        base = Path(os.path.expanduser(data_root))
+        if not base.exists():
+            return None
+        for dx_dir in base.iterdir():
+            if not dx_dir.is_dir():
+                continue
+            # Find subject-specific directory by prefix match (subject_id + "_")
+            for subject_dir in dx_dir.iterdir():
+                if not subject_dir.is_dir():
+                    continue
+                name = subject_dir.name
+                if not name.startswith(f"{subject_id}_"):
+                    continue
+                parts = name.split('_')
+                disease_token = parts[-1] if len(parts) >= 4 else dx_dir.name
+                disease_token_upper = str(disease_token).upper()
+                patterns = [
+                    f"{subject_id}_*_PET_{disease_token_upper}_SUVR_s2_brain_soft4.nii.gz",
+                    f"{subject_id}_*_PET_{disease_token_upper}_SUVR_s2_brain_soft4.nii",
+                    f"{subject_id}_*_PET_{disease_token_upper}_SUVR.nii.gz",
+                    f"{subject_id}_*_PET_{disease_token_upper}_SUVR.nii",
+                ]
+                for pat in patterns:
+                    matches = list(subject_dir.glob(pat))
+                    if matches:
+                        return str(matches[0])
+        return None
+    except Exception:
+        return None
+
+def load_pet_image_and_mask(image_path: str):
+    """Load PET image and build a non-zero mask suitable for PyRadiomics."""
+    try:
+        image = sitk.ReadImage(image_path)
+        mask = sitk.NotEqual(image, 0)
+        if mask.GetPixelID() != sitk.sitkUInt8:
+            mask = sitk.Cast(mask, sitk.sitkUInt8)
+        return image, mask
+    except Exception as e:
+        logger.error(f"Error loading PET image/mask from {image_path}: {e}")
+        return None, None
 
 def load_existing_results(output_path):
     """Load existing results to avoid reprocessing"""
@@ -259,10 +313,113 @@ def extract_mri_radiomics(config_path, labels_path, output_dir, force_reprocess=
         logger.error("❌ No features were successfully extracted")
         return None
 
+def extract_pet_radiomics(config_path, labels_path, output_dir, force_reprocess=False):
+    """Extract radiomics features from PET data with incremental processing."""
+    # Load config
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+
+    data_root = config['preprocessed_data']['pet_p']
+    data_root = os.path.expanduser(data_root)
+
+    # Load labels
+    subjects, labels = load_labels_simple(labels_path)
+    logger.info(f"📊 Found {len(subjects)} subjects in {labels_path}")
+
+    # Output and checkpoint
+    output_path = Path(output_dir) / "radiomics_pet.csv"
+    checkpoint_path = Path(output_dir) / f"checkpoint_pet_{Path(labels_path).stem}.json"
+
+    # Existing results
+    if not force_reprocess:
+        existing_results, processed_subjects = load_existing_results(output_path)
+    else:
+        existing_results, processed_subjects = {}, set()
+        logger.info("🔄 Force reprocess mode: will reprocess all subjects")
+
+    extractor = featureextractor.RadiomicsFeatureExtractor()
+
+    all_features = []
+    successful = 0
+    failed = 0
+    skipped = 0
+    failed_subjects = set()
+
+    for i, (subject_id, label) in enumerate(zip(subjects, labels)):
+        logger.info(f"🔍 Processing {i+1}/{len(subjects)}: {subject_id} (label: {label})")
+
+        if subject_id in processed_subjects and not force_reprocess:
+            logger.info(f"⏭️ Skipping {subject_id} (already processed)")
+            all_features.append(existing_results[subject_id])
+            skipped += 1
+            continue
+
+        image_path = find_pet_path(data_root, subject_id)
+        if not image_path:
+            logger.warning(f"❌ PET image not found for {subject_id}")
+            failed += 1
+            failed_subjects.add(subject_id)
+            continue
+
+        try:
+            image, mask = load_pet_image_and_mask(image_path)
+            if image is None or mask is None:
+                logger.error(f"❌ Failed to create PET mask for {subject_id}")
+                failed += 1
+                failed_subjects.add(subject_id)
+                continue
+
+            result = extractor.execute(image, mask)
+            result['subject_id'] = subject_id
+            result['label'] = label
+            result['image_path'] = image_path
+
+            all_features.append(result)
+            successful += 1
+
+            feature_count = len([k for k in result.keys() if k not in ['subject_id', 'label', 'image_path']])
+            logger.info(f"✅ Extracted {feature_count} features from {subject_id}")
+
+            if successful % 10 == 0:
+                save_progress_checkpoint(
+                    checkpoint_path,
+                    {f['subject_id'] for f in all_features},
+                    failed_subjects,
+                    len(subjects)
+                )
+                logger.info(f"💾 Progress checkpoint saved ({successful}/{len(subjects)} completed)")
+
+        except Exception as e:
+            logger.error(f"❌ Error processing {subject_id}: {e}")
+            failed += 1
+            failed_subjects.add(subject_id)
+
+    if all_features:
+        # Write CSV manually
+        with open(output_path, 'w', newline='') as f:
+            fieldnames = all_features[0].keys()
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(all_features)
+
+        save_progress_checkpoint(
+            checkpoint_path,
+            {f['subject_id'] for f in all_features},
+            failed_subjects,
+            len(subjects)
+        )
+
+        logger.info(f"\n💾 Saved {len(all_features)} PET feature sets to {output_path}")
+        logger.info(f"✅ Successful: {successful}, ⏭️ Skipped: {skipped}, ❌ Failed: {failed}")
+        return output_path
+    else:
+        logger.error("❌ No PET features were successfully extracted")
+        return None
+
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description='Extract radiomics features from MRI data (incremental)')
+    parser = argparse.ArgumentParser(description='Extract radiomics features from MRI/PET data (incremental)')
     parser.add_argument('--labels', required=True, help='Path to CSV file with subject_id and label columns')
     parser.add_argument('--output-dir', required=True, help='Output directory for results')
     parser.add_argument('--config', default='config.yaml', help='Path to config file')
@@ -270,6 +427,8 @@ def main():
                        help='Force reprocessing of all subjects (ignore existing results)')
     parser.add_argument('--check-progress', action='store_true',
                        help='Check progress without processing new subjects')
+    parser.add_argument('--modality', choices=['MRI', 'PET'], default='PET',
+                       help='Modality to process (default: PET)')
     
     args = parser.parse_args()
     
@@ -277,9 +436,13 @@ def main():
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     
     # Determine output file path for progress check
-    output_filename = f"radiomics_MRI_{Path(args.labels).stem}.csv"
-    output_path = Path(args.output_dir) / output_filename
-    checkpoint_path = Path(args.output_dir) / f"checkpoint_{Path(args.labels).stem}.json"
+    if args.modality.upper() == 'PET':
+        output_path = Path(args.output_dir) / "radiomics_pet.csv"
+        checkpoint_path = Path(args.output_dir) / f"checkpoint_pet_{Path(args.labels).stem}.json"
+    else:
+        output_filename = f"radiomics_MRI_{Path(args.labels).stem}.csv"
+        output_path = Path(args.output_dir) / output_filename
+        checkpoint_path = Path(args.output_dir) / f"checkpoint_{Path(args.labels).stem}.json"
     
     if args.check_progress:
         # Just check progress without processing
@@ -297,15 +460,23 @@ def main():
             logger.info("📊 No checkpoint found - no previous processing detected")
         return
     
-    # Run extraction
-    output_path = extract_mri_radiomics(
-        args.config, args.labels, args.output_dir, args.force_reprocess
-    )
+    # Run extraction by modality
+    if args.modality.upper() == 'PET':
+        output_path = extract_pet_radiomics(
+            args.config, args.labels, args.output_dir, args.force_reprocess
+        )
+    else:
+        output_path = extract_mri_radiomics(
+            args.config, args.labels, args.output_dir, args.force_reprocess
+        )
     
     if output_path:
         logger.info(f"🎉 Feature extraction completed successfully!")
         logger.info(f"📁 Results saved to: {output_path}")
-        logger.info(f"📊 To check progress: python {__file__} --labels {args.labels} --output-dir {args.output_dir} --check-progress")
+        if args.modality.upper() == 'PET':
+            logger.info(f"📊 To check progress: python {__file__} --modality PET --labels {args.labels} --output-dir {args.output_dir} --check-progress")
+        else:
+            logger.info(f"📊 To check progress: python {__file__} --modality MRI --labels {args.labels} --output-dir {args.output_dir} --check-progress")
     else:
         logger.error("💥 Feature extraction failed!")
 

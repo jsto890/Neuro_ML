@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button, RadioButtons
 import argparse
 
-nii_file = "/Volumes/reseng202500013-ndd-ml/data/preprocessed/PET/PPMI/sub-I372065_PPMI_PET_PD/finalsteps/sub-I372065_PPMI_PET_PD_SUVR_s2_brain_soft4.nii.gz"
+nii_file = "/Volumes/reseng202500013-ndd-ml/data/interpret/sub-I1624206_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w_brain_zscore_gradcam_class0.nii.gz"
 
 def find_spect_data():
     """Find available SPECT data in the Desktop SPECT directory"""

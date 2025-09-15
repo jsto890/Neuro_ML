@@ -1,32 +1,40 @@
 #!/usr/bin/env python3
 """
-Model Validation Script for Optimized SVM
-========================================
+Model Validation Script (Multiclass CN/AD/PD) for Classical Models
+=================================================================
 
-This script validates the optimized SVM model and provides:
-- Prediction confidence scores
-- Clinical interpretation
-- Model performance on new data
-- Feature importance analysis
+Enhancements:
+- Multiclass-aware metrics (accuracy, macro/weighted precision/recall/F1)
+- Confusion matrix with disease labels (CN/AD/PD)
+- ROC-AUC OvR for multiclass (if probabilities available)
+- JSON summary report written to output directory
 """
 
 import os
 import sys
+import json
 import pickle
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
-from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
+from sklearn.metrics import (
+    classification_report,
+    confusion_matrix,
+    roc_auc_score,
+    accuracy_score,
+    precision_recall_fscore_support,
+)
 from sklearn.preprocessing import StandardScaler
+import argparse
 import warnings
 warnings.filterwarnings('ignore')
 
 class ModelValidator:
-    """Validate and interpret the optimized SVM model."""
+    """Validate and interpret a classical model (supports multiclass)."""
     
-    def __init__(self, model_path, scaler_path, feature_importance_path):
+    def __init__(self, model_path, scaler_path, feature_importance_path, label_map=None):
         """
         Initialize the model validator.
         
@@ -38,6 +46,7 @@ class ModelValidator:
         self.model_path = model_path
         self.scaler_path = scaler_path
         self.feature_importance_path = feature_importance_path
+        self.label_map = label_map or {0: 'AD', 1: 'CN', 2: 'PD'}
         
         # Load model and scaler
         self.load_model()
@@ -83,7 +92,12 @@ class ModelValidator:
         
         # Get predictions and probabilities
         predictions = self.model.predict(X_scaled)
-        probabilities = self.model.predict_proba(X_scaled)
+        probabilities = None
+        if hasattr(self.model, 'predict_proba'):
+            probabilities = self.model.predict_proba(X_scaled)
+        else:
+            # Create a dummy probability array if not available
+            probabilities = np.zeros((X_scaled.shape[0], len(getattr(self.model, 'classes_', [0, 1]))))
         
         # Calculate confidence scores
         max_probs = np.max(probabilities, axis=1)
@@ -139,12 +153,14 @@ class ModelValidator:
             sorted_contributions = []
         
         # Clinical interpretation
-        if prediction == 1:
-            diagnosis = "Positive for neurodegenerative disease"
+        # Map prediction to disease label if possible
+        disease = self.label_map.get(int(prediction), str(prediction))
+        if disease in {"AD", "PD"}:
+            diagnosis = f"Predicted {disease}"
             recommendation = "Consider further clinical evaluation"
         else:
-            diagnosis = "Negative for neurodegenerative disease"
-            recommendation = "Continue routine monitoring"
+            diagnosis = f"Predicted {disease}"
+            recommendation = "Routine monitoring"
         
         confidence = max(probability)
         if confidence >= 0.9:
@@ -186,7 +202,25 @@ class ModelValidator:
             
             # Calculate metrics
             accuracy = np.mean(results['predictions'] == y_test)
-            auc = roc_auc_score(y_test, results['probabilities'][:, 1])
+            # ROC-AUC handling
+            auc = 0.0
+            try:
+                probs = results['probabilities']
+                # If multiclass, use OvR; if binary, use positive class
+                unique = np.unique(y_test)
+                if len(unique) == 2:
+                    # Map labels to {0,1} if not already
+                    uniq_sorted = sorted(unique)
+                    if set(uniq_sorted) != {0, 1}:
+                        y_bin = (y_test == uniq_sorted[-1]).astype(int)
+                    else:
+                        y_bin = y_test
+                    if probs.ndim > 1 and probs.shape[1] >= 2:
+                        auc = roc_auc_score(y_bin, probs[:, 1])
+                else:
+                    auc = roc_auc_score(y_test, probs, multi_class='ovr', average='weighted')
+            except Exception:
+                auc = 0.0
             
             print(f"\n=== Model Validation Results ===")
             print(f"Test Accuracy: {accuracy:.3f}")
@@ -202,10 +236,20 @@ class ModelValidator:
             print(f"\n=== Confusion Matrix ===")
             print(cm)
             
+            # Per-class metrics
+            prec_w, rec_w, f1_w, _ = precision_recall_fscore_support(y_test, results['predictions'], average='weighted', zero_division=0)
+            prec_m, rec_m, f1_m, _ = precision_recall_fscore_support(y_test, results['predictions'], average='macro', zero_division=0)
+
             return {
-                'accuracy': accuracy,
-                'auc': auc,
-                'high_confidence_rate': np.mean(results['high_confidence_mask']),
+                'accuracy': float(accuracy),
+                'auc': float(auc),
+                'precision_weighted': float(prec_w),
+                'recall_weighted': float(rec_w),
+                'f1_weighted': float(f1_w),
+                'precision_macro': float(prec_m),
+                'recall_macro': float(rec_m),
+                'f1_macro': float(f1_m),
+                'high_confidence_rate': float(np.mean(results['high_confidence_mask'])),
                 'predictions': results['predictions'],
                 'probabilities': results['probabilities']
             }
@@ -214,101 +258,109 @@ class ModelValidator:
             print(f"✗ Error validating model: {e}")
             return None
     
-    def generate_validation_report(self, output_dir):
-        """Generate a comprehensive validation report."""
+    def generate_validation_report(self, output_dir, metrics: dict, cm: np.ndarray, labels: list):
+        """Write a concise JSON report and a markdown summary."""
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Create validation report
-        report = f"""
-# Optimized SVM Model Validation Report
 
-## Model Information
-- Model Type: {type(self.model).__name__}
-- Model Parameters: {self.model.get_params()}
-- Scaler Type: {type(self.scaler).__name__}
+        # JSON summary
+        summary_json = {
+            "model_type": type(self.model).__name__,
+            "scaler_type": type(self.scaler).__name__,
+            "label_map": self.label_map,
+            "metrics": metrics,
+            "confusion_matrix": cm.tolist(),
+            "labels": labels,
+        }
+        json_path = output_dir / 'validation_summary.json'
+        with open(json_path, 'w') as f:
+            json.dump(summary_json, f, indent=2)
+        print(f"✓ Validation JSON saved to: {json_path}")
 
-## Feature Importance Summary
-- Total Features: {len(self.feature_importance) if self.feature_importance is not None else 'Unknown'}
-- Top 5 Features: {list(self.feature_importance['feature'].head()) if self.feature_importance is not None else 'Unknown'}
+        # Minimal markdown
+        report_md = f"""
+# Classical Model Validation (Multiclass)
 
-## Clinical Usage Guidelines
+Model: {type(self.model).__name__}
+Scaler: {type(self.scaler).__name__}
 
-### High Confidence Predictions (≥80%)
-- Use for clinical decision making
-- High reliability for diagnosis
+- Accuracy: {metrics.get('accuracy', 0.0):.3f}
+- AUC (OvR if multiclass): {metrics.get('auc', 0.0):.3f}
+- F1 (weighted/macro): {metrics.get('f1_weighted', 0.0):.3f} / {metrics.get('f1_macro', 0.0):.3f}
 
-### Medium Confidence Predictions (60-80%)
-- Use with caution
-- Consider additional clinical context
-
-### Low Confidence Predictions (<60%)
-- Do not use for clinical decisions
-- Recommend additional testing
-
-## Model Limitations
-- Trained on binary classification (0/1)
-- Requires same feature preprocessing
-- Performance may vary on different populations
-
-## Recommendations
-1. Validate on independent dataset
-2. Monitor performance over time
-3. Update model with new data periodically
-4. Use ensemble model as backup for critical decisions
-        """
-        
-        # Save report
-        with open(output_dir / 'validation_report.md', 'w') as f:
-            f.write(report)
-        
-        print(f"✓ Validation report saved to: {output_dir / 'validation_report.md'}")
+Labels: {labels}
+Confusion Matrix (rows=actual, cols=pred):
+{cm}
+"""
+        md_path = output_dir / 'validation_report.md'
+        with open(md_path, 'w') as f:
+            f.write(report_md)
+        print(f"✓ Validation report saved to: {md_path}
+")
 
 def main():
-    """Main validation function."""
-    
-    # Paths
-    model_path = os.path.expanduser("~/reseng202500013-ndd-ml/data/optimized_classical_results/optimized_svm_model.pkl")
-    scaler_path = os.path.expanduser("~/reseng202500013-ndd-ml/data/optimized_classical_results/optimized_scaler.pkl")
-    feature_importance_path = os.path.expanduser("~/reseng202500013-ndd-ml/data/optimized_classical_results/optimized_feature_importance.csv")
-    test_data_path = os.path.expanduser("~/reseng202500013-ndd-ml/data/radiomics_MRI_mri_labels.csv")
-    output_dir = os.path.expanduser("~/reseng202500013-ndd-ml/data/model_validation")
-    
+    parser = argparse.ArgumentParser(description="Validate classical model (multiclass CN/AD/PD)")
+    parser.add_argument('--model-path', default='~/reseng202500013-ndd-ml/data/optimized_classical_results/optimized_svm_model.pkl')
+    parser.add_argument('--scaler-path', default='~/reseng202500013-ndd-ml/data/optimized_classical_results/optimized_scaler.pkl')
+    parser.add_argument('--feature-importance', default='~/reseng202500013-ndd-ml/data/optimized_classical_results/optimized_feature_importance.csv')
+    parser.add_argument('--test-data', default='~/reseng202500013-ndd-ml/data/radiomics_MRI_mri_labels.csv')
+    parser.add_argument('--output-dir', default='~/reseng202500013-ndd-ml/clinical_outputs/classical_validation')
+    parser.add_argument('--label-map-json', required=False, help='Optional JSON mapping of numeric labels to names')
+    args = parser.parse_args()
+
+    model_path = os.path.expanduser(args.model_path)
+    scaler_path = os.path.expanduser(args.scaler_path)
+    feature_importance_path = os.path.expanduser(args.feature_importance)
+    test_data_path = os.path.expanduser(args.test_data)
+    output_dir = os.path.expanduser(args.output_dir)
+
+    # Label map if provided
+    label_map = None
+    if args.label_map_json:
+        try:
+            with open(os.path.expanduser(args.label_map_json), 'r') as f:
+                raw = json.load(f)
+            label_map = {int(k): str(v) for k, v in raw.items()}
+        except Exception:
+            label_map = None
+
     print("Starting Model Validation...")
     print(f"Model: {model_path}")
     print(f"Test Data: {test_data_path}")
     print("=" * 50)
-    
+
     # Initialize validator
-    validator = ModelValidator(model_path, scaler_path, feature_importance_path)
-    
+    validator = ModelValidator(model_path, scaler_path, feature_importance_path, label_map)
+
     # Validate on test data
     results = validator.validate_on_test_data(test_data_path)
-    
-    # Generate validation report
-    validator.generate_validation_report(output_dir)
-    
+
+    # Confusion matrix and labels
+    test_df = pd.read_csv(test_data_path)
+    y_true = test_df['label'].values.astype(int)
+    y_pred = results['predictions']
+    cm = confusion_matrix(y_true, y_pred)
+    unique_labels_sorted = sorted(list(set(y_true) | set(y_pred)))
+    disease_labels = [validator.label_map.get(int(l), str(l)) for l in unique_labels_sorted]
+
+    # Build metrics payload
+    metrics_payload = {
+        'accuracy': results.get('accuracy', 0.0),
+        'auc': results.get('auc', 0.0),
+        'precision_weighted': results.get('precision_weighted', 0.0),
+        'recall_weighted': results.get('recall_weighted', 0.0),
+        'f1_weighted': results.get('f1_weighted', 0.0),
+        'precision_macro': results.get('precision_macro', 0.0),
+        'recall_macro': results.get('recall_macro', 0.0),
+        'f1_macro': results.get('f1_macro', 0.0),
+        'high_confidence_rate': results.get('high_confidence_rate', 0.0),
+    }
+
+    # Generate validation report files
+    validator.generate_validation_report(output_dir, metrics_payload, cm, disease_labels)
+
     print(f"\n✓ Validation completed!")
     print(f"Results saved to: {output_dir}")
-    
-    # Example prediction
-    print(f"\n=== Example Prediction ===")
-    # Load some test data for example
-    test_data = pd.read_csv(test_data_path)
-    sample_features = test_data.drop(columns=['label']).iloc[0:1].values
-    sample_names = test_data.drop(columns=['label']).columns.tolist()
-    
-    prediction_results = validator.predict_with_confidence(sample_features)
-    interpretation = validator.interpret_prediction(
-        sample_features[0], 
-        prediction_results['predictions'][0],
-        prediction_results['probabilities'][0],
-        sample_names
-    )
-    
-    print(f"Sample Prediction: {interpretation['diagnosis']}")
-    print(f"Confidence: {interpretation['confidence']} ({interpretation['probability']:.3f})")
-    print(f"Recommendation: {interpretation['recommendation']}")
 
 if __name__ == "__main__":
     main() 

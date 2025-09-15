@@ -1,93 +1,111 @@
 #!/usr/bin/env python3
-"""
-DICOM to NIfTI Converter for CN_SPECT_PPMI dataset
-Converts all DICOM files in the CN_SPECT_PPMI folder to NIfTI format
-Outputs organized by subject ID and scan date to Desktop
-"""
 
 import os
-import sys
+import re
+
 import subprocess
 from pathlib import Path
 import pydicom
 from datetime import datetime
 import shutil
 
-def check_dcm2niix():
-    """Check if dcm2niix is available, install if not"""
-    if shutil.which("dcm2niix") is None:
-        print("dcm2niix not found. Installing...")
-        try:
-            subprocess.run([sys.executable, "-m", "pip", "install", "dcm2niix"], check=True)
-            print("dcm2niix installed successfully!")
-        except subprocess.CalledProcessError:
-            print("Failed to install dcm2niix. Please install manually:")
-            print("pip install dcm2niix")
-            sys.exit(1)
-    else:
-        print("dcm2niix found!")
 
-def get_dicom_info(dicom_path):
-    """Extract basic info from DICOM file"""
+# ─── CONFIG ────────────────────────────────────────────────────────────────────
+DATASETS = {
+    "ADNI": Path("~/reseng202500013-ndd-ml/data/raw/PET/ADNI/AD/ADNI_PET_AD"),
+}
+DEST_ROOT = Path("~/reseng202500013-ndd-ml/data/raw")
+DICOM_EXT  = ".dcm"
+# Regex to catch “site_modality_diagnosis” (each part must start with a letter) or with “_1” suffix
+SMD_RE     = re.compile(r"^([A-Za-z][^_]*)_([A-Za-z][^_]*)_([A-Za-z][^_]*)(?:_\d+)?$")
+# Optional one-off overrides via environment variables
+#   P4P_FORCED_SMD: e.g. "ADNI_PET_AD" (forces label instead of inferring)
+#   P4P_FLATTEN: set to 1/true/y to place outputs directly under DEST_ROOT/<subject>_<SMD>
+#   P4P_DEST_ROOT: override destination root path
+FORCED_SMD = os.getenv("P4P_FORCED_SMD")
+FLATTEN_OUTPUT = os.getenv("P4P_FLATTEN", "0").lower() in ("1", "y", "yes", "true")
+# Provide a way to pass custom dcm2niix flags (space-separated) via env var
+_extra_flags = os.getenv("P4P_DCM2NIIX_FLAGS", "").strip()
+DCM2NIIX_EXTRA_FLAGS = _extra_flags.split() if _extra_flags else []
+OVERWRITE = os.getenv("P4P_OVERWRITE", "0").lower() in ("1", "y", "yes", "true")
+NAME_SUFFIX = os.getenv("P4P_NAME_SUFFIX", "")  # e.g., "_%s" to append series number
+# ────────────────────────────────────────────────────────────────────────────────
+
+# Expand user (~) in configured paths
+DATASETS = {k: Path(str(v)).expanduser() for k, v in DATASETS.items()}
+DEST_ROOT = Path(os.getenv("P4P_DEST_ROOT", str(DEST_ROOT))).expanduser()
+
+def find_subject_dirs(root: Path):
+    """Yield any folder that contains DICOM files directly under it."""
+    for d in root.rglob("*"):
+        if d.is_dir() and any(p.suffix.lower() == DICOM_EXT for p in d.iterdir()):
+            yield d
+
+def extract_smd(folder: Path):
+    """
+    Walk up from `folder` until we find a parent whose name matches SMD_RE.
+    Returns (site, modality, diagnosis).
+    """
+    # Prefer higher-level semantic labels (e.g., ADNI_PET_AD) over subject-like labels (e.g., 022_S_0543)
+    for anc in reversed(folder.parents):
+        m = SMD_RE.match(anc.name)
+        if m:
+            return m.group(1), m.group(2), m.group(3)
+    raise RuntimeError(f"Could not find site_modality_diagnosis for {folder}")
+
+def derive_subject_id(dicom_leaf_dir: Path) -> str:
+    """Return the immediate folder name that contains the DICOM files (e.g., I334249)."""
+    return dicom_leaf_dir.name
+
+def convert_dicom(dicom_dir: Path, out_dir: Path, prefix: str) -> bool:
+    """Run dcm2niix to convert and name the outputs with our prefix.
+    Returns True if conversion succeeded, False otherwise.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # PET-friendly defaults: merge slices, do not crop, allow reorient
+    # Effective filename template
+    filename_template = prefix + NAME_SUFFIX
+
+    cmd = [
+        "dcm2niix",
+        "-b", "y",   # write JSON sidecar
+        "-z", "y",   # gzip
+        "-m", "y",   # merge 2D slices/frames into 3D
+        "-x", "n",   # do NOT crop
+        "-w", "1" if OVERWRITE else "0",  # overwrite vs skip duplicates
+        "-f", filename_template,  # filename template
+        "-o", str(out_dir),
+    ] + DCM2NIIX_EXTRA_FLAGS + [str(dicom_dir)]
+
     try:
-        ds = pydicom.dcmread(dicom_path)
-        
-        # Get patient info
-        patient_id = getattr(ds, 'PatientID', 'Unknown')
-        patient_name = getattr(ds, 'PatientName', 'Unknown')
-        
-        # Get scan info
-        study_date = getattr(ds, 'StudyDate', 'Unknown')
-        study_time = getattr(ds, 'StudyTime', 'Unknown')
-        modality = getattr(ds, 'Modality', 'Unknown')
-        
-        # Get series info
-        series_description = getattr(ds, 'SeriesDescription', 'Unknown')
-        series_number = getattr(ds, 'SeriesNumber', 'Unknown')
-        
-        return {
-            'patient_id': str(patient_id),
-            'patient_name': str(patient_name),
-            'study_date': str(study_date),
-            'study_time': str(study_time),
-            'modality': str(modality),
-            'series_description': str(series_description),
-            'series_number': str(series_number)
-        }
-    except Exception as e:
-        print(f"Error reading DICOM {dicom_path}: {e}")
-        return None
-
-def find_dicom_files(root_path):
-    """Recursively find all DICOM files in the given path"""
-    dicom_files = []
-    root_path = Path(root_path)
-    
-    if not root_path.exists():
-        print(f"Error: Path {root_path} does not exist!")
-        return []
-    
-    for file_path in root_path.rglob("*"):
-        if file_path.is_file():
-            # Check if it's a DICOM file
-            if file_path.suffix.lower() in ['.dcm', '.dicom'] or file_path.name.lower().endswith('.dcm'):
-                dicom_files.append(file_path)
-    
-    print(f"Found {len(dicom_files)} DICOM files")
-    return dicom_files
-
-def group_dicom_files(dicom_files):
-    """Group DICOM files by their directory (each directory = one scan series)"""
-    grouped = {}
-    
-    for dicom_file in dicom_files:
-        dir_path = dicom_file.parent
-        if dir_path not in grouped:
-            grouped[dir_path] = []
-        grouped[dir_path].append(dicom_file)
-    
-    print(f"Grouped into {len(grouped)} scan series")
-    return grouped
+        subprocess.run(cmd, check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"[!] dcm2niix failed (rc={e.returncode}) for {dicom_dir}. Trying fallback with -i y (ignore derived/localizer).")
+        fallback_cmd = [
+            "dcm2niix",
+            "-b", "y",
+            "-z", "y",
+            "-m", "y",
+            "-x", "n",
+            "-w", "1" if OVERWRITE else "0",
+            "-i", "y",  # ignore derived/localizer/2D images
+            "-f", filename_template,
+            "-o", str(out_dir),
+        ] + DCM2NIIX_EXTRA_FLAGS + [str(dicom_dir)]
+        try:
+            subprocess.run(fallback_cmd, check=True)
+            return True
+        except subprocess.CalledProcessError as e2:
+            # Log and skip this subject
+            try:
+                (out_dir / "conversion_failed.txt").write_text(
+                    f"Primary rc: {e.returncode}\nFallback rc: {e2.returncode}\nDirectory: {dicom_dir}\n"
+                )
+            except Exception:
+                pass
+            print(f"[!] FATAL: dcm2niix failed for {dicom_dir}. Skipping.")
+            return False
 
 def create_output_structure(base_output_path, subject_id, scan_date, modality):
     """Create organized output folder structure"""
@@ -101,134 +119,43 @@ def create_output_structure(base_output_path, subject_id, scan_date, modality):
     
     return scan_folder
 
-def convert_dicom_series(dicom_dir, output_dir, series_name):
-    """Convert a series of DICOM files to NIfTI using dcm2niix"""
-    try:
-        print(f"Converting series: {series_name}")
-        print(f"Input: {dicom_dir}")
-        print(f"Output: {output_dir}")
-        
-        # Run dcm2niix
-        result = subprocess.run([
-            "dcm2niix",
-            "-b", "y",           # Write BIDS JSON sidecar
-            "-z", "y",           # Compress output
-            "-f", series_name,   # Output filename prefix
-            "-o", str(output_dir),  # Output directory
-            str(dicom_dir)       # Input directory
-        ], capture_output=True, text=True, check=True)
-        
-        print(f"✓ Successfully converted {series_name}")
-        return True
-        
-    except subprocess.CalledProcessError as e:
-        print(f"✗ Error converting {series_name}: {e}")
-        print(f"stdout: {e.stdout}")
-        print(f"stderr: {e.stderr}")
-        return False
-    except Exception as e:
-        print(f"✗ Unexpected error converting {series_name}: {e}")
-        return False
 
-def main():
-    print("=== DICOM to NIfTI Converter for CN_SPECT_PPMI ===")
-    
-    # Check dependencies
-    check_dcm2niix()
-    
-    # Input path - the CN_SPECT_PPMI folder
-    input_path = Path("/Users/jacksonschofield/Desktop/CN_SPECT_PPMI")
-    
-    # Output path - Desktop folder
-    desktop_path = Path.home() / "Desktop"
-    output_base = desktop_path / "CN_SPECT_PPMI_NIfTI"
-    
-    print(f"Input folder: {input_path}")
-    print(f"Output folder: {output_base}")
-    
-    if not input_path.exists():
-        print(f"Error: Input folder {input_path} does not exist!")
-        sys.exit(1)
-    
-    # Create output directory
-    output_base.mkdir(parents=True, exist_ok=True)
-    
-    # Find all DICOM files
-    print("\nSearching for DICOM files...")
-    dicom_files = find_dicom_files(input_path)
-    
-    if not dicom_files:
-        print("No DICOM files found!")
-        sys.exit(1)
-    
-    # Group files by directory
-    grouped_series = group_dicom_files(dicom_files)
-    
-    # Process each series
-    successful_conversions = 0
-    total_series = len(grouped_series)
-    
-    print(f"\nStarting conversion of {total_series} series...")
-    
-    for series_dir, dicom_files in grouped_series.items():
-        try:
-            # Get series info from first DICOM file
-            first_dicom = dicom_files[0]
-            dicom_info = get_dicom_info(first_dicom)
-            
-            if not dicom_info:
-                print(f"Skipping series {series_dir} - could not read DICOM info")
-                continue
-            
-            # Create meaningful series name
-            subject_id = dicom_info['patient_id']
-            scan_date = dicom_info['study_date']
-            modality = dicom_info['modality']
-            series_desc = dicom_info['series_description'].replace(' ', '_').replace('/', '_')
-            
-            series_name = f"{subject_id}_{scan_date}_{modality}_{series_desc}"
-            
-            # Create output structure
-            output_dir = create_output_structure(
-                output_base, 
-                subject_id, 
-                scan_date, 
-                modality
-            )
-            
-            # Convert the series
-            if convert_dicom_series(series_dir, output_dir, series_name):
-                successful_conversions += 1
-                
-                # Copy original DICOM files to output for reference
-                dicom_backup_dir = output_dir / "Original_DICOM"
-                dicom_backup_dir.mkdir(exist_ok=True)
-                
-                for dicom_file in dicom_files:
-                    shutil.copy2(dicom_file, dicom_backup_dir)
-                
-                print(f"✓ Series completed: {series_name}")
+        for subj_dir in find_subject_dirs(ds_root):
+            if FORCED_SMD:
+                parts = FORCED_SMD.split("_")
+                if len(parts) == 3:
+                    site, modality, diagnosis = parts
+                else:
+                    site, modality, diagnosis = extract_smd(subj_dir)
             else:
-                print(f"✗ Series failed: {series_name}")
-                
-        except Exception as e:
-            print(f"✗ Error processing series {series_dir}: {e}")
-            continue
-    
-    print(f"\n=== Conversion Complete ===")
-    print(f"Successfully converted: {successful_conversions}/{total_series} series")
-    print(f"Output location: {output_base}")
-    
-    if successful_conversions > 0:
-        print("\nFiles have been organized by:")
-        print("- Subject ID")
-        print("- Scan date")
-        print("- Modality")
-        print("- Series description")
-        print("\nEach series includes:")
-        print("- NIfTI files (.nii.gz)")
-        print("- BIDS JSON metadata (.json)")
-        print("- Original DICOM files (backup)")
+                site, modality, diagnosis = extract_smd(subj_dir)
+
+            subject_id = derive_subject_id(subj_dir)
+
+            if FLATTEN_OUTPUT:
+                out_prefix = f"sub-{subject_id}_{site}_{modality}_{diagnosis}"
+                dest_folder = DEST_ROOT / out_prefix
+                if dest_folder.exists() and not OVERWRITE:
+                    print(f"[skip] Exists: {dest_folder}")
+                    continue
+            else:
+                out_prefix = f"sub-{subject_id}_{site}_{modality}_{diagnosis}"
+                dest_folder = (
+                    DEST_ROOT
+                    / modality
+                    / site
+                    / diagnosis
+                    / out_prefix
+                )
+                if dest_folder.exists() and not OVERWRITE:
+                    print(f"[skip] Exists: {dest_folder}")
+                    continue
+
+            print(f"Converting {ds_name}/{subj_dir.relative_to(ds_root)} → {dest_folder}")
+            convert_dicom(subj_dir, dest_folder, out_prefix)
+
+    print("All done.")
+
 
 if __name__ == "__main__":
     main()

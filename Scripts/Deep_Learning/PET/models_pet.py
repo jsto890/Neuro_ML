@@ -33,7 +33,7 @@ class Simple3DCNN(nn.Module):
     Input:  [B, 1, D, H, W]  single‐channel PET
     Output: [B, num_classes] logits
     """
-    def __init__(self, num_classes=2, base_channels=16):  # Reduced base channels
+    def __init__(self, num_classes=2, base_channels=16, dropout_p=0.0):  # Reduced base channels
         super().__init__()
         self.features = nn.Sequential(
             # First conv block
@@ -59,7 +59,7 @@ class Simple3DCNN(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(1, 256),  # Reduced intermediate size
             nn.ReLU(),
-            nn.Dropout(0.5),
+            nn.Dropout(dropout_p if dropout_p > 0 else 0.5),  # Use provided dropout or default 0.5
             nn.Linear(256, num_classes)
         )
         
@@ -85,12 +85,24 @@ class Simple3DCNN(nn.Module):
 
     def forward(self, x):
         # x shape = [B, 1, D, H, W]
+        # Ensure classifier matches current feature size (handles dynamic input shapes)
         if not self._initialized:
             self._initialize_classifier(x)
-            
-        x = self.features(x)
-        x = x.view(x.size(0), -1)
-        logits = self.classifier(x)
+        
+        features = self.features(x)
+        flat = features.view(features.size(0), -1)
+        
+        # If feature size changed (e.g., different input dims), reinitialize first FC layer on-the-fly
+        expected_in_features = self.classifier[0].in_features if isinstance(self.classifier[0], nn.Linear) else None
+        current_in_features = flat.size(1)
+        if expected_in_features is None or expected_in_features != current_in_features:
+            device = features.device
+            self.classifier[0] = nn.Linear(current_in_features, 256).to(device)
+            for layer in self.classifier:
+                layer.to(device)
+            self._initialized = True
+        
+        logits = self.classifier(flat)
         return logits
 
 
@@ -138,7 +150,8 @@ class PET_GradCAM_3DCNN(nn.Module):
         return logits, fmap
 
 # --- Model Factory Function ---
-def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use_pretrained=False):
+def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use_pretrained=False, dropout_p: float = 0.0,
+                 vit_drop_rate: float = 0.0, vit_attn_drop_rate: float = 0.0, vit_drop_path_rate: float = 0.0):
     """
     Returns a 3D CNN model instance by name.
     Supported: 'Simple3DCNN', 'ResNet18_3D', 'DenseNet121_3D', 'EfficientNetB0_3D',
@@ -154,7 +167,7 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
     model_name = model_name.lower()
     
     if model_name == "simple3dcnn":
-        return Simple3DCNN(num_classes=num_classes, base_channels=base_channels)
+        return Simple3DCNN(num_classes=num_classes, base_channels=base_channels, dropout_p=dropout_p)
     
     elif model_name == "resnet18_3d":
         if resnet is None:
@@ -252,7 +265,18 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
     elif model_name in ["visiontransformer3d", "swinunetrclassifier", "fullswinunetrclassifier"]:
         if get_transformer_model is None:
             raise ImportError("Transformer models are not available. Install required dependencies.")
-        return get_transformer_model(model_name, num_classes=num_classes, in_channels=in_channels)
+        if model_name == "visiontransformer3d":
+            return get_transformer_model(
+                model_name,
+                num_classes=num_classes,
+                in_channels=in_channels,
+                drop_rate=vit_drop_rate,
+                attn_drop_rate=vit_attn_drop_rate,
+                drop_path_rate=vit_drop_path_rate,
+            )
+        else:
+            # SwinUNETR models
+            return get_transformer_model(model_name, num_classes=num_classes, in_channels=in_channels)
     
     else:
         raise ValueError(f"Unknown model name: {model_name}")

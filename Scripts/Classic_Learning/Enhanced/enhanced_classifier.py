@@ -27,7 +27,7 @@ from sklearn.model_selection import (
 )
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC, LinearSVC
+from sklearn.svm import SVC
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler, RobustScaler
@@ -80,8 +80,8 @@ class EnhancedRadiomicsClassifier:
         self.binary_labels = binary_labels
         self.ml_threads = ml_threads
         
-        # Disease label mapping
-        self.label_to_disease = {0: 'CN', 1: 'AD', 2: 'PD'}
+        # Disease label mapping (align with PET labels: AD=0, CN=1, PD=2)
+        self.label_to_disease = {0: 'AD', 1: 'CN', 2: 'PD'}
         self.disease_to_label = {v: k for k, v in self.label_to_disease.items()}
         
         # Label remapping for training (to handle non-consecutive labels)
@@ -162,13 +162,32 @@ class EnhancedRadiomicsClassifier:
                 
                 self.logger.info(f"Label remapping: {self.original_to_training_labels}")
             
-            # Extract components
+            # Extract components (ensure features are numeric only)
             self.subject_ids = self.data['subject_id'].values
             self.y = self.data['label'].values.astype(int)  # Ensure labels are integers
-            self.feature_names = [col for col in self.data.columns if col not in ['subject_id', 'label']]
+
+            # Start from all feature columns except identifiers/labels
+            feature_cols = [col for col in self.data.columns if col not in ['subject_id', 'label']]
+
+            # Drop known non-numeric columns if present (e.g., PET image_path)
+            if 'image_path' in feature_cols:
+                feature_cols.remove('image_path')
+                self.logger.info("Removed non-numeric column: 'image_path'")
+
+            # Coerce all feature columns to numeric; invalid parsing -> NaN
+            features_df = self.data[feature_cols].apply(pd.to_numeric, errors='coerce')
+
+            # Drop columns that are entirely NaN after coercion (non-numeric across all rows)
+            all_nan_cols = features_df.columns[features_df.isna().all()].tolist()
+            if all_nan_cols:
+                features_df = features_df.drop(columns=all_nan_cols)
+                self.logger.info(f"Removed {len(all_nan_cols)} non-numeric/empty feature columns: {all_nan_cols[:10]}{'...' if len(all_nan_cols) > 10 else ''}")
+
+            # Set final features
+            self.feature_names = list(features_df.columns)
             # Preserve full list for per-fold resets in outer CV
             self._original_feature_names = list(self.feature_names)
-            self.X = self.data[self.feature_names].values
+            self.X = features_df.values
             
             self.logger.info(f"Data shape: {self.X.shape}")
             unique_labels = np.unique(self.y)
@@ -311,12 +330,6 @@ class EnhancedRadiomicsClassifier:
             'gamma': ['scale', 'auto'],
             'class_weight': ['balanced']
         }
-        # Calibrated LinearSVC (probabilistic)
-        linsvc_calibrated = CalibratedClassifierCV(estimator=LinearSVC(max_iter=10000), cv=5, method='sigmoid')
-        linsvc_params = {
-            'estimator__C': [0.1, 1.0, 10.0],
-            'estimator__loss': ['squared_hinge']
-        }
         
         # Gradient Boosting
         gb_params = {
@@ -395,8 +408,7 @@ class EnhancedRadiomicsClassifier:
             'RandomForest': (RandomForestClassifier(random_state=self.random_state), rf_params),
             'ExtraTrees': (ExtraTreesClassifier(random_state=self.random_state), et_params),
             'LogisticRegression': (LogisticRegression(random_state=self.random_state), lr_params),
-            'SVM': (SVC(random_state=self.random_state, probability=True), svm_params),
-            'LinearSVC_Calibrated': (linsvc_calibrated, linsvc_params),
+            'SVM': (SVC(random_state=self.random_state, probability=False, cache_size=2000, max_iter=50000), svm_params),
             'GradientBoosting': (GradientBoostingClassifier(random_state=self.random_state), gb_params),
             'KNN': (KNeighborsClassifier(), knn_params)
         }
@@ -475,11 +487,19 @@ class EnhancedRadiomicsClassifier:
                     # For multiclass, use accuracy which is more reliable
                     scoring = 'accuracy'
                 
-                search = RandomizedSearchCV(
-                    model, param_grid, n_iter=20, cv=5,
-                    scoring=scoring, n_jobs=search_n_jobs,
+                # Default search config
+                search_kwargs = dict(
+                    n_iter=20, cv=5, scoring=scoring, n_jobs=search_n_jobs,
                     random_state=self.random_state, verbose=0
                 )
+                
+                # SVM-specific: increase verbosity and cap parallelism
+                is_svm = (name == 'SVM')
+                if is_svm:
+                    # Keep controlled parallelism but silence sklearn CV progress output
+                    search_kwargs.update(dict(n_jobs=2, verbose=0, pre_dispatch='2*n_jobs'))
+                
+                search = RandomizedSearchCV(model, param_grid, **search_kwargs)
                 
                 # Suppress verbose library-level stdout for certain learners
                 if (LIGHTGBM_AVAILABLE and 'LightGBM' in name) or (XGBOOST_AVAILABLE and 'XGBoost' in name):
@@ -488,7 +508,30 @@ class EnhancedRadiomicsClassifier:
                         with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
                             search.fit(X_train, y_train_remapped)
                 else:
-                    search.fit(X_train, y_train_remapped)
+                    # For SVM, cap BLAS/threads to avoid oversubscription
+                    if is_svm:
+                        import os
+                        old_env = {
+                            'OMP_NUM_THREADS': os.environ.get('OMP_NUM_THREADS'),
+                            'MKL_NUM_THREADS': os.environ.get('MKL_NUM_THREADS'),
+                            'OPENBLAS_NUM_THREADS': os.environ.get('OPENBLAS_NUM_THREADS'),
+                            'LOKY_MAX_CPU_COUNT': os.environ.get('LOKY_MAX_CPU_COUNT'),
+                        }
+                        os.environ['OMP_NUM_THREADS'] = '1'
+                        os.environ['MKL_NUM_THREADS'] = '1'
+                        os.environ['OPENBLAS_NUM_THREADS'] = '1'
+                        os.environ['LOKY_MAX_CPU_COUNT'] = '8'
+                        try:
+                            search.fit(X_train, y_train_remapped)
+                        finally:
+                            # Restore environment
+                            for k, v in old_env.items():
+                                if v is None:
+                                    os.environ.pop(k, None)
+                                else:
+                                    os.environ[k] = v
+                    else:
+                        search.fit(X_train, y_train_remapped)
                 
                 # Check if we got a valid score
                 if np.isnan(search.best_score_):
@@ -508,6 +551,36 @@ class EnhancedRadiomicsClassifier:
                 self.best_models[name] = search.best_estimator_
                 self.logger.info(f"{name} - Best CV score: {fallback_score:.4f}")
                 self.logger.info(f"{name} - Best params: {search.best_params_}")
+                
+                # If SVM, calibrate once to enable predict_proba
+                if name == 'SVM':
+                    try:
+                        self.logger.info("Calibrating best SVM with sigmoid on 5-fold CV (single pass)...")
+                        from sklearn.calibration import CalibratedClassifierCV
+                        calibrated = CalibratedClassifierCV(estimator=self.best_models[name], method='sigmoid', cv=5)
+                        import os
+                        old_env = {
+                            'OMP_NUM_THREADS': os.environ.get('OMP_NUM_THREADS'),
+                            'MKL_NUM_THREADS': os.environ.get('MKL_NUM_THREADS'),
+                            'OPENBLAS_NUM_THREADS': os.environ.get('OPENBLAS_NUM_THREADS'),
+                            'LOKY_MAX_CPU_COUNT': os.environ.get('LOKY_MAX_CPU_COUNT'),
+                        }
+                        os.environ['OMP_NUM_THREADS'] = '1'
+                        os.environ['MKL_NUM_THREADS'] = '1'
+                        os.environ['OPENBLAS_NUM_THREADS'] = '1'
+                        os.environ['LOKY_MAX_CPU_COUNT'] = '8'
+                        try:
+                            calibrated.fit(X_train, y_train_remapped)
+                            self.best_models[name] = calibrated
+                            self.logger.info("Calibration complete for SVM; predict_proba available.")
+                        finally:
+                            for k, v in old_env.items():
+                                if v is None:
+                                    os.environ.pop(k, None)
+                                else:
+                                    os.environ[k] = v
+                    except Exception as e:
+                        self.logger.warning(f"SVM calibration failed; proceeding without calibrated probabilities: {e}")
             
             return True
             
@@ -657,7 +730,7 @@ class EnhancedRadiomicsClassifier:
                             if set(np.unique(y_split_original)) != {0, 1}:
                                 y_binary = (y_split_original == y_split_original.max()).astype(int)
                                 auc = roc_auc_score(y_binary, ensemble_probs)
-                                self.logger.debug(f"Binary: converted labels {np.unique(y_split_original)} to {y_binary} for AUC")
+                                self.logger.debug(f"Binary: converted labels {np.unique(y_split_original)} to {np.unique(y_binary)} for AUC")
                             else:
                                 auc = roc_auc_score(y_split_original, ensemble_probs)
                         else:
@@ -721,8 +794,15 @@ class EnhancedRadiomicsClassifier:
                 for name in model_names:
                     y_true = self.results[name]['test']['true_labels']
                     y_probs = self.results[name]['test']['probabilities']
-                    
-                    fpr, tpr, _ = roc_curve(y_true, y_probs)
+                    # Ensure binary labels are 0/1; map {min_label,max_label} -> {0,1}
+                    unique_lbls = sorted(np.unique(y_true))
+                    if set(unique_lbls) != {0, 1}:
+                        y_bin = (y_true == unique_lbls[-1]).astype(int)
+                        pos_label = 1
+                    else:
+                        y_bin = y_true
+                        pos_label = 1
+                    fpr, tpr, _ = roc_curve(y_bin, y_probs, pos_label=pos_label)
                     auc_score = self.results[name]['test']['auc']
                     axes[0, 1].plot(fpr, tpr, label=f'{name} (AUC = {auc_score:.3f})')
             else:
@@ -1376,7 +1456,7 @@ class EnhancedRadiomicsClassifier:
                                 y_prob_class = y_prob
                             
                             # Compute ROC curve for this class vs rest
-                            fpr, tpr, _ = roc_curve(y_true_binary, y_prob_class)
+                            fpr, tpr, _ = roc_curve(y_true_binary, y_prob_class, pos_label=1)
                             auc_score = roc_auc_score(y_true_binary, y_prob_class)
                             class_aucs.append(auc_score)
                             
@@ -1406,14 +1486,20 @@ class EnhancedRadiomicsClassifier:
             else:
                 # Binary: plot ROC curves
                 for i, (y_true, y_prob) in enumerate(ensemble_rocs):
+                    # Map labels to {0,1} if needed
+                    uniq = sorted(np.unique(y_true))
+                    if set(uniq) != {0, 1}:
+                        y_bin = (y_true == uniq[-1]).astype(int)
+                    else:
+                        y_bin = y_true
                     # Ensure y_prob is 1D for binary classification
                     if y_prob.ndim > 1:
                         y_prob_1d = y_prob[:, 1]  # Extract probability of positive class
                     else:
                         y_prob_1d = y_prob
                     
-                    fpr, tpr, _ = roc_curve(y_true, y_prob_1d)
-                    auc_score = roc_auc_score(y_true, y_prob_1d)
+                    fpr, tpr, _ = roc_curve(y_bin, y_prob_1d, pos_label=1)
+                    auc_score = roc_auc_score(y_bin, y_prob_1d)
                     ax3.plot(fpr, tpr, label=f'Fold {i+1} (AUC = {auc_score:.3f})', alpha=0.8, linewidth=2)
                 
                 ax3.plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Random')

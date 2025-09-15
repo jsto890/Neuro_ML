@@ -4,7 +4,7 @@ import os
 import argparse
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, SubsetRandomSampler
+from torch.utils.data import DataLoader, SubsetRandomSampler, WeightedRandomSampler
 import numpy as np
 from sklearn.metrics import roc_auc_score, accuracy_score, confusion_matrix, classification_report, precision_recall_fscore_support, matthews_corrcoef
 import csv
@@ -681,7 +681,16 @@ def create_test_summary_plots(fold_test_metrics, output_dir="./deep_learning_plo
     # 5. Average Confusion Matrix
     ax5 = axes[1, 1]
     if avg_cm is not None:
-        sns.heatmap(avg_cm, annot=True, fmt='.1f', cmap='Blues', xticklabels=['CN', 'AD'], yticklabels=['CN', 'AD'], ax=ax5)
+        # Determine labels based on confusion matrix shape
+        n_classes = avg_cm.shape[0]
+        if n_classes == 2:
+            class_labels = ['CN', 'AD']
+        elif n_classes == 3:
+            class_labels = ['CN', 'AD', 'PD']
+        else:
+            class_labels = [f'Class {i}' for i in range(n_classes)]
+        
+        sns.heatmap(avg_cm, annot=True, fmt='.1f', cmap='Blues', xticklabels=class_labels, yticklabels=class_labels, ax=ax5)
         ax5.set_title('Average Confusion Matrix (Test)')
         ax5.set_xlabel('Predicted')
         ax5.set_ylabel('Actual')
@@ -825,8 +834,11 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         labels = mapped_labels
     
     class_counts = np.bincount(labels)
-    class_weights = 1.0 / class_counts
-    class_weights = class_weights / class_weights.sum()
+    num_classes = len(class_counts)
+    # Avoid division by zero if any class absent (should be rare)
+    safe_counts = np.where(class_counts == 0, 1, class_counts)
+    inv_freq = 1.0 / safe_counts.astype(np.float64)
+    class_weights = inv_freq / inv_freq.sum()
     class_weights = torch.FloatTensor(class_weights).to(device)
     
     # Check if this is a Vision Transformer model
@@ -834,26 +846,30 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                        ['visiontransformer3d', 'swinunetrclassifier', 'fullswinunetrclassifier'])
     
     # Use appropriate loss function based on model type
-    if is_vit_model and args.label_smoothing > 0:
-        # Use CrossEntropyLoss with label smoothing for ViT models
+    if is_vit_model:
+        # CrossEntropy for ViT (with label smoothing)
         criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
         print(f"[INFO] Using CrossEntropyLoss with label smoothing {args.label_smoothing} for ViT model")
     else:
-        # Use FocalLoss for CNN models (original behavior)
-        class FocalLoss(nn.Module):
-            def __init__(self, alpha=0.25, gamma=2):
-                super().__init__()
-                self.alpha = alpha
-                self.gamma = gamma
-            
-            def forward(self, inputs, targets):
-                ce_loss = nn.CrossEntropyLoss(reduction='none')(inputs, targets)
-                pt = torch.exp(-ce_loss)
-                focal_loss = self.alpha * (1-pt)**self.gamma * ce_loss
-                return focal_loss.mean()
-        
-        criterion = FocalLoss(alpha=0.25, gamma=2)
-        print(f"[INFO] Using FocalLoss for CNN model")
+        if num_classes > 2:
+            # Multiclass CNN: weighted CE with label smoothing
+            criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=args.label_smoothing)
+            print(f"[INFO] Using CrossEntropyLoss (weighted, ls={args.label_smoothing}) for multiclass CNN")
+        else:
+            # Binary CNN: Focal loss
+            class FocalLoss(nn.Module):
+                def __init__(self, alpha=0.25, gamma=2.0):
+                    super().__init__()
+                    self.alpha = alpha
+                    self.gamma = gamma
+
+                def forward(self, inputs, targets):
+                    ce = nn.CrossEntropyLoss(reduction='none')(inputs, targets)
+                    pt = torch.exp(-ce)
+                    loss = (self.alpha * (1 - pt) ** self.gamma * ce).mean()
+                    return loss
+            criterion = FocalLoss(alpha=0.25, gamma=2.0)
+            print(f"[INFO] Using FocalLoss for binary CNN")
 
     model.to(device)
     best_val_auc = 0.0
@@ -862,6 +878,15 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     final_train_loss = 0.0
     final_train_acc = 0.0
     no_improvement_count = 0
+    
+    # Early stopping variables
+    early_stopping_patience = getattr(args, 'early_stopping_patience', 30)
+    early_stopping_min_delta = getattr(args, 'early_stopping_min_delta', 0.001)
+    early_stopping_monitor = getattr(args, 'early_stopping_monitor', 'val_auc')
+    best_monitored_metric = 0.0
+    early_stopping_count = 0
+    
+    print(f"[INFO] Early stopping enabled: patience={early_stopping_patience}, monitor={early_stopping_monitor}, min_delta={early_stopping_min_delta}")
     
     # Store best metrics
     best_precision_macro = 0.0
@@ -921,18 +946,21 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             )
             print(f"[INFO] Using Adam optimizer with weight decay {args.vit_weight_decay} for ViT model")
         
-        # Cosine schedule with warmup for ViT models
+        # Cosine schedule with warmup for ViT models (epoch-based)
         if args.vit_use_cosine_schedule:
-            total_steps = len(train_loader) * epochs
-            warmup_steps = len(train_loader) * args.vit_warmup_epochs
-            
-            def lr_lambda(step):
-                if step < warmup_steps:
-                    return float(step) / float(max(1, warmup_steps))
-                return max(0.0, 0.5 * (1.0 + math.cos(math.pi * (step - warmup_steps) / float(max(1, total_steps - warmup_steps)))))
-            
+            total_epochs = epochs
+            warmup_epochs = args.vit_warmup_epochs
+
+            def lr_lambda(current_epoch: int):
+                # Linear warmup for the first warmup_epochs
+                if current_epoch < warmup_epochs:
+                    return float(current_epoch + 1) / float(max(1, warmup_epochs))
+                # Cosine decay for the remaining epochs
+                progress = float(current_epoch - warmup_epochs) / float(max(1, total_epochs - warmup_epochs))
+                return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
+
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-            print(f"[INFO] Using cosine schedule with {args.vit_warmup_epochs} epoch warmup for ViT model")
+            print(f"[INFO] Using cosine schedule (epoch-based) with {args.vit_warmup_epochs} epoch warmup for ViT model")
         else:
             # Fallback to plateau scheduler for ViT
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -941,10 +969,9 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             )
             print(f"[INFO] Using plateau scheduler for ViT model")
     else:
-        # Original CNN behavior
+        # CNN optimizer/scheduler
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
         print(f"[INFO] Using AdamW optimizer with weight decay {args.weight_decay} for CNN model")
-        
         # Plateau LR scheduler on validation AUC for CNN models
         try:
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -1115,15 +1142,12 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                 'support': int(support[i])
             }
 
-        # Step plateau scheduler on val AUC
-        # Step scheduler based on model type
-        if is_vit_model and args.vit_use_cosine_schedule:
-            # Step-based scheduler for ViT with cosine schedule
-            scheduler.step()
+        # Step scheduler (handle both LambdaLR and ReduceLROnPlateau robustly)
+        if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            scheduler.step(val_auc)
             new_lr = optimizer.param_groups[0]['lr']
         else:
-            # Plateau scheduler for CNN models or ViT with plateau
-            scheduler.step(val_auc)
+            scheduler.step()
             new_lr = optimizer.param_groups[0]['lr']
         
         # Store epoch data
@@ -1187,14 +1211,57 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         else:
             no_improvement_count += 1
             
-        # Early stopping if no improvement for 20 epochs
+        # Early stopping logic based on monitored metric
+        current_monitored_metric = 0.0
+        if early_stopping_monitor == 'val_auc':
+            current_monitored_metric = val_auc
+        elif early_stopping_monitor == 'val_acc':
+            current_monitored_metric = val_acc
+        elif early_stopping_monitor == 'val_loss':
+            current_monitored_metric = -epoch_loss  # Negative because we want to maximize
+        
+        # Check if we have improvement
+        if current_monitored_metric > best_monitored_metric + early_stopping_min_delta:
+            best_monitored_metric = current_monitored_metric
+            early_stopping_count = 0
+        else:
+            early_stopping_count += 1
+        
+        # Early stopping check
+        if early_stopping_count >= early_stopping_patience:
+            print(f"\n[EARLY STOPPING] No improvement in {early_stopping_monitor} for {early_stopping_patience} epochs")
+            print(f"[EARLY STOPPING] Best {early_stopping_monitor}: {best_monitored_metric:.6f}")
+            print(f"[EARLY STOPPING] Stopping training at epoch {epoch}/{epochs}")
+            break
+            
+        # Legacy early stopping (keeping for backward compatibility)
         if no_improvement_count >= 20:
-            print(f"\nEarly stopping triggered after {epoch} epochs")
+            print(f"\n[LEGACY] Early stopping triggered after {epoch} epochs (no improvement in AUC)")
             break
 
     # Load best model weights before returning
     if best_state is not None:
         model.load_state_dict(best_state)
+    
+    # Print training summary
+    if early_stopping_count >= early_stopping_patience:
+        print(f"\n{'='*60}")
+        print(f"TRAINING COMPLETED WITH EARLY STOPPING")
+        print(f"{'='*60}")
+        print(f"Final epoch: {epoch}/{epochs}")
+        print(f"Early stopping triggered: {early_stopping_monitor} did not improve for {early_stopping_patience} epochs")
+        print(f"Best {early_stopping_monitor}: {best_monitored_metric:.6f}")
+        print(f"Best validation AUC: {best_val_auc:.6f}")
+        print(f"Best validation accuracy: {best_val_acc:.6f}")
+        print(f"Training completed in {len(training_history)} epochs")
+    else:
+        print(f"\n{'='*60}")
+        print(f"TRAINING COMPLETED SUCCESSFULLY")
+        print(f"{'='*60}")
+        print(f"Completed all {epochs} epochs")
+        print(f"Best {early_stopping_monitor}: {best_monitored_metric:.6f}")
+        print(f"Best validation AUC: {best_val_auc:.6f}")
+        print(f"Best validation accuracy: {best_val_acc:.6f}")
     
     return model, best_val_auc, best_val_acc, final_train_loss, final_train_acc, training_history, best_precision_macro, best_recall_macro, best_f1_macro, best_class_metrics, best_confusion_matrix, best_threshold, best_threshold_results
 
@@ -1470,7 +1537,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             train_dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root)
             val_dataset = SMRIDataset(csv_path=temp_val_csv, data_root=args.data_root)
             test_dataset = SMRIDataset(csv_path=temp_test_csv, data_root=args.data_root)
-
+            
             # Initialize model for this fold
             unique_labels = sorted(train_dataset.df['label'].unique())
             num_classes = len(unique_labels)
@@ -1590,8 +1657,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             else:
                 # Binary classification: no temperature scaling
                 eval_result = evaluate_model(
-                    model, test_loader, args.device, label_mapping=label_mapping, threshold=test_threshold
-                )
+                model, test_loader, args.device, label_mapping=label_mapping, threshold=test_threshold
+            )
                 predictions, probabilities, labels = eval_result
                 temperature_info = None
             
@@ -1605,7 +1672,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
 
             # Print memory status after evaluation
             print_memory_status(args.device, "[MEMORY] After evaluation")
-            
+
             # Store test metrics for aggregation
             safe_metrics = {
                 'accuracy': float(metrics['accuracy']),
@@ -1676,8 +1743,9 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
         else:
             avg_threshold = None
             avg_accuracy_improvement = None
-        
+
         evaluation_dir = os.path.join(model_dir, "evaluation_plots")
+        os.makedirs(evaluation_dir, exist_ok=True)
         create_training_plots(folds_data, evaluation_dir, model_name)
         # Create aggregated test plots and summary
         classification_description = get_label_description(args.labels)
@@ -1752,8 +1820,15 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'fold_results': fold_results
         })
         print(f"\n{model_name} results saved to: {model_dir}")
-        print(f"Average optimal threshold: {avg_threshold:.3f} (default: 0.5)")
-        print(f"Average accuracy improvement: {avg_accuracy_improvement:.4f}")
+        if avg_threshold is not None:
+            print(f"Average optimal threshold: {avg_threshold:.3f} (default: 0.5)")
+        else:
+            print("Average optimal threshold: Not applicable (multiclass)")
+        if avg_accuracy_improvement is not None:
+            print(f"Average accuracy improvement: {avg_accuracy_improvement:.4f}")
+        else:
+            print("Average accuracy improvement: Not applicable (multiclass)")
+            print("Average accuracy improvement: Not applicable (multiclass)")
         
     # Clean up temporary CSVs created for this run
     removed_count = 0
@@ -2189,14 +2264,46 @@ def create_data_loaders_with_memory_optimization(train_dataset, val_dataset, tes
         if working_batch_size != args.batch_size:
             print(f"[MEMORY] Reduced batch size from {args.batch_size} to {working_batch_size}")
     
+    # Build weighted sampler for multiclass to mitigate collapse
+    # Determine if multiclass from train dataset labels
+    try:
+        train_labels_np = train_dataset.df['label'].to_numpy()
+    except Exception:
+        # Fallback: extract from dataset items (slower)
+        tmp_labels = []
+        for i in range(len(train_dataset)):
+            _, y = train_dataset[i]
+            tmp_labels.append(int(y))
+        train_labels_np = np.array(tmp_labels)
+    unique_train_labels = np.unique(train_labels_np)
+    use_weighted_sampler = len(unique_train_labels) > 2
+
+    sampler = None
+    if use_weighted_sampler:
+        from collections import Counter
+        counts = Counter(train_labels_np.tolist())
+        sample_weights = np.array([1.0 / counts[l] for l in train_labels_np], dtype=np.float64)
+        weights_tensor = torch.from_numpy(sample_weights)
+        sampler = WeightedRandomSampler(weights=weights_tensor, num_samples=len(train_labels_np), replacement=True)
+
     # Create data loaders with working batch size
-    train_loader = DataLoader(
-        train_dataset, 
-        batch_size=working_batch_size, 
-        shuffle=True, 
-        num_workers=args.num_workers,
-        pin_memory=True if 'cuda' in args.device else False
-    )
+    if sampler is not None:
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=working_batch_size,
+            sampler=sampler,
+            shuffle=False,
+            num_workers=args.num_workers,
+            pin_memory=True if 'cuda' in args.device else False
+        )
+    else:
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=working_batch_size,
+            shuffle=True,
+            num_workers=args.num_workers,
+            pin_memory=True if 'cuda' in args.device else False
+        )
     
     val_loader = DataLoader(
         val_dataset, 
@@ -2247,6 +2354,15 @@ def main():
     parser.add_argument("--weight_decay", type=float, default=0.00001, help="Weight decay for CNN models")
     parser.add_argument("--lr_scheduler_patience", type=int, default=5, help="LR scheduler patience")
     parser.add_argument("--lr_scheduler_factor", type=float, default=0.5, help="LR scheduler factor (0.5 = halve LR)")
+    
+    # Early stopping arguments
+    parser.add_argument("--early_stopping_patience", type=int, default=30,
+                        help="Early stopping patience (stop if no improvement for N epochs)")
+    parser.add_argument("--early_stopping_min_delta", type=float, default=0.001,
+                        help="Minimum improvement threshold for early stopping")
+    parser.add_argument("--early_stopping_monitor", type=str, default="val_auc",
+                        choices=["val_auc", "val_acc", "val_loss"],
+                        help="Metric to monitor for early stopping")
     
     # Hardware arguments
     parser.add_argument("--device", type=str, default="cuda", help="Device to use (cuda, cpu, or specific GPU)")

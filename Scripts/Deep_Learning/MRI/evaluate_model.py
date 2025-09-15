@@ -264,11 +264,13 @@ def calculate_metrics(predictions, probabilities, labels):
     else:
         auc = roc_auc_score(labels, probabilities, multi_class='ovr')
     
-    # Confusion matrix
-    cm = confusion_matrix(labels, predictions)
+    # Confusion matrix (ensure all classes appear, even if zero count)
+    n_classes = probabilities.shape[1] if len(probabilities.shape) > 1 else int(np.max(predictions)) + 1
+    all_class_labels = list(range(n_classes))
+    cm = confusion_matrix(labels, predictions, labels=all_class_labels)
     
-    # Classification report
-    report = classification_report(labels, predictions, output_dict=True, zero_division=0)
+    # Classification report (ensure all classes included)
+    report = classification_report(labels, predictions, labels=all_class_labels, output_dict=True, zero_division=0)
     
     mcc = matthews_corrcoef(labels, predictions)
     
