@@ -183,11 +183,22 @@ def load_model(arch: str, num_classes: int, in_channels: int, weights_path: str,
 
 
 def get_device(preferred: Optional[str] = None) -> str:
+    """
+    Resolve device string. Accepts 'cpu', 'mps', 'cuda', or 'cuda:N'.
+    Falls back to CPU if unavailable.
+    """
     if preferred:
-        if preferred == 'cuda' and torch.cuda.is_available():
-            return 'cuda'
-        if preferred == 'mps' and torch.backends.mps.is_available():
-            return 'mps'
+        pref = str(preferred).lower()
+        if pref.startswith('cuda'):
+            if not torch.cuda.is_available():
+                return 'cpu'
+            # Allow 'cuda' or 'cuda:N'
+            return pref
+        if pref == 'mps':
+            return 'mps' if torch.backends.mps.is_available() else 'cpu'
+        if pref == 'cpu':
+            return 'cpu'
+        # Unknown string → best effort
         return 'cpu'
     # Auto
     if torch.cuda.is_available():
@@ -320,7 +331,7 @@ def main():
     parser.add_argument('--label-map-json', type=str, help='Optional JSON mapping of numeric labels to names')
     parser.add_argument('--normalize', choices=['zscore', 'minmax', 'none'], default='zscore')
     parser.add_argument('--resize-dims', type=int, nargs=3, metavar=('D', 'H', 'W'), help='Optional resize to D H W before inference')
-    parser.add_argument('--device', choices=['cuda', 'cpu', 'mps'], default=None)
+    parser.add_argument('--device', type=str, default=None)
     parser.add_argument('--output-dir', default='~/reseng202500013-ndd-ml/clinical_outputs/deep', help='Directory to write outputs (JSON + NIfTI maps)')
     parser.add_argument('--occ-ksize', type=int, default=16)
     parser.add_argument('--occ-stride', type=int, default=None)

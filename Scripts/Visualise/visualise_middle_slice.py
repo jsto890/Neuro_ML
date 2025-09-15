@@ -14,7 +14,7 @@ def _resolve_nii_path() -> str:
     if args.nii:
         return os.path.expanduser(args.nii)
     # Fallback to previous default path (edit if desired)
-    return "/Volumes/reseng202500013-ndd-ml/data/Final_SPECT/CN_SPECT_PPMI_postprocessed/Subject_3204/5. finalised.nii.gz"
+    return "/Volumes/reseng202500013-ndd-ml/data/sub-I1624206_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w_brain_zscore_gradcam_class1.nii.gz"
 
 # Load the NIfTI file
 nii_file = _resolve_nii_path()
