@@ -496,7 +496,8 @@ class EnhancedRadiomicsClassifier:
                 # SVM-specific: increase verbosity and cap parallelism
                 is_svm = (name == 'SVM')
                 if is_svm:
-                    search_kwargs.update(dict(n_jobs=2, verbose=2, pre_dispatch='2*n_jobs'))
+                    # Keep controlled parallelism but silence sklearn CV progress output
+                    search_kwargs.update(dict(n_jobs=2, verbose=0, pre_dispatch='2*n_jobs'))
                 
                 search = RandomizedSearchCV(model, param_grid, **search_kwargs)
                 
