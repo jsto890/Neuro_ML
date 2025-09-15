@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+"""
+Interactive DICOM SPECT viewer (3D + time) for macOS
+- Opens a Finder file dialog to choose a .dcm file
+- Renders in napari with 3D volume view
+- If the scan has multiple time points, adds a time slider
+Dependencies: pydicom, napari, numpy
+Install: pip install pydicom napari[all] numpy
+"""
+
+import sys
+import os
+import numpy as np
+import pydicom
+from pydicom.datadict import tag_for_keyword
+
+# --- macOS file picker (native) ---
+import tkinter as tk
+from tkinter import filedialog, messagebox
+
+# --- napari viewer ---
+import napari
+
+def pick_dicom_file():
+    root = tk.Tk()
+    root.withdraw()
+    root.update()
+    path = filedialog.askopenfilename(
+        title="Select a DICOM (.dcm) file",
+        filetypes=[("DICOM files", "*.dcm"), ("All files", "*.*")]
+    )
+    root.destroy()
+    return path
+
+def get_spacing(ds):
+    """Return voxel spacing as (z, y, x). Falls back to (1,1,1) if unknown."""
+    # PixelSpacing: [row_spacing (mm), col_spacing (mm)] => (y, x)
+    yx = None
+    if hasattr(ds, "PixelSpacing"):
+        try:
+            yx = [float(ds.PixelSpacing[0]), float(ds.PixelSpacing[1])]
+        except Exception:
+            yx = None
+
+    # Slice spacing: try SpacingBetweenSlices, else SliceThickness
+    z = None
+    # Multi-frame nuclear sometimes stores in FunctionalGroups, but try top-level first
+    candidates = ["SpacingBetweenSlices", "SliceThickness"]
+    for key in candidates:
+        if hasattr(ds, key):
+            try:
+                z = float(getattr(ds, key))
+                break
+            except Exception:
+                pass
+
+    # If multi-frame, check SharedFunctionalGroups for PixelMeasures
+    try:
+        sfg = getattr(ds, "SharedFunctionalGroupsSequence", None)
+        if sfg:
+            pm = getattr(sfg[0], "PixelMeasuresSequence", None)
+            if pm:
+                if yx is None and hasattr(pm[0], "PixelSpacing"):
+                    yx = [float(pm[0].PixelSpacing[0]), float(pm[0].PixelSpacing[1])]
+                if z is None:
+                    if hasattr(pm[0], "SpacingBetweenSlices"):
+                        z = float(pm[0].SpacingBetweenSlices)
+                    elif hasattr(pm[0], "SliceThickness"):
+                        z = float(pm[0].SliceThickness)
+    except Exception:
+        pass
+
+    if yx is None:
+        yx = [1.0, 1.0]
+    if z is None:
+        z = 1.0
+
+    # Return as (z, y, x)
+    return (z, yx[0], yx[1])
+
+def reshape_time_if_present(ds, arr):
+    """
+    If the DICOM is multi-frame with temporal positions, reshape from
+    (frames, Y, X) into (T, Z, Y, X). If not detected, return original.
+    """
+    # Single-frame or already 4D
+    if arr.ndim != 3:
+        return arr, None  # (data, frame_time_ms)
+
+    num_frames = getattr(ds, "NumberOfFrames", None)
+    if not num_frames or num_frames != arr.shape[0]:
+        # Likely 3D volume: (Z, Y, X)
+        return arr, None
+
+    # Try to detect temporal positions via PerFrameFunctionalGroupsSequence
+    pf = getattr(ds, "PerFrameFunctionalGroupsSequence", None)
+    temporal_indices = []
+    if pf:
+        for f in pf:
+            try:
+                fc = f.FrameContentSequence[0]
+                # TemporalPositionIndex is common if time is present
+                if hasattr(fc, "TemporalPositionIndex"):
+                    temporal_indices.append(int(fc.TemporalPositionIndex))
+                else:
+                    temporal_indices.append(1)  # assume single time if not specified
+            except Exception:
+                temporal_indices.append(1)
+    else:
+        # No per-frame groups => treat as Z-stack only
+        return arr, None
+
+    unique_times = sorted(set(temporal_indices))
+    T = len(unique_times)
+    if T <= 1:
+        # no time dimension detected
+        return arr, None
+
+    # Map frames to time order
+    # Assume frames are ordered by time then slice OR slice then time.
+    # We'll try to evenly divide frames into T chunks.
+    F = arr.shape[0]
+    if F % T != 0:
+        # Fallback: cannot infer tidy (T, Z) layout; keep as-is
+        return arr, None
+
+    Z = F // T
+
+    # Heuristic 1: frames grouped by time then all slices, common in multi-frame
+    # Build (T, Z, Y, X)
+    data_tz = np.zeros((T, Z, arr.shape[1], arr.shape[2]), dtype=arr.dtype)
+
+    # Build index lists per temporal position
+    buckets = {t: [] for t in unique_times}
+    for i, tpos in enumerate(temporal_indices):
+        buckets[tpos].append(i)
+
+    # If each bucket length equals Z, and inside each bucket frames look like slices, we’re good
+    ok = all(len(buckets[t]) == Z for t in unique_times)
+    if not ok:
+        # Fallback: assume simple interleave: [t0 z0, t1 z0, ...] — reshape by interleave
+        # (This is a best-effort; if wrong, user can still browse slices/time.)
+        data_tz = arr.reshape(T, Z, arr.shape[1], arr.shape[2])
+    else:
+        # fill by bucket order
+        for ti, t in enumerate(unique_times):
+            frame_idxs = buckets[t]
+            # If frames aren’t sorted, sort by index
+            frame_idxs = sorted(frame_idxs)
+            for zi, fi in enumerate(frame_idxs):
+                data_tz[ti, zi] = arr[fi]
+
+    # FrameTime (ms) if present
+    frame_time_ms = None
+    # DICOM tag (0018,1063) FrameTime in ms
+    try:
+        ft_tag = tag_for_keyword("FrameTime")  # (0018,1063)
+        if ft_tag and ft_tag in ds:
+            frame_time_ms = float(ds[ft_tag].value)
+        else:
+            # Sometimes in SharedFunctionalGroups -> FrameContent/FrameAnatomy not great;
+            # skip if not readily available.
+            frame_time_ms = None
+    except Exception:
+        frame_time_ms = None
+
+    return data_tz, frame_time_ms
+
+def main():
+    path = pick_dicom_file()
+    if not path:
+        print("No file selected.")
+        sys.exit(0)
+
+    if not os.path.exists(path):
+        messagebox.showerror("Error", f"File not found:\n{path}")
+        sys.exit(1)
+
+    try:
+        ds = pydicom.dcmread(path)
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to read DICOM:\n{e}")
+        sys.exit(1)
+
+    # Load pixel data
+    try:
+        arr = ds.pixel_array
+    except Exception as e:
+        messagebox.showerror("Error", f"No pixel data in this DICOM or unsupported transfer syntax:\n{e}")
+        sys.exit(1)
+
+    # Handle integer scaling
+    slope = float(getattr(ds, "RescaleSlope", 1.0))
+    intercept = float(getattr(ds, "RescaleIntercept", 0.0))
+    if slope != 1.0 or intercept != 0.0:
+        arr = arr.astype(np.float32) * slope + intercept
+
+    # Try to detect time dimension and reshape if present
+    data, frame_time_ms = reshape_time_if_present(ds, arr)
+
+    # Spacing for correct aspect ratio (z,y,x)
+    zyx = get_spacing(ds)
+    # napari scale expects per-axis scaling matching array order.
+    # If data.ndim == 4: (T, Z, Y, X) -> scale should be (1, z, y, x)
+    # If data.ndim == 3: (Z, Y, X) -> scale should be (z, y, x)
+    if data.ndim == 4:
+        scale = (1.0, zyx[0], zyx[1], zyx[2])
+    elif data.ndim == 3:
+        scale = (zyx[0], zyx[1], zyx[2])
+    else:
+        # 2D fallback
+        scale = (zyx[1], zyx[2])
+
+    # Open napari viewer
+    viewer = napari.Viewer()
+    name = os.path.basename(path)
+
+    # Add image; napari handles 3D and time automatically.
+    layer = viewer.add_image(
+        data,
+        name=name,
+        rgb=False,
+        scale=scale,
+        rendering='attenuated_mip',  # good default for SPECT; try 'iso' too
+        contrast_limits=(np.percentile(data, 5), np.percentile(data, 99.5)),
+        interpolation2d='nearest',
+        interpolation3d='nearest',
+    )
+
+    # Default to 2D axial slice view for easier interpretation; use hotkeys to toggle.
+    if data.ndim >= 3:
+        viewer.dims.ndisplay = 2
+
+    info = []
+    if frame_time_ms is not None:
+        info.append(f"FrameTime ~ {frame_time_ms:.0f} ms")
+    try:
+        mod = getattr(ds, "Modality", None)
+        if mod:
+            info.append(f"Modality: {mod}")
+    except Exception:
+        pass
+    if info:
+        layer.name = f"{name}  (" + " | ".join(info) + ")"
+
+    # -----------------
+    # Viewer conveniences
+    # -----------------
+    def _recompute_contrast(p_low=5.0, p_high=99.5):
+        try:
+            lo = float(np.percentile(data, p_low))
+            hi = float(np.percentile(data, p_high))
+            # guard against equal limits
+            if hi <= lo:
+                lo, hi = np.min(data), np.max(data)
+            layer.contrast_limits = (lo, hi)
+        except Exception:
+            pass
+
+    def _to_2d(event=None):
+        viewer.dims.ndisplay = 2
+
+    def _to_3d(event=None):
+        viewer.dims.ndisplay = 3
+
+    def _cycle_render(event=None):
+        # Only meaningful in 3D
+        if viewer.dims.ndisplay != 3:
+            return
+        modes = ['attenuated_mip', 'mip', 'iso', 'translucent']
+        try:
+            i = modes.index(layer.rendering)
+        except ValueError:
+            i = 0
+        layer.rendering = modes[(i + 1) % len(modes)]
+
+    def _more_contrast(event=None):
+        # tighten window
+        lo, hi = layer.contrast_limits
+        rng = hi - lo
+        layer.contrast_limits = (lo + 0.05 * rng, hi - 0.05 * rng)
+
+    def _less_contrast(event=None):
+        # widen window toward data percentiles
+        _recompute_contrast(2.0, 99.8)
+
+    # Key bindings
+    viewer.bind_key('2')(_to_2d)           # press 2 for 2D slices
+    viewer.bind_key('3')(_to_3d)           # press 3 for 3D volume
+    viewer.bind_key('m')(_cycle_render)    # press m to cycle 3D rendering
+    viewer.bind_key("=")(_more_contrast)   # press = to increase contrast
+    viewer.bind_key("-")(_less_contrast)   # press - to relax contrast
+
+    # Set an initial, robust contrast window
+    _recompute_contrast(5.0, 99.5)
+
+    napari.run()
+
+if __name__ == "__main__":
+    main()
