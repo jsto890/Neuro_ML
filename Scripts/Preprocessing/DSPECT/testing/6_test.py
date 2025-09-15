@@ -9,18 +9,18 @@ parser.add_argument("--diagnosis", type=str, choices=['CN', 'PD'], required=True
 parser.add_argument("--isHasel", action="store_true", help="Set this flag if running on the Hasel server.")
 args = parser.parse_args()
 
-if args.isHasel:
-    base_dir = os.path.expanduser('~/reseng202500013-ndd-ml')
-else:
-    base_dir = '/Volumes/reseng202500013-ndd-ml'
+# Updated to use Desktop SPECT folders
+base_dir = "/Users/jacksonschofield/Desktop/SPECT"
 
 def full_path(path):
+    # Simplified path handling for Desktop structure
     if path.startswith("~/") or path.startswith("/Volumes/"):
         return os.path.join(base_dir, os.path.relpath(os.path.expanduser(path), start=os.path.expanduser('~/reseng202500013-ndd-ml')))
     return path
 
-input_dir = os.path.join(full_path('~/reseng202500013-ndd-ml/data/preprocessed/SPECT/postprocessed'), args.diagnosis)
-csv_path = os.path.join(input_dir, f"summary_{args.diagnosis}.csv")
+# Use CN_SPECT_PPMI_NIfTI for testing
+input_dir = os.path.join(base_dir, "CN_SPECT_PPMI_NIfTI")
+csv_path = os.path.join(input_dir, f"summary_CN.csv")
 subjects = [f for f in os.listdir(input_dir) if f.startswith('sub-') and f.endswith('.nii.gz')]
 
 # Check CSV

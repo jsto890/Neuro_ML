@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
+
 import os
 import re
+
 import subprocess
 from pathlib import Path
+import pydicom
+from datetime import datetime
+import shutil
+
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
 DATASETS = {
@@ -101,11 +107,18 @@ def convert_dicom(dicom_dir: Path, out_dir: Path, prefix: str) -> bool:
             print(f"[!] FATAL: dcm2niix failed for {dicom_dir}. Skipping.")
             return False
 
-def main():
-    for ds_name, ds_root in DATASETS.items():
-        if not ds_root.exists():
-            print(f"[!] Missing: {ds_root}")
-            continue
+def create_output_structure(base_output_path, subject_id, scan_date, modality):
+    """Create organized output folder structure"""
+    # Create main subject folder
+    subject_folder = base_output_path / f"Subject_{subject_id}"
+    subject_folder.mkdir(parents=True, exist_ok=True)
+    
+    # Create scan-specific folder
+    scan_folder = subject_folder / f"Scan_{scan_date}_{modality}"
+    scan_folder.mkdir(parents=True, exist_ok=True)
+    
+    return scan_folder
+
 
         for subj_dir in find_subject_dirs(ds_root):
             if FORCED_SMD:
@@ -142,6 +155,7 @@ def main():
             convert_dicom(subj_dir, dest_folder, out_prefix)
 
     print("All done.")
+
 
 if __name__ == "__main__":
     main()
