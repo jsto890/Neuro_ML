@@ -1,6 +1,7 @@
 from pathlib import Path
 import pandas as pd
 import os
+import argparse
 
 # Define constants
 DATA_DIR = Path.home() / "reseng202500013-ndd-ml" / "data"
@@ -8,15 +9,17 @@ PREPROCESSED_PET_DIR = DATA_DIR / "preprocessed" / "PET"
 IMAGING_RECORDS_PATH = DATA_DIR / "imaging_records.csv"
 OUTPUT_LABELS_PATH = DATA_DIR / "pet_labels.csv"
 
-# Disease label mapping
-label_map = {"AD": 0, "CN": 1, "PD": 2}
+# Disease label mapping (canonical for validation): 0=CN, 1=AD, 2=PD
+label_map = {"CN": 0, "AD": 1, "PD": 2}
 
 def normalize_disease(disease_raw):
     s = str(disease_raw).strip().upper()
-    if s.startswith("AD"):
-        return "AD"
+    if s.endswith('A') and s[:-1] in label_map:
+        s = s[:-1]
     if s.startswith("CN"):
         return "CN"
+    if s.startswith("AD"):
+        return "AD"
     if s.startswith("PD"):
         return "PD"
     return s
@@ -29,7 +32,96 @@ def normalize_disease(disease_raw):
 #   {subject_id}_{site}_PET_{disease}_SUVR.nii
 
 
+def validate_existing_labels(records_path: Path, labels_path: Path, out_dir: Path | None = None) -> int:
+    """
+    Validate an existing PET labels CSV (subject_id,label) against imaging_records.csv using
+    canonical mapping 0=CN, 1=AD, 2=PD.
+
+    Returns number of mismatches found. Optionally writes a mismatches CSV in out_dir.
+    """
+    if not labels_path.exists():
+        print(f"[ERROR] Labels CSV not found: {labels_path}")
+        return -1
+
+    print(f"[INFO] Validating labels in: {labels_path}")
+    df_labels = pd.read_csv(labels_path)
+    if "subject_id" not in df_labels.columns or "label" not in df_labels.columns:
+        raise ValueError("Labels CSV must contain columns: subject_id,label")
+
+    print(f"[INFO] Loading imaging records: {records_path}")
+    df_records = pd.read_csv(records_path)
+    if "SubjectID" not in df_records.columns or "Disease" not in df_records.columns:
+        raise ValueError("imaging_records.csv must contain columns: SubjectID,Disease")
+
+    df_records = df_records.copy()
+    df_records["DiseaseNorm"] = df_records["Disease"].apply(normalize_disease)
+
+    # Build SubjectID -> expected_label mapping
+    rec_map = {}
+    for _, row in df_records.iterrows():
+        sid = str(row["SubjectID"]).strip()
+        dis = row["DiseaseNorm"]
+        if dis in label_map:
+            rec_map[sid] = label_map[dis]
+
+    mismatches = []
+    not_in_records = []
+    for _, row in df_labels.iterrows():
+        subj_full = str(row["subject_id"]).strip()
+        subj_num = subj_full[4:] if subj_full.startswith('sub-') else subj_full
+        lbl = int(row["label"]) if pd.notna(row["label"]) else None
+        exp = rec_map.get(subj_num, None)
+        if exp is None:
+            not_in_records.append({"subject_id": subj_full, "label_csv": lbl, "records": None})
+            continue
+        if lbl != exp:
+            inv_map = {v: k for k, v in label_map.items()}
+            mismatches.append({
+                "subject_id": subj_full,
+                "label_csv": lbl,
+                "label_csv_name": inv_map.get(lbl, str(lbl)),
+                "expected_label": exp,
+                "expected_name": inv_map.get(exp, str(exp)),
+            })
+
+    print("\n[VALIDATION] PET labels vs imaging_records (0=CN,1=AD,2=PD)")
+    print(f"  Total in labels: {len(df_labels)}")
+    print(f"  Not found in records: {len(not_in_records)}")
+    print(f"  Mismatches: {len(mismatches)}")
+
+    if out_dir is None:
+        out_dir = labels_path.parent
+    out_dir = Path(out_dir)
+    try:
+        if mismatches:
+            out_mis = out_dir / "pet_label_mismatches.csv"
+            pd.DataFrame(mismatches).to_csv(out_mis, index=False)
+            print(f"  → Wrote mismatches CSV: {out_mis}")
+        if not_in_records:
+            out_miss = out_dir / "pet_subjects_not_in_records.csv"
+            pd.DataFrame(not_in_records).to_csv(out_miss, index=False)
+            print(f"  → Wrote missing-in-records CSV: {out_miss}")
+    except Exception as e:
+        print(f"[WARN] Could not write validation reports: {e}")
+
+    if mismatches:
+        sample = mismatches[:10]
+        sample_str = ", ".join([f"{m['subject_id']}: CSV {m['label_csv_name']} vs EXP {m['expected_name']}" for m in sample])
+        print(f"  Sample mismatches: {sample_str}")
+
+    return len(mismatches)
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Generate or validate PET labels (0=CN,1=AD,2=PD)")
+    parser.add_argument("--validate-only", action="store_true", help="Only validate existing pet_labels.csv against imaging_records and exit")
+    parser.add_argument("--out-dir", type=str, default=None, help="Directory to write validation reports (default: same as labels.csv)")
+    args = parser.parse_args()
+
+    if args.validate_only:
+        validate_existing_labels(IMAGING_RECORDS_PATH, OUTPUT_LABELS_PATH, Path(args.out_dir) if args.out_dir else None)
+        return
+
     print(f"[INFO] Scanning directory: {PREPROCESSED_PET_DIR}")
     
     # Check if preprocessed directory exists
@@ -198,6 +290,10 @@ def main():
         for label, count in label_counts.items():
             disease_name = [k for k, v in label_map.items() if v == label][0]
             print(f"  {disease_name} (label {label}): {count} subjects")
+
+        # Run a validation pass after writing
+        print("\n[INFO] Running validation pass on newly written labels...")
+        validate_existing_labels(IMAGING_RECORDS_PATH, OUTPUT_LABELS_PATH)
     else:
         print("[ERROR] No valid labels found!")
 

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Interactive SPECT Visualization Tool
-Displays processed SPECT images with interactive controls
+Interactive Visualization Tool
+- Browse SPECT pipeline folders (original mode)
+- OR overlay a heatmap on a base 3D volume with slice sliders
+  Usage:
+    python interactive_visualise.py --base /path/base.nii.gz --overlay /path/heat.nii.gz [--overlay-alpha 0.4]
 """
 
 import os
@@ -9,10 +12,29 @@ import sys
 import numpy as np
 import nibabel as nib
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider, Button, RadioButtons
+from matplotlib.widgets import Slider, Button, RadioButtons, CheckButtons
 import argparse
 
 nii_file = "/Volumes/reseng202500013-ndd-ml/data/interpret/sub-I1624206_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w_brain_zscore_gradcam_class0.nii.gz"
+
+def _robust_normalize(arr: np.ndarray, lo_p: float = 2.0, hi_p: float = 98.0) -> np.ndarray:
+    arr = arr.astype(np.float32)
+    lo = np.percentile(arr, lo_p)
+    hi = np.percentile(arr, hi_p)
+    if hi - lo < 1e-6:
+        return arr
+    out = (arr - lo) / (hi - lo)
+    return np.clip(out, 0.0, 1.0)
+
+def _normalize_overlay_within_mask(overlay: np.ndarray, base: np.ndarray, lo_p: float = 90.0, hi_p: float = 99.5) -> np.ndarray:
+    mask = (base != 0)
+    vals = overlay[mask] if np.any(mask) else overlay
+    lo = np.percentile(vals, lo_p)
+    hi = np.percentile(vals, hi_p)
+    if hi - lo < 1e-6:
+        return _robust_normalize(overlay, 2.0, 98.0)
+    out = (overlay - lo) / (hi - lo)
+    return np.clip(out, 0.0, 1.0)
 
 def find_spect_data():
     """Find available SPECT data in the Desktop SPECT directory"""
@@ -163,14 +185,152 @@ def create_interactive_viewer(img, data, title="SPECT Image"):
     
     plt.show()
 
+
+def create_overlay_viewer(base_img, base_data, overlay_data, title="Overlay Viewer", init_alpha: float = 0.4):
+    """Interactive viewer with overlays and slice sliders for a 3D volume.
+    - base_data: anatomical volume (grayscale)
+    - overlay_data: heatmap volume, same shape as base_data
+    """
+    if base_data.shape != overlay_data.shape:
+        print(f"⚠️ Base and overlay shapes differ: {base_data.shape} vs {overlay_data.shape}. Proceeding without resample.")
+
+    base = _robust_normalize(base_data)
+    heat = _normalize_overlay_within_mask(overlay_data, base_data)
+
+    nx, ny, nz = base.shape
+    x_idx, y_idx, z_idx = nx // 2, ny // 2, nz // 2
+
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+    fig.suptitle(title, fontsize=16)
+
+    # Initial plots
+    im1 = ax1.imshow(base[:, :, z_idx].T, cmap='gray', origin='lower')
+    hm1 = ax1.imshow(heat[:, :, z_idx].T, cmap='hot', origin='lower', alpha=init_alpha)
+    ax1.set_title(f'Axial (Z={z_idx})')
+    ax1.axis('off')
+
+    im2 = ax2.imshow(base[x_idx, :, :].T, cmap='gray', origin='lower')
+    hm2 = ax2.imshow(heat[x_idx, :, :].T, cmap='hot', origin='lower', alpha=init_alpha)
+    ax2.set_title(f'Sagittal (X={x_idx})')
+    ax2.axis('off')
+
+    im3 = ax3.imshow(base[:, y_idx, :].T, cmap='gray', origin='lower')
+    hm3 = ax3.imshow(heat[:, y_idx, :].T, cmap='hot', origin='lower', alpha=init_alpha)
+    ax3.set_title(f'Coronal (Y={y_idx})')
+    ax3.axis('off')
+
+    # Histogram of overlay inside brain
+    nzv = overlay_data[base_data != 0]
+    ax4.hist(nzv.flatten(), bins=50, alpha=0.7, color='red')
+    ax4.set_title('Overlay intensity (in-brain voxels)')
+    ax4.set_xlabel('Intensity')
+    ax4.set_ylabel('Frequency')
+
+    plt.subplots_adjust(bottom=0.22)
+
+    # Sliders
+    ax_z = plt.axes([0.2, 0.12, 0.6, 0.03])
+    s_z = Slider(ax_z, 'Z', 0, nz-1, valinit=z_idx, valstep=1)
+
+    ax_x = plt.axes([0.2, 0.08, 0.6, 0.03])
+    s_x = Slider(ax_x, 'X', 0, nx-1, valinit=x_idx, valstep=1)
+
+    ax_y = plt.axes([0.2, 0.04, 0.6, 0.03])
+    s_y = Slider(ax_y, 'Y', 0, ny-1, valinit=y_idx, valstep=1)
+
+    # Overlay alpha slider
+    ax_a = plt.axes([0.85, 0.12, 0.1, 0.03])
+    s_a = Slider(ax_a, 'Alpha', 0.0, 1.0, valinit=init_alpha, valstep=0.05)
+
+    # Overlay toggle
+    ax_chk = plt.axes([0.02, 0.8, 0.12, 0.12])
+    chk = CheckButtons(ax_chk, ['Overlay'], [True])
+
+    # Auto contrast buttons
+    ax_btn = plt.axes([0.02, 0.68, 0.12, 0.08])
+    btn_auto = Button(ax_btn, 'Auto
+Contrast')
+
+    def update_views():
+        z = int(s_z.val); x = int(s_x.val); y = int(s_y.val)
+        im1.set_array(base[:, :, z].T)
+        hm1.set_array(heat[:, :, z].T)
+        ax1.set_title(f'Axial (Z={z})')
+
+        im2.set_array(base[x, :, :].T)
+        hm2.set_array(heat[x, :, :].T)
+        ax2.set_title(f'Sagittal (X={x})')
+
+        im3.set_array(base[:, y, :].T)
+        hm3.set_array(heat[:, y, :].T)
+        ax3.set_title(f'Coronal (Y={y})')
+        fig.canvas.draw_idle()
+
+    def on_alpha(val):
+        a = float(s_a.val)
+        for hm in (hm1, hm2, hm3):
+            hm.set_alpha(a)
+        fig.canvas.draw_idle()
+
+    def on_toggle(label):
+        visible = chk.get_status()[0]
+        for hm in (hm1, hm2, hm3):
+            hm.set_visible(visible)
+        fig.canvas.draw_idle()
+
+    def on_auto(event):
+        # Re-normalize overlay based on current base percentiles
+        nonlocal heat
+        heat = _normalize_overlay_within_mask(overlay_data, base_data)
+        update_views()
+
+    s_z.on_changed(lambda v: update_views())
+    s_x.on_changed(lambda v: update_views())
+    s_y.on_changed(lambda v: update_views())
+    s_a.on_changed(on_alpha)
+    chk.on_clicked(on_toggle)
+    btn_auto.on_clicked(on_auto)
+
+    plt.show()
+
 def main():
-    parser = argparse.ArgumentParser(description="Interactive SPECT Visualization Tool")
+    parser = argparse.ArgumentParser(description="Interactive Visualization Tool")
     parser.add_argument("--file", type=str, help="Path to specific NIfTI file to visualize")
-    parser.add_argument("--diagnosis", type=str, choices=['CN', 'PD'], help="Diagnosis group to browse")
+    parser.add_argument("--diagnosis", type=str, choices=['CN', 'PD'], help="Diagnosis group to browse (SPECT mode)")
     parser.add_argument("--step", type=str, choices=['reoriented', 'normalised', 'registered', 'masked', 'finalised', 'postprocessed'], 
-                       help="Processing step to browse")
+                       help="Processing step to browse (SPECT mode)")
+    # Overlay mode
+    parser.add_argument("--base", type=str, help="Path to base anatomical NIfTI for overlay mode")
+    parser.add_argument("--overlay", type=str, help="Path to overlay heatmap NIfTI for overlay mode")
+    parser.add_argument("--overlay-alpha", type=float, default=0.4, help="Initial overlay alpha (0-1)")
     args = parser.parse_args()
     
+    # Overlay mode takes precedence if both paths provided
+    if args.base and args.overlay:
+        if not os.path.exists(args.base):
+            print(f"❌ Base file not found: {args.base}")
+            return
+        if not os.path.exists(args.overlay):
+            print(f"❌ Overlay file not found: {args.overlay}")
+            return
+        try:
+            b_img = nib.load(args.base); b_data = b_img.get_fdata().astype(np.float32)
+            o_img = nib.load(args.overlay); o_data = o_img.get_fdata().astype(np.float32)
+        except Exception as e:
+            print(f"❌ Failed to load NIfTI: {e}")
+            return
+        if b_data.ndim != 3:
+            print("❌ Base volume must be 3D")
+            return
+        if o_data.ndim == 4:
+            o_data = o_data.mean(axis=-1)
+        if o_data.ndim != 3:
+            print("❌ Overlay must be 3D or 4D")
+            return
+        title = f"Overlay Viewer: {os.path.basename(args.base)} + {os.path.basename(args.overlay)}"
+        create_overlay_viewer(b_img, b_data, o_data, title=title, init_alpha=float(args.overlay_alpha))
+        return
+
     if args.file:
         # Load specific file
         if not os.path.exists(args.file):

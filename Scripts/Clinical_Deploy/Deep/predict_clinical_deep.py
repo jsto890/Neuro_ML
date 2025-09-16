@@ -526,6 +526,14 @@ def main():
         run_set = {'gradcam', 'saliency', 'occlusion', 'gradientshap'}
 
     device = get_device(args.device)
+    # Collect method-specific errors to export in JSON and a sidecar log
+    interpret_errors: Dict[str, List[str]] = {
+        'gradcam': [],
+        'saliency': [],
+        'occlusion': [],
+        'gradientshap': [],
+    }
+
     if isinstance(args.num_threads, int) and args.num_threads > 0:
         try:
             torch.set_num_threads(int(args.num_threads))
@@ -647,7 +655,9 @@ def main():
                     except Exception:
                         pass
             except Exception as e:
-                print(f"Grad-CAM failed for class {c}: {e}")
+                msg = f"Grad-CAM failed for class {c}: {e}"
+                print(msg)
+                interpret_errors['gradcam'].append(msg)
 
     # Saliency (absolute gradient)
     if 'saliency' in run_set:
@@ -677,7 +687,9 @@ def main():
                 except Exception:
                     pass
         except Exception as e:
-            print(f"Saliency failed: {e}")
+            msg = f"Saliency failed: {e}"
+            print(msg)
+            interpret_errors['saliency'].append(msg)
             sal_path = None
 
     # Occlusion sensitivity
@@ -715,7 +727,9 @@ def main():
                 except Exception:
                     pass
         except Exception as e:
-            print(f"Occlusion failed: {e}")
+            msg = f"Occlusion failed: {e}"
+            print(msg)
+            interpret_errors['occlusion'].append(msg)
             occ_path = None
 
     # GradientSHAP (if captum available)
@@ -736,10 +750,12 @@ def main():
                         return out[0] if isinstance(out, tuple) else out
                 attr_model = LogitOnly(m).to(input_tensor.device)
                 attr_model.eval()
-                baseline = torch.zeros_like(input_tensor)
+                # Ensure inputs require gradients for Captum
+                attr_input = input_tensor.clone().detach().requires_grad_(True)
+                baseline = torch.zeros_like(attr_input)
                 gs = GradientShap(attr_model)
                 attributions = gs.attribute(
-                    input_tensor,
+                    attr_input,
                     baselines=baseline,
                     target=pred_idx,
                     n_samples=int(args.gshap_samples),
@@ -758,9 +774,13 @@ def main():
                         g = _gshap_one(m)
                         if g is not None:
                             g_list.append(g)
+                        else:
+                            interpret_errors['gradientshap'].append("Captum not available or initialization failed for one model.")
                     except Exception as _e:
                         # Skip models that fail attribution but continue with others
-                        print(f"GradientSHAP warning (one model skipped): {_e}")
+                        warn = f"GradientSHAP warning (one model skipped): {_e}"
+                        print(warn)
+                        interpret_errors['gradientshap'].append(warn)
                 gattr = None if len(g_list) == 0 else np.mean(np.stack(g_list, axis=0), axis=0)
 
             if gattr is not None:
@@ -771,7 +791,9 @@ def main():
             else:
                 gshap_path = None
         except Exception as e:
-            print(f"GradientSHAP failed: {e}")
+            msg = f"GradientSHAP failed: {e}"
+            print(msg)
+            interpret_errors['gradientshap'].append(msg)
             gshap_path = None
 
     # JSON report
@@ -793,6 +815,7 @@ def main():
             'occlusion': str(occ_path) if occ_path else None,
             'gradientshap': str(gshap_path) if gshap_path else None,
         },
+        'interpretability_errors': interpret_errors,
     }
 
     json_path = out_dir / f"{sid}_clinical_prediction_deep.json"
@@ -800,6 +823,23 @@ def main():
         json.dump(report, f, indent=2)
     print(f"\n✓ Prediction: {pred_name} (conf {confidence:.3f})")
     print(f"✓ JSON report: {json_path}")
+
+    # Also export a simple text error log if any errors occurred
+    if any(len(v) > 0 for v in interpret_errors.values()):
+        log_path = out_dir / f"{sid}_interpretability_errors.log"
+        try:
+            with open(log_path, 'w') as lf:
+                for k, msgs in interpret_errors.items():
+                    lf.write(f"[{k}]\n")
+                    if msgs:
+                        for msg in msgs:
+                            lf.write(f"- {msg}\n")
+                    else:
+                        lf.write("- none\n")
+                    lf.write("\n")
+            print(f"✓ Error log: {log_path}")
+        except Exception as e:
+            print(f"Warning: failed to write error log: {e}")
 
 
 if __name__ == '__main__':
