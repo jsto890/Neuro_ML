@@ -974,6 +974,12 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                     weights = (1.0 - self.beta) / (effective_num + 1e-8)
                     weights = weights / weights.sum() * len(spc)
                     self.register_buffer('class_weights', weights)
+                
+                def to(self, device):
+                    super().to(device)
+                    if hasattr(self, 'class_weights'):
+                        self.class_weights = self.class_weights.to(device)
+                    return self
                 def forward(self, logits, targets):
                     ce = nn.CrossEntropyLoss(weight=self.class_weights, reduction='none')(logits, targets)
                     pt = torch.exp(-ce)
@@ -981,6 +987,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                     return focal.mean()
             samples_per_class = class_counts
             criterion = ClassBalancedFocalLoss(samples_per_class=samples_per_class, beta=args.cb_beta, gamma=args.focal_gamma)
+            criterion = criterion.to(device)  # Move criterion to device
             print(f"[INFO] Using Class-Balanced Focal Loss (beta={args.cb_beta}, gamma={args.focal_gamma}) for multiclass CNN")
         else:
             # Binary CNN: Focal loss
