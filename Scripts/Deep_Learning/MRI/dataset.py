@@ -14,7 +14,7 @@ class SMRIDataset(Dataset):
       - A data_root directory containing smriprep/<subject>/anat/<subject>_desc-preproc_T1w_brain_zscore.nii.gz
     """
 
-    def __init__(self, csv_path: str, data_root: str):
+    def __init__(self, csv_path: str, data_root: str, transform=None, return_index: bool = False):
         """
         Args:
             csv_path  (str): path to CSV; expects columns 'subject_id' and 'label',
@@ -38,6 +38,8 @@ class SMRIDataset(Dataset):
         self.subjects = df['subject_id'].tolist()
         self.labels = df['label'].tolist()
         self.data_root = data_root
+        self.transform = transform
+        self.return_index = return_index
 
     def __len__(self):
         return len(self.subjects)
@@ -61,4 +63,10 @@ class SMRIDataset(Dataset):
         # Convert to a torch.FloatTensor with shape [1, D, H, W]
         smri = torch.from_numpy(data).unsqueeze(0).float()
 
+        # Optional train-time transforms (expects and returns torch.Tensor [1, D, H, W])
+        if self.transform is not None:
+            smri = self.transform(smri)
+
+        if self.return_index:
+            return smri, label, idx
         return smri, label
