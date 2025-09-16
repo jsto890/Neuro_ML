@@ -13,7 +13,7 @@ OUTPUT_LABELS_PATH = DATA_DIR / "mri_labels.csv"
 label_map = {"CN": 0, "AD": 1, "PD": 2}
 
 
-def validate_existing_labels(records_path: Path, labels_path: Path, out_dir: Path | None = None) -> int:
+def validate_existing_labels(records_path: Path, labels_path: Path, out_dir: Path | None = None, write_reports: bool = False) -> int:
     """
     Validate an existing labels CSV (subject_id,label) against imaging_records.csv using
     canonical mapping 0=CN, 1=AD, 2=PD.
@@ -91,17 +91,54 @@ def validate_existing_labels(records_path: Path, labels_path: Path, out_dir: Pat
     if out_dir is None:
         out_dir = labels_path.parent
     out_dir = Path(out_dir)
-    try:
-        if mismatches:
-            out_mis = out_dir / "mri_label_mismatches.csv"
-            pd.DataFrame(mismatches).to_csv(out_mis, index=False)
-            print(f"  → Wrote mismatches CSV: {out_mis}")
-        if not_in_records:
-            out_miss = out_dir / "mri_subjects_not_in_records.csv"
-            pd.DataFrame(not_in_records).to_csv(out_miss, index=False)
-            print(f"  → Wrote missing-in-records CSV: {out_miss}")
-    except Exception as e:
-        print(f"[WARN] Could not write validation reports: {e}")
+    # Print concise mismatch counts as requested
+    inv_map = {v: k for k, v in label_map.items()}
+    pair_counts = {k: 0 for k in [
+        "AD->CN", "AD->PD", "CN->AD", "CN->PD", "PD->AD", "PD->CN"
+    ]}
+    for m in mismatches:
+        k = f"{m['expected_name']}->{m['label_csv_name']}"
+        if k in pair_counts:
+            pair_counts[k] += 1
+    for key in ["AD->CN", "AD->PD", "CN->AD", "CN->PD", "PD->AD", "PD->CN"]:
+        print(f"{key} {pair_counts[key]}")
+
+    # Also print per-class correct/wrong counts based on expected (records)
+    expected_totals = {"AD": 0, "CN": 0, "PD": 0}
+    matches_per_expected = {"AD": 0, "CN": 0, "PD": 0}
+    for _, row in df_labels.iterrows():
+        subj_full = str(row["subject_id"]).strip()
+        subj_num = subj_full[4:] if subj_full.startswith('sub-') else subj_full
+        lbl = int(row["label"]) if pd.notna(row["label"]) else None
+        exp = rec_map.get(subj_num, None)
+        if exp is None:
+            continue
+        expected_name = inv_map.get(exp, str(exp))
+        if expected_name not in expected_totals:
+            continue
+        expected_totals[expected_name] += 1
+        if lbl == exp:
+            matches_per_expected[expected_name] += 1
+
+    print(f"AD_correct {matches_per_expected['AD']}")
+    print(f"CN_correct {matches_per_expected['CN']}")
+    print(f"PD_correct {matches_per_expected['PD']}")
+    print(f"AD_wrong {expected_totals['AD'] - matches_per_expected['AD']}")
+    print(f"CN_wrong {expected_totals['CN'] - matches_per_expected['CN']}")
+    print(f"PD_wrong {expected_totals['PD'] - matches_per_expected['PD']}")
+
+    if write_reports:
+        try:
+            if mismatches:
+                out_mis = out_dir / "mri_label_mismatches.csv"
+                pd.DataFrame(mismatches).to_csv(out_mis, index=False)
+                print(f"  → Wrote mismatches CSV: {out_mis}")
+            if not_in_records:
+                out_miss = out_dir / "mri_subjects_not_in_records.csv"
+                pd.DataFrame(not_in_records).to_csv(out_miss, index=False)
+                print(f"  → Wrote missing-in-records CSV: {out_miss}")
+        except Exception as e:
+            print(f"[WARN] Could not write validation reports: {e}")
 
     if mismatches:
         # Show a brief sample
@@ -118,10 +155,11 @@ def main():
     parser = argparse.ArgumentParser(description="Generate or validate MRI labels (0=CN,1=AD,2=PD)")
     parser.add_argument("--validate-only", action="store_true", help="Only validate existing mri_labels.csv against imaging_records and exit")
     parser.add_argument("--out-dir", type=str, default=None, help="Directory to write validation reports (default: same as labels.csv)")
+    parser.add_argument("--write-reports", action="store_true", help="Also write CSV reports for mismatches and missing records")
     args = parser.parse_args()
 
     if args.validate_only:
-        validate_existing_labels(IMAGING_RECORDS_PATH, OUTPUT_LABELS_PATH, Path(args.out_dir) if args.out_dir else None)
+        validate_existing_labels(IMAGING_RECORDS_PATH, OUTPUT_LABELS_PATH, Path(args.out_dir) if args.out_dir else None, write_reports=args.write_reports)
         return
 
     print(f"[INFO] Scanning directory: {PREPROCESSED_MRI_DIR}")
@@ -242,7 +280,7 @@ def main():
 
         # Run a validation pass after writing
         print("\n[INFO] Running validation pass on newly written labels...")
-        validate_existing_labels(IMAGING_RECORDS_PATH, OUTPUT_LABELS_PATH)
+        validate_existing_labels(IMAGING_RECORDS_PATH, OUTPUT_LABELS_PATH, write_reports=False)
     else:
         print("[ERROR] No valid labels found!")
 
