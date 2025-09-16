@@ -1182,7 +1182,9 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         if val_auc > best_val_auc:
             best_val_auc = val_auc
             best_val_acc = val_acc
-            best_state = model.state_dict().copy()
+            # Deep copy state dict to avoid mutation by future training steps
+            import copy
+            best_state = copy.deepcopy(model.state_dict())
             os.makedirs(checkpoint_dir, exist_ok=True)
             
             # Save model with fold-specific filename
@@ -1239,17 +1241,28 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             print(f"\n[LEGACY] Early stopping triggered after {epoch} epochs (no improvement in AUC)")
             break
 
-    # Load best model weights before returning
-    if best_state is not None:
+    # Load best model weights before returning (prefer saved checkpoint to avoid accidental mutation)
+    if fold_num is not None:
+        best_model_path = os.path.join(checkpoint_dir, f"best_smri_model_fold_{fold_num}.pth")
+    else:
+        best_model_path = os.path.join(checkpoint_dir, "best_smri_model.pth")
+    if os.path.exists(best_model_path):
+        state_dict = torch.load(best_model_path, map_location=device)
+        model.load_state_dict(state_dict)
+    elif best_state is not None:
         model.load_state_dict(best_state)
     
     # Print training summary
-    if early_stopping_count >= early_stopping_patience:
+    legacy_early_stopped = (no_improvement_count >= 20)
+    if early_stopping_count >= early_stopping_patience or legacy_early_stopped:
         print(f"\n{'='*60}")
         print(f"TRAINING COMPLETED WITH EARLY STOPPING")
         print(f"{'='*60}")
         print(f"Final epoch: {epoch}/{epochs}")
-        print(f"Early stopping triggered: {early_stopping_monitor} did not improve for {early_stopping_patience} epochs")
+        if legacy_early_stopped:
+            print(f"[LEGACY] Early stopping triggered (no improvement in AUC for 20 epochs)")
+        else:
+            print(f"Early stopping triggered: {early_stopping_monitor} did not improve for {early_stopping_patience} epochs")
         print(f"Best {early_stopping_monitor}: {best_monitored_metric:.6f}")
         print(f"Best validation AUC: {best_val_auc:.6f}")
         print(f"Best validation accuracy: {best_val_acc:.6f}")
