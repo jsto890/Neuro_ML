@@ -231,6 +231,72 @@ def predict(model, input_tensor: torch.Tensor) -> Tuple[int, np.ndarray, torch.T
     return pred_idx, probs, logits
 
 
+def set_dropout_enabled_only(module: nn.Module, enable: bool) -> None:
+    """
+    Enable training mode for Dropout layers only to approximate MC Dropout at inference,
+    leaving other modules (e.g., BatchNorm) in eval mode.
+    """
+    for m in module.modules():
+        if isinstance(m, (nn.Dropout, nn.Dropout2d, nn.Dropout3d)):
+            m.train(enable)
+        else:
+            # Keep non-dropout submodules in eval
+            try:
+                m.eval()
+            except Exception:
+                pass
+
+
+def aggregate_predictions(models: List[nn.Module], input_tensor: torch.Tensor, avg_method: str,
+                          tta_n: int = 0, tta_noise_std: float = 0.0, mc_dropout: bool = False
+                          ) -> Tuple[np.ndarray, torch.Tensor, Dict[str, object]]:
+    """
+    Run ensemble with optional TTA and return probabilities and aggregated logits.
+    Returns (probs_np, logits_tensor, meta)
+    meta contains per-replicate votes and counts for diagnostics.
+    """
+    if tta_n is None or tta_n < 0:
+        tta_n = 0
+    replicates = max(1, int(tta_n))
+
+    # Prepare models
+    for m in models:
+        m.eval()
+        if mc_dropout:
+            set_dropout_enabled_only(m, True)
+
+    all_logits: List[torch.Tensor] = []
+    votes: List[int] = []
+    with torch.no_grad():
+        for m in models:
+            for r in range(replicates):
+                xt = input_tensor
+                if tta_noise_std and tta_noise_std > 0.0 and tta_n > 0:
+                    xt = xt + torch.randn_like(xt) * float(tta_noise_std)
+                out = m(xt)
+                lg = out[0] if isinstance(out, tuple) else out
+                all_logits.append(lg)
+                v = int(torch.argmax(F.softmax(lg, dim=1), dim=1).item())
+                votes.append(v)
+
+    meta = {
+        'tta_replicates': replicates,
+        'votes': votes,
+        'vote_hist': {int(i): int(votes.count(i)) for i in set(votes)}
+    }
+
+    if avg_method == 'probs':
+        probs_stack = torch.stack([F.softmax(lg, dim=1) for lg in all_logits], dim=0)
+        probs_t = torch.mean(probs_stack, dim=0)  # [1, C]
+        logits = torch.log(probs_t + 1e-12)
+        probs = probs_t.squeeze(0).cpu().numpy()
+    else:
+        logits_t = torch.mean(torch.stack(all_logits, dim=0), dim=0)
+        logits = logits_t
+        probs = softmax_probs(logits_t)
+    return probs, logits, meta
+
+
 def normalize_map(arr: np.ndarray) -> np.ndarray:
     arr = arr.astype(np.float32)
     amin = float(arr.min())
@@ -497,6 +563,12 @@ def main():
     parser.add_argument('--weights-list', nargs='+', type=str, help='Additional weight files to ensemble (logits averaged)')
     parser.add_argument('--weights-glob', type=str, help='Glob to collect multiple weight files for ensembling')
     parser.add_argument('--ensemble-avg-method', choices=['logits', 'probs'], default='logits', help='Average logits (recommended) or probabilities across models')
+    # Risk-aware prediction and TTA
+    parser.add_argument('--tta-n', type=int, default=0, help='Number of TTA replicates (Gaussian noise)')
+    parser.add_argument('--tta-noise-std', type=float, default=0.005, help='Stddev of Gaussian noise for TTA')
+    parser.add_argument('--mc-dropout', action='store_true', help='Enable MC Dropout by activating Dropout layers during inference')
+    parser.add_argument('--risk-weights', type=float, nargs='+', help='Multipliers per class to bias decisions, length = num-classes (e.g., 1 1.2 1.2)')
+    parser.add_argument('--cn-min-prob', type=float, default=None, help='If predicted CN prob is below this, choose best non-CN class')
     parser.add_argument('--num-classes', type=int, default=3)
     parser.add_argument('--label-map-json', type=str, help='Optional JSON mapping of numeric labels to names')
     parser.add_argument('--normalize', choices=['zscore', 'minmax', 'none'], default='zscore')
@@ -586,29 +658,42 @@ def main():
     vol_np = normalize_volume(vol_np, method=args.normalize)
     input_tensor = to_model_tensor(vol_np, device=device, resize_dims=tuple(args.resize_dims) if args.resize_dims else None)
 
-    # Predict
-    if not is_ensemble:
+    # Predict with optional ensemble + TTA
+    if not is_ensemble and int(args.tta_n) <= 0:
         pred_idx, probs, logits = predict(models[0], input_tensor)
+        meta_pred = {'tta_replicates': 1, 'votes': [pred_idx], 'vote_hist': {pred_idx: 1}}
     else:
-        logits_list: List[torch.Tensor] = []
-        with torch.no_grad():
-            for m in models:
-                out = m(input_tensor)
-                lg = out[0] if isinstance(out, tuple) else out
-                logits_list.append(lg)
-        if args.ensemble_avg_method == 'probs':
-            probs_stack = torch.stack([F.softmax(lg, dim=1) for lg in logits_list], dim=0)
-            probs_t = torch.mean(probs_stack, dim=0)  # [1, C]
-            probs = probs_t.squeeze(0).cpu().numpy()
-            logits = torch.log(probs_t + 1e-12)
-        else:
-            logits_t = torch.mean(torch.stack(logits_list, dim=0), dim=0)
-            logits = logits_t
-            probs = softmax_probs(logits_t)
+        probs, logits, meta_pred = aggregate_predictions(
+            models, input_tensor, avg_method=args.ensemble_avg_method,
+            tta_n=int(args.tta_n), tta_noise_std=float(args.tta_noise_std), mc_dropout=bool(args.mc_dropout)
+        )
         pred_idx = int(np.argmax(probs))
+
+    # Raw prediction snapshot
+    pred_name_raw = label_map.get(pred_idx, str(pred_idx))
+    confidence_raw = float(np.max(probs))
+    prob_dict_raw = {label_map.get(i, str(i)): float(p) for i, p in enumerate(probs)}
+
+    # Risk-aware adjustment
+    adjusted_probs = probs.copy()
+    applied_risk = None
+    if args.risk_weights and len(args.risk_weights) == int(args.num_classes):
+        rw = np.asarray(args.risk_weights, dtype=np.float32)
+        adjusted_probs = adjusted_probs * rw
+        applied_risk = rw.tolist()
+    # CN thresholding (assumes class 0 = CN by default mapping)
+    final_idx = int(np.argmax(adjusted_probs))
+    if args.cn_min_prob is not None and final_idx == 0:
+        if float(adjusted_probs[0]) < float(args.cn_min_prob):
+            # pick best non-CN class
+            non_cn_idx = int(np.argmax(adjusted_probs[1:]) + 1)
+            final_idx = non_cn_idx
+
+    pred_idx = final_idx
     pred_name = label_map.get(pred_idx, str(pred_idx))
-    confidence = float(np.max(probs))
-    prob_dict = {label_map.get(i, str(i)): float(p) for i, p in enumerate(probs)}
+    # For confidence, report the adjusted winning score (not renormalized)
+    confidence = float(adjusted_probs[pred_idx])
+    prob_dict = {label_map.get(i, str(i)): float(adjusted_probs[i]) for i in range(len(adjusted_probs))}
 
     # Prepare output directory
     out_dir = Path(expand_path(args.output_dir))
@@ -808,6 +893,15 @@ def main():
             'label_name': pred_name,
             'confidence': confidence,
             'probabilities': prob_dict,
+            'risk_weights_applied': applied_risk,
+            'cn_min_prob': float(args.cn_min_prob) if args.cn_min_prob is not None else None,
+        },
+        'prediction_raw': {
+            'label_index': int(np.argmax(list(prob_dict_raw.values()))),
+            'label_name': pred_name_raw,
+            'confidence': confidence_raw,
+            'probabilities': prob_dict_raw,
+            'tta': meta_pred,
         },
         'interpretability': {
             'gradcam': gradcam_paths,
