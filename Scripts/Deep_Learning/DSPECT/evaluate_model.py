@@ -27,7 +27,7 @@ from sklearn.calibration import calibration_curve
 from scipy.optimize import minimize_scalar
 
 from dataset import SPECTDataset
-from models_pet import Simple3DCNN
+from models_spect import Simple3DCNN
 
 # Set style for plots
 plt.style.use('default')
@@ -180,21 +180,38 @@ def evaluate_model_with_temperature_scaling(model, test_loader, device, val_load
     return np.array(all_predictions), np.array(all_probabilities), np.array(all_labels), temperature_info
 
 def load_model(model_path, num_classes=2, device='cpu'):
-    """Load a trained model from .pth file."""
+    """Load a trained SPECT Simple3DCNN model from .pth file (robust to classifier layout)."""
     model = Simple3DCNN(num_classes=num_classes)
-    
+
     # Load the state dict
     state_dict = torch.load(model_path, map_location=device)
-    
-    # Extract the actual input size from the saved classifier weight
-    classifier_weight = state_dict['classifier.0.weight']
-    actual_input_size = classifier_weight.shape[1]
-    
-    # Update the classifier with the correct input size
-    model.classifier[0] = nn.Linear(actual_input_size, 256)
-    model._initialized = True
-    
-    # Now load the state dict
+
+    # Find first Linear layer index in classifier
+    linear_indices = [i for i, m in enumerate(model.classifier) if isinstance(m, nn.Linear)]
+    if not linear_indices:
+        raise RuntimeError("Simple3DCNN classifier contains no Linear layers")
+    first_linear_idx = linear_indices[0]
+
+    # Determine classifier weight key in state dict
+    candidate_key = f'classifier.{first_linear_idx}.weight'
+    if candidate_key not in state_dict:
+        # Fallback to legacy position 0 if present
+        if 'classifier.0.weight' in state_dict:
+            candidate_key = 'classifier.0.weight'
+        else:
+            # Try to find any classifier.*.weight present
+            cls_keys = [k for k in state_dict.keys() if k.startswith('classifier.') and k.endswith('.weight')]
+            if not cls_keys:
+                raise RuntimeError("Could not find classifier weight tensor in state dict")
+            candidate_key = sorted(cls_keys)[0]
+
+    actual_input_size = state_dict[candidate_key].shape[1]
+
+    # Replace the first Linear layer with correct in_features
+    current_out = model.classifier[first_linear_idx].out_features
+    model.classifier[first_linear_idx] = nn.Linear(actual_input_size, current_out)
+
+    # Load the state dict
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
