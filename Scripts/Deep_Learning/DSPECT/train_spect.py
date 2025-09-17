@@ -22,7 +22,7 @@ import contextlib
 import math
 
 from dataset import SPECTDataset
-from models_pet import Simple3DCNN, get_3d_model
+from models_spect import Simple3DCNN, get_3d_model
 from evaluate_model import evaluate_model, calculate_metrics, create_evaluation_plots
 
 # Set style for plots
