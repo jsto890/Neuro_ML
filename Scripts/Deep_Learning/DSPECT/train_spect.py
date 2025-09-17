@@ -1723,7 +1723,15 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             
             metrics = calculate_metrics(predictions, probabilities, labels)
             test_eval_dir = os.path.join(model_dir, f"test_evaluation_plots_fold_{fold_idx}")
-            create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
+            
+            # Save predictions and probabilities for later regeneration
+            os.makedirs(test_eval_dir, exist_ok=True)
+            np.save(os.path.join(test_eval_dir, 'predictions.npy'), predictions)
+            np.save(os.path.join(test_eval_dir, 'probabilities.npy'), probabilities)
+            np.save(os.path.join(test_eval_dir, 'labels.npy'), labels)
+            
+            create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir, 
+                                   model_name=model_name, image_type="SPECT")
             test_metrics_path = os.path.join(model_dir, f"test_metrics_fold_{fold_idx}.json")
             with open(test_metrics_path, 'w') as f:
                 json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
