@@ -63,9 +63,9 @@ def split_labels(input_csv, train_csv, val_csv, test_csv, test_size=0.15, val_si
 if __name__ == "__main__":
     # Define paths using absolute paths
     data_dir = Path.home() / "reseng202500013-ndd-ml" / "data"
-    input_csv = data_dir / "pet_labels.csv"
-    train_csv = data_dir / "train.csv"
-    val_csv = data_dir / "val.csv"
-    test_csv = data_dir / "test.csv"
+    input_csv = data_dir / "spect_labels.csv"
+    train_csv = data_dir / "spect_train.csv"
+    val_csv = data_dir / "spect_val.csv"
+    test_csv = data_dir / "spect_test.csv"
     # Create the split
     split_labels(input_csv, train_csv, val_csv, test_csv) 

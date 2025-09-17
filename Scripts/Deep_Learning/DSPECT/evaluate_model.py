@@ -26,7 +26,7 @@ import pandas as pd
 from sklearn.calibration import calibration_curve
 from scipy.optimize import minimize_scalar
 
-from dataset import PETDataset
+from dataset import SPECTDataset
 from models_pet import Simple3DCNN
 
 # Set style for plots
@@ -577,7 +577,7 @@ def main():
     
     # Create test dataset
     print(f"Loading test data from: {args.test_csv}")
-    test_dataset = PETDataset(csv_path=args.test_csv, data_root=args.data_root)
+    test_dataset = SPECTDataset(csv_path=args.test_csv, data_root=args.data_root)
     test_loader = DataLoader(
         test_dataset,
         batch_size=args.batch_size,
@@ -590,7 +590,7 @@ def main():
     val_loader = None
     if args.use_temperature_scaling and args.val_csv:
         print(f"Loading validation data from: {args.val_csv}")
-        val_dataset = PETDataset(csv_path=args.val_csv, data_root=args.data_root)
+        val_dataset = SPECTDataset(csv_path=args.val_csv, data_root=args.data_root)
         val_loader = DataLoader(
             val_dataset,
             batch_size=args.batch_size,

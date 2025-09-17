@@ -445,6 +445,45 @@ def get_spect_model(model_type: str = "simple",
     return SPECTClassifier(model_type=model_type, num_classes=num_classes, **kwargs)
 
 
+# Backwards-compatible alias for training script imports
+class Simple3DCNN(Simple3DCNN_SPECT):
+    pass
+
+
+def get_3d_model(model_name, num_classes: int = 2, in_channels: int = 1, base_channels: int = 16,
+                 use_pretrained: bool = False, dropout_p: float = 0.0,
+                 vit_drop_rate: float = 0.0, vit_attn_drop_rate: float = 0.0, vit_drop_path_rate: float = 0.0):
+    """
+    DSPECT model factory mapping legacy names to SPECT-optimized backbones.
+    Supported names:
+      - "Simple3DCNN"        -> Simple3DCNN_SPECT
+      - "ResNet18_3D"        -> ResNet3D_SPECT
+      - "ResNet50_3D"        -> ResNet3D_SPECT
+      - "EfficientNetB0_3D"  -> EfficientNet3D_SPECT
+
+    Note: Transformer and DenseNet variants are not supported in DSPECT at present.
+    """
+    name = str(model_name).lower()
+    if name == "simple3dcnn":
+        return Simple3DCNN_SPECT(
+            num_classes=num_classes,
+            base_channels=base_channels,
+            dropout_rate=(dropout_p if dropout_p > 0 else 0.5)
+        )
+    if name in ("resnet18_3d", "resnet50_3d"):
+        return ResNet3D_SPECT(
+            num_classes=num_classes,
+            base_channels=max(base_channels, 32)
+        )
+    if name == "efficientnetb0_3d":
+        return EfficientNet3D_SPECT(
+            num_classes=num_classes,
+            base_channels=max(base_channels, 16)
+        )
+
+    raise ValueError(f"Unsupported model for DSPECT: {model_name}")
+
+
 def get_model_summary(model: nn.Module, input_shape: Tuple[int, int, int, int, int] = (1, 1, 91, 109, 91)) -> str:
     """
     Generate a summary of the model architecture.
