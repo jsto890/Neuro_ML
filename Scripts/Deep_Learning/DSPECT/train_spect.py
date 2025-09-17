@@ -887,8 +887,16 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
                         alpha_t = 1.0
                     loss = (alpha_t * (1 - pt) ** self.gamma * ce).mean()
                     return loss
-            criterion = FocalLoss(alpha=class_weights, gamma=2.0)
-            print(f"[INFO] Using FocalLoss (alpha from class frequencies) for binary CNN")
+            # Optionally scale minority alpha to push recall
+            focal_alpha = class_weights.clone()
+            if getattr(args, 'focal_alpha_scale', 1.0) != 1.0:
+                # Identify minority class id
+                minority_id = int(np.argmin(class_counts))
+                focal_alpha[minority_id] = focal_alpha[minority_id] * float(args.focal_alpha_scale)
+                # Re-normalize to keep magnitudes reasonable
+                focal_alpha = focal_alpha / focal_alpha.sum() * class_weights.sum()
+            criterion = FocalLoss(alpha=focal_alpha, gamma=float(getattr(args, 'focal_gamma', 2.0)))
+            print(f"[INFO] Using FocalLoss (gamma={getattr(args, 'focal_gamma', 2.0)}, alpha scaled={getattr(args, 'focal_alpha_scale', 1.0)}) for binary CNN")
 
     model.to(device)
     best_val_auc = 0.0
@@ -1263,8 +1271,8 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
             print(f"[EARLY STOPPING] Stopping training at epoch {epoch}/{epochs}")
             break
             
-        # Legacy early stopping (keeping for backward compatibility)
-        if no_improvement_count >= 20:
+        # Legacy early stopping (optional)
+        if getattr(args, 'legacy_early_stop', False) and no_improvement_count >= 20:
             print(f"\n[LEGACY] Early stopping triggered after {epoch} epochs (no improvement in AUC)")
             break
 
@@ -2403,6 +2411,8 @@ def main():
     parser.add_argument("--early_stopping_monitor", type=str, default="val_auc",
                         choices=["val_auc", "val_acc", "val_loss"],
                         help="Metric to monitor for early stopping")
+    parser.add_argument("--legacy_early_stop", action='store_true', default=False,
+                        help="Enable old hard-coded early stop after 20 epochs without AUC improvement")
     
     # Hardware arguments
     parser.add_argument("--device", type=str, default="cuda", help="Device to use (cuda, cpu, or specific GPU)")
@@ -2419,6 +2429,9 @@ def main():
     
     # CNN-specific arguments
     parser.add_argument("--cnn_drop_rate", type=float, default=0.0, help="Dropout rate for CNN models")
+    parser.add_argument("--focal_gamma", type=float, default=2.0, help="Focal loss gamma (binary)")
+    parser.add_argument("--focal_alpha_scale", type=float, default=1.0,
+                        help="Multiply minority class alpha in focal loss (e.g., 1.5)")
     
     # Vision Transformer specific arguments
     parser.add_argument("--vit_warmup_epochs", type=int, default=5,
