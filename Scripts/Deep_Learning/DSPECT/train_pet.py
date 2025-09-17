@@ -1,4 +1,4 @@
-# scripts/train_smri.py
+# scripts/train_pet.py
 
 import os
 import argparse
@@ -21,8 +21,8 @@ from sklearn.model_selection import train_test_split
 import contextlib
 import math
 
-from dataset import SMRIDataset
-from models_smri import Simple3DCNN, get_3d_model
+from dataset import PETDataset
+from models_pet import Simple3DCNN, get_3d_model
 from evaluate_model import evaluate_model, calculate_metrics, create_evaluation_plots
 
 # Set style for plots
@@ -818,7 +818,7 @@ def create_threshold_optimization_plot(threshold_results, output_dir, model_name
         'plot_path': str(plot_path)
     }
 
-def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint_dir, args, fold_num=None, label_mapping=None):
+def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_dir, args, fold_num=None, label_mapping=None):
     """
     Trains model; saves best checkpoint by validation AUC into checkpoint_dir.
     Returns the model loaded with best weights and training history.
@@ -1119,12 +1119,22 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         print(f"[DEBUG] optimal_threshold: {optimal_threshold}")
         
         # Calculate additional metrics using optimal threshold (binary) or argmax (multiclass)
-        if optimal_threshold is not None and probs.shape[1] == 2:
-            # Binary classification with threshold optimization
-            optimal_preds = (probs >= optimal_threshold).astype(int)
+        is_binary = bool(val_results.get('is_binary', probs.ndim == 1))
+        if is_binary:
+            threshold_to_use = optimal_threshold if optimal_threshold is not None else 0.5
+            # probs can be (N,) for positive-class probs or (N,2) for full probs
+            if probs.ndim == 2 and probs.shape[1] == 2:
+                pos_probs = probs[:, 1]
+            else:
+                pos_probs = probs
+            optimal_preds = (pos_probs >= threshold_to_use).astype(int)
         else:
-            # Multiclass or no threshold: use argmax
-            optimal_preds = np.argmax(probs, axis=1)
+            # Multiclass: use argmax over classes
+            if probs.ndim == 1:
+                # Defensive: if somehow 1D, fallback to binary behavior at 0.5
+                optimal_preds = (probs >= 0.5).astype(int)
+            else:
+                optimal_preds = np.argmax(probs, axis=1)
         
         precision, recall, f1, support = precision_recall_fscore_support(val_labels, optimal_preds, average=None, zero_division=0)
         cm = confusion_matrix(val_labels, optimal_preds)
@@ -1182,23 +1192,21 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         if val_auc > best_val_auc:
             best_val_auc = val_auc
             best_val_acc = val_acc
-            # Deep copy state dict to avoid mutation by future training steps
-            import copy
-            best_state = copy.deepcopy(model.state_dict())
+            best_state = model.state_dict().copy()
             os.makedirs(checkpoint_dir, exist_ok=True)
             
             # Save model with fold-specific filename
             if fold_num is not None:
-                model_filename = f"best_smri_model_fold_{fold_num}.pth"
+                model_filename = f"best_pet_model_fold_{fold_num}.pth"
             else:
-                model_filename = "best_smri_model.pth"
+                model_filename = "best_pet_model.pth"
             model_path = os.path.join(checkpoint_dir, model_filename)
             
             torch.save(best_state, model_path)
             print(f"  [Checkpoint] Saved new best model (AUC={val_auc:.4f}) -> {model_filename}")
             
             # Also save with general filename for backward compatibility
-            general_model_path = os.path.join(checkpoint_dir, "best_smri_model.pth")
+            general_model_path = os.path.join(checkpoint_dir, "best_pet_model.pth")
             torch.save(best_state, general_model_path)
             no_improvement_count = 0
             
@@ -1241,28 +1249,17 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             print(f"\n[LEGACY] Early stopping triggered after {epoch} epochs (no improvement in AUC)")
             break
 
-    # Load best model weights before returning (prefer saved checkpoint to avoid accidental mutation)
-    if fold_num is not None:
-        best_model_path = os.path.join(checkpoint_dir, f"best_smri_model_fold_{fold_num}.pth")
-    else:
-        best_model_path = os.path.join(checkpoint_dir, "best_smri_model.pth")
-    if os.path.exists(best_model_path):
-        state_dict = torch.load(best_model_path, map_location=device)
-        model.load_state_dict(state_dict)
-    elif best_state is not None:
+    # Load best model weights before returning
+    if best_state is not None:
         model.load_state_dict(best_state)
     
     # Print training summary
-    legacy_early_stopped = (no_improvement_count >= 20)
-    if early_stopping_count >= early_stopping_patience or legacy_early_stopped:
+    if early_stopping_count >= early_stopping_patience:
         print(f"\n{'='*60}")
         print(f"TRAINING COMPLETED WITH EARLY STOPPING")
         print(f"{'='*60}")
         print(f"Final epoch: {epoch}/{epochs}")
-        if legacy_early_stopped:
-            print(f"[LEGACY] Early stopping triggered (no improvement in AUC for 20 epochs)")
-        else:
-            print(f"Early stopping triggered: {early_stopping_monitor} did not improve for {early_stopping_patience} epochs")
+        print(f"Early stopping triggered: {early_stopping_monitor} did not improve for {early_stopping_patience} epochs")
         print(f"Best {early_stopping_monitor}: {best_monitored_metric:.6f}")
         print(f"Best validation AUC: {best_val_auc:.6f}")
         print(f"Best validation accuracy: {best_val_acc:.6f}")
@@ -1547,9 +1544,9 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             temp_files_this_run.extend([temp_train_csv, temp_val_csv, temp_test_csv])
 
             # Datasets and loaders
-            train_dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root)
-            val_dataset = SMRIDataset(csv_path=temp_val_csv, data_root=args.data_root)
-            test_dataset = SMRIDataset(csv_path=temp_test_csv, data_root=args.data_root)
+            train_dataset = PETDataset(csv_path=temp_train_csv, data_root=args.data_root)
+            val_dataset = PETDataset(csv_path=temp_val_csv, data_root=args.data_root)
+            test_dataset = PETDataset(csv_path=temp_test_csv, data_root=args.data_root)
             
             # Initialize model for this fold
             unique_labels = sorted(train_dataset.df['label'].unique())
@@ -1617,7 +1614,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                 best_confusion_matrix,
                 best_threshold,
                 best_threshold_results,
-            ) = train_sMRI_model(
+            ) = train_PET_model(
                 model,
                 train_loader,
                 val_loader,
@@ -1677,8 +1674,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             
             metrics = calculate_metrics(predictions, probabilities, labels)
             test_eval_dir = os.path.join(model_dir, f"test_evaluation_plots_fold_{fold_idx}")
-            create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir, 
-                                   model_name=model_name, image_type="sMRI")
+            create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
             test_metrics_path = os.path.join(model_dir, f"test_metrics_fold_{fold_idx}.json")
             with open(test_metrics_path, 'w') as f:
                 json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
@@ -1782,7 +1778,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'run_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             'run_folder': run_folder,
             'model_name': model_name,
-            'model_filename': f"{model_name}_best_smri_model.pth",
+            'model_filename': f"{model_name}_best_pet_model.pth",
             'folds_data_filename': folds_data_filename,
             'average_val_auc': avg_val_auc,
             'average_val_acc': avg_val_acc,
@@ -2014,7 +2010,7 @@ def ensemble_evaluate_models(model_name, model_dir, test_loader, device, args, f
         fold_auc = fold_result['best_val_auc']
         fold_aucs.append(fold_auc)
         
-        model_path = os.path.join(model_dir, f"best_smri_model_fold_{fold_num}.pth")
+        model_path = os.path.join(model_dir, f"best_pet_model_fold_{fold_num}.pth")
         
         if not os.path.exists(model_path):
             print(f"Warning: Model for fold {fold_num} not found: {model_path}")
@@ -2344,7 +2340,7 @@ def main():
     parser.add_argument("--master_csv", type=str, required=True,
                         help="Path to master CSV file with subject IDs and labels")
     parser.add_argument("--data_root", type=str, required=True,
-                        help="Root directory containing preprocessed sMRI data")
+                        help="Root directory containing preprocessed PET data")
     parser.add_argument("--checkpoint_dir", type=str, required=True,
                         help="Directory to save model checkpoints and results")
     
