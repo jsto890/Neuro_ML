@@ -23,6 +23,21 @@ import math
 
 from dataset import SPECTDataset
 from models_spect import Simple3DCNN, get_3d_model
+
+# Optional: MONAI transforms (only if installed)
+try:
+    from monai.transforms import (
+        Compose,
+        RandFlipd,
+        RandRotate90d,
+        RandGaussianNoised,
+        RandAffined,
+        RandZoomd,
+        RandShiftIntensityd,
+    )
+    MONAI_AVAILABLE = True
+except Exception:
+    MONAI_AVAILABLE = False
 from evaluate_model import evaluate_model, calculate_metrics, create_evaluation_plots
 
 # Set style for plots
@@ -856,20 +871,24 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
             criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=args.label_smoothing)
             print(f"[INFO] Using CrossEntropyLoss (weighted, ls={args.label_smoothing}) for multiclass CNN")
         else:
-            # Binary CNN: Focal loss
+            # Binary CNN: Focal loss with data-driven alpha
             class FocalLoss(nn.Module):
-                def __init__(self, alpha=0.25, gamma=2.0):
+                def __init__(self, alpha: torch.Tensor | None = None, gamma: float = 2.0):
                     super().__init__()
-                    self.alpha = alpha
+                    self.register_buffer('alpha', alpha if alpha is not None else None)
                     self.gamma = gamma
 
-                def forward(self, inputs, targets):
+                def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
                     ce = nn.CrossEntropyLoss(reduction='none')(inputs, targets)
                     pt = torch.exp(-ce)
-                    loss = (self.alpha * (1 - pt) ** self.gamma * ce).mean()
+                    if self.alpha is not None:
+                        alpha_t = self.alpha.gather(0, targets)
+                    else:
+                        alpha_t = 1.0
+                    loss = (alpha_t * (1 - pt) ** self.gamma * ce).mean()
                     return loss
-            criterion = FocalLoss(alpha=0.25, gamma=2.0)
-            print(f"[INFO] Using FocalLoss for binary CNN")
+            criterion = FocalLoss(alpha=class_weights, gamma=2.0)
+            print(f"[INFO] Using FocalLoss (alpha from class frequencies) for binary CNN")
 
     model.to(device)
     best_val_auc = 0.0
@@ -1542,8 +1561,44 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             test_df.to_csv(temp_test_csv, index=False)
             temp_files_this_run.extend([temp_train_csv, temp_val_csv, temp_test_csv])
 
+            # Build optional MONAI transforms for training
+            train_transform = None
+            if MONAI_AVAILABLE and (args.aug_flip or args.aug_rot90 or args.aug_noise or args.aug_rotate_deg > 0 or args.aug_zoom > 0 or args.aug_shift > 0):
+                tfms = []
+                # Apply spatial/intensity transforms on channel-first 3D tensor
+                # We use dict transforms with key 'img' for simple wrapping
+                if args.aug_flip:
+                    tfms.append(RandFlipd(keys=['img'], prob=0.5, spatial_axis=[0]))
+                    tfms.append(RandFlipd(keys=['img'], prob=0.5, spatial_axis=[1]))
+                    tfms.append(RandFlipd(keys=['img'], prob=0.5, spatial_axis=[2]))
+                if args.aug_rot90:
+                    tfms.append(RandRotate90d(keys=['img'], prob=0.5, max_k=3))
+                # Small-angle rotation
+                if args.aug_rotate_deg and args.aug_rotate_deg > 0:
+                    # RandAffined expects radians if using rotate_params, we pass degrees via rotate_range in radians
+                    import math
+                    r = math.radians(float(args.aug_rotate_deg))
+                    tfms.append(RandAffined(keys=['img'], prob=0.5, rotate_range=(r, r, r), mode='bilinear', padding_mode='zeros'))
+                if args.aug_zoom and args.aug_zoom > 0:
+                    m = float(args.aug_zoom)
+                    tfms.append(RandZoomd(keys=['img'], prob=0.5, min_zoom=1.0 - m, max_zoom=1.0 + m, mode='trilinear', align_corners=False))
+                if args.aug_shift and args.aug_shift > 0:
+                    tfms.append(RandShiftIntensityd(keys=['img'], offsets=0.0, prob=0.5, factor=float(args.aug_shift)))
+                if args.aug_noise:
+                    tfms.append(RandGaussianNoised(keys=['img'], prob=0.25, mean=0.0, std=float(args.aug_noise_std)))
+
+                monai_compose = Compose(tfms) if tfms else None
+
+                # Wrap to accept/return tensors directly
+                def _apply_monai(t):
+                    d = {'img': t}
+                    d = monai_compose(d)
+                    return d['img']
+
+                train_transform = _apply_monai if monai_compose is not None else None
+
             # Datasets and loaders
-            train_dataset = SPECTDataset(csv_path=temp_train_csv, data_root=args.data_root)
+            train_dataset = SPECTDataset(csv_path=temp_train_csv, data_root=args.data_root, transform=train_transform)
             val_dataset = SPECTDataset(csv_path=temp_val_csv, data_root=args.data_root)
             test_dataset = SPECTDataset(csv_path=temp_test_csv, data_root=args.data_root)
             
@@ -2259,12 +2314,14 @@ def create_data_loaders_with_memory_optimization(train_dataset, val_dataset, tes
             tmp_labels.append(int(y))
         train_labels_np = np.array(tmp_labels)
     unique_train_labels = np.unique(train_labels_np)
-    use_weighted_sampler = len(unique_train_labels) > 2
+    # Use weighted sampler for binary too, unless explicitly disabled
+    use_weighted_sampler = (not getattr(args, 'disable_weighted_sampler', False)) and getattr(args, 'weighted_sampler', True)
 
     sampler = None
     if use_weighted_sampler:
         from collections import Counter
         counts = Counter(train_labels_np.tolist())
+        # Inverse-frequency sampling to oversample minority class
         sample_weights = np.array([1.0 / counts[l] for l in train_labels_np], dtype=np.float64)
         weights_tensor = torch.from_numpy(sample_weights)
         sampler = WeightedRandomSampler(weights=weights_tensor, num_samples=len(train_labels_np), replacement=True)
@@ -2388,6 +2445,21 @@ def main():
                         help="Optimize classification threshold on validation set")
     parser.add_argument("--use_temperature_scaling", action='store_true', default=True,
                         help="Enable temperature scaling for multiclass calibration (improves accuracy by 2-5%)")
+    
+    # Augmentation arguments
+    parser.add_argument("--aug_flip", action='store_true', default=False, help="Enable random flips (monai)")
+    parser.add_argument("--aug_rot90", action='store_true', default=False, help="Enable random 90-degree rotations (strong)")
+    parser.add_argument("--aug_rotate_deg", type=float, default=0.0, help="Enable small random rotation in degrees (e.g., 5)")
+    parser.add_argument("--aug_zoom", type=float, default=0.0, help="Random zoom magnitude (e.g., 0.05 gives [0.95,1.05])")
+    parser.add_argument("--aug_shift", type=float, default=0.0, help="Random intensity shift magnitude (e.g., 0.05)")
+    parser.add_argument("--aug_noise", action='store_true', default=False, help="Enable random gaussian noise")
+    parser.add_argument("--aug_noise_std", type=float, default=0.02, help="Std for gaussian noise if enabled (default 0.02)")
+
+    # Sampling/balancing arguments
+    parser.add_argument("--weighted_sampler", action='store_true', default=True,
+                        help="Use WeightedRandomSampler to oversample minority class in training")
+    parser.add_argument("--disable_weighted_sampler", action='store_true', default=False,
+                        help="Disable weighted sampler and use plain shuffle")
     
     # Memory optimization arguments
     parser.add_argument("--auto_batch_size", action='store_true', default=True,

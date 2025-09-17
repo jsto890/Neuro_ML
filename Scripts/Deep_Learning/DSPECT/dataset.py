@@ -18,12 +18,13 @@ class SPECTDataset(Dataset):
             PD_SPECT_PPMI_postprocessed/Subject_*/6. postprocessed.nii.gz
     """
 
-    def __init__(self, csv_path: str, data_root: str, target_shape: tuple[int, int, int] = (91, 109, 91)):
+    def __init__(self, csv_path: str, data_root: str, target_shape: tuple[int, int, int] = (91, 109, 91), transform=None):
         """
         Args:
             csv_path  (str): path to CSV; expects columns 'subject_id' and 'label',
                              but can handle headerless files.
             data_root (str): root folder where DSPECT postprocessed data lives with CN_/PD_ folders.
+            transform (callable|None): optional transform applied to the image tensor [1, D, H, W]
         """
         # Read CSV normally
         df = pd.read_csv(csv_path)
@@ -50,6 +51,7 @@ class SPECTDataset(Dataset):
         self.labels = df['label'].tolist()
         self.data_root = data_root
         self.target_shape = target_shape
+        self.transform = transform
 
     @staticmethod
     def _pad_or_crop_center(volume: np.ndarray, target_shape: tuple[int, int, int]) -> np.ndarray:
@@ -132,5 +134,9 @@ class SPECTDataset(Dataset):
 
         # Convert to a torch.FloatTensor with shape [1, D, H, W]
         pet = torch.from_numpy(data.astype(np.float32)).unsqueeze(0)
+
+        # Optional transform (e.g., MONAI Compose) applied on-the-fly
+        if self.transform is not None:
+            pet = self.transform(pet)
 
         return pet, label
