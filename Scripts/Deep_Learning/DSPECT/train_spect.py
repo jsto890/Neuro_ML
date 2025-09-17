@@ -1583,7 +1583,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
                     m = float(args.aug_zoom)
                     tfms.append(RandZoomd(keys=['img'], prob=0.5, min_zoom=1.0 - m, max_zoom=1.0 + m, mode='trilinear', align_corners=False))
                 if args.aug_shift and args.aug_shift > 0:
-                    tfms.append(RandShiftIntensityd(keys=['img'], offsets=0.0, prob=0.5, factor=float(args.aug_shift)))
+                    tfms.append(RandShiftIntensityd(keys=['img'], offsets=float(args.aug_shift), prob=0.5))
                 if args.aug_noise:
                     tfms.append(RandGaussianNoised(keys=['img'], prob=0.25, mean=0.0, std=float(args.aug_noise_std)))
 
