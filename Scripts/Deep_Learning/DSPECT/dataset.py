@@ -100,17 +100,19 @@ class SPECTDataset(Dataset):
         # Construct the path to the SPECT image based on label
         # label: 0 -> CN, 1 -> PD
         diagnosis_dir = 'CN_SPECT_PPMI_postprocessed' if label.item() == 0 else 'PD_SPECT_PPMI_postprocessed'
-        # Common DSPECT filename
+        # Required DSPECT filename
         candidate_path = os.path.join(self.data_root, diagnosis_dir, sid, '6. postprocessed.nii.gz')
         if not os.path.exists(candidate_path):
-            raise FileNotFoundError(f"SPECT file not found for subject {sid}. Expected: {candidate_path}")
+            raise FileNotFoundError(
+                f"SPECT file not found for subject {sid}. Expected: {candidate_path}"
+            )
 
         # Load image robustly; if corrupted/unreadable, return a zero placeholder
         try:
             img = nib.load(candidate_path)
             data = img.get_fdata()  # shape: (D, H, W) (may vary by site)
         except (ImageFileError, Exception) as e:
-            print(f"[WARN] Failed to load NIfTI for {sid} at {img_path}: {e}. Using zero volume placeholder.")
+            print(f"[WARN] Failed to load NIfTI for {sid} at {candidate_path}: {e}. Using zero volume placeholder.")
             data = np.zeros(self.target_shape, dtype=np.float32)
 
         # Standardize shape for training consistency
