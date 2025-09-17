@@ -5,7 +5,6 @@ import argparse
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, SubsetRandomSampler, WeightedRandomSampler
-from torch.utils.data import Sampler
 import numpy as np
 from sklearn.metrics import roc_auc_score, accuracy_score, confusion_matrix, classification_report, precision_recall_fscore_support, matthews_corrcoef
 import csv
@@ -21,7 +20,6 @@ import shutil
 from sklearn.model_selection import train_test_split
 import contextlib
 import math
-import random
 
 from dataset import SMRIDataset
 from models_smri import Simple3DCNN, get_3d_model
@@ -55,95 +53,6 @@ def compute_summary_stats(values):
         'range': rng,
         'n': int(n)
     }
-
-def get_train_transform(args):
-    """Return a callable that applies light 3D augmentations on tensors [1, D, H, W].
-    Uses MONAI when available for spatial ops; otherwise falls back to intensity-only jitters.
-    """
-    transforms = []
-
-    # Try MONAI for spatial transforms
-    try:
-        from monai.transforms import Compose, RandAffine, RandBiasField, RandGaussianNoise, RandAdjustContrast
-
-        def monai_transform(x: torch.Tensor) -> torch.Tensor:
-            # x: [1, D, H, W] -> MONAI expects [C, H, W, D]
-            x_m = x.permute(0, 2, 3, 1)
-            t = Compose([
-                RandAffine(prob=0.5, rotate_range=(
-                    math.radians(5.0), math.radians(5.0), math.radians(5.0)
-                ), scale_range=(0.05, 0.05, 0.05), mode="bilinear"),
-                RandBiasField(prob=0.3, coeff_range=(0.0, 0.3)),
-                RandAdjustContrast(prob=0.5, gamma=(0.9, 1.1)),
-                RandGaussianNoise(prob=0.3, mean=0.0, std=0.02),
-            ])
-            x_m = t(x_m)
-            x = x_m.permute(0, 3, 1, 2)
-            return x
-
-        transforms.append(monai_transform)
-    except Exception:
-        # Fall back to simple intensity-only transforms
-        def intensity_jitter(x: torch.Tensor) -> torch.Tensor:
-            # Brightness and contrast jitter (small)
-            b = float(torch.empty(1).uniform_(-0.05, 0.05))
-            c = float(torch.empty(1).uniform_(0.95, 1.05))
-            x = x * c + b
-            return x
-
-        def gaussian_noise(x: torch.Tensor) -> torch.Tensor:
-            std = 0.02
-            noise = torch.randn_like(x) * std
-            return x + noise
-
-        transforms.extend([intensity_jitter, gaussian_noise])
-
-    def apply_all(x: torch.Tensor) -> torch.Tensor:
-        for t in transforms:
-            x = t(x)
-        return x
-
-    return apply_all
-
-class BalancedBatchSampler(Sampler):
-    """Batch sampler that yields balanced batches across classes.
-    - Ensures each batch contains batch_size // num_classes samples per class (with replacement).
-    - Supports per-index hard mining weights to sample some indices more often.
-    """
-    def __init__(self, labels_list, batch_size: int, hard_index_weights=None):
-        self.labels_list = list(labels_list)
-        self.classes = sorted(list(set(self.labels_list)))
-        self.num_classes = len(self.classes)
-        self.k_per_class = max(1, batch_size // self.num_classes)
-        self.effective_batch_size = self.k_per_class * self.num_classes
-        self.batch_size = self.effective_batch_size
-        self.hard_index_weights = hard_index_weights or {}
-
-        # Build per-class indices
-        self.indices_per_class = {c: [i for i, y in enumerate(self.labels_list) if y == c] for c in self.classes}
-
-        # Define nominal epoch length in number of batches
-        self.num_batches = max(1, len(self.labels_list) // self.batch_size)
-
-    def __iter__(self):
-        for _ in range(self.num_batches):
-            batch_indices = []
-            for c in self.classes:
-                idxs = self.indices_per_class[c]
-                if not idxs:
-                    continue
-                # Build sampling probabilities with hard-mining multipliers
-                weights = np.array([float(self.hard_index_weights.get(i, 1.0)) for i in idxs], dtype=np.float64)
-                if np.any(weights <= 0):
-                    weights = np.clip(weights, 1e-8, None)
-                probs = weights / weights.sum()
-                chosen = np.random.choice(idxs, size=self.k_per_class, replace=True, p=probs)
-                batch_indices.extend(chosen.tolist())
-            random.shuffle(batch_indices)
-            yield batch_indices
-
-    def __len__(self):
-        return self.num_batches
 
 def filter_labels(csv_path, labels):
     """Filter the CSV file to only include specified labels."""
@@ -914,38 +823,18 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
     Trains model; saves best checkpoint by validation AUC into checkpoint_dir.
     Returns the model loaded with best weights and training history.
     """
-    # Calculate class counts from dataset to avoid sampling duplication bias
-    class_counts_map = {}
-    try:
-        # Prefer dataset-level labels
-        ds_labels = train_loader.dataset.df['label'].to_numpy().tolist()
-    except Exception:
-        # Fallback: iterate dataset
-        ds_labels = []
-        ds_obj = train_loader.dataset
-        for i in range(len(ds_obj)):
-            item = ds_obj[i]
-            if isinstance(item, (list, tuple)) and len(item) == 3:
-                _, y, _ = item
-            else:
-                _, y = item
-            ds_labels.append(int(y if isinstance(y, int) else (y.item() if hasattr(y, 'item') else int(y))))
-
-    for y in ds_labels:
-        class_counts_map[y] = class_counts_map.get(y, 0) + 1
-
-    # If a label mapping is provided, reorder counts to mapped class indices [0..K-1]
-    if label_mapping is not None:
-        # Build inverse mapping: mapped_id -> original_label
-        inv_map = {v: k for k, v in label_mapping.items()}
-        num_classes = len(inv_map)
-        class_counts = np.array([class_counts_map.get(inv_map[i], 0) for i in range(num_classes)], dtype=np.int64)
-    else:
-        # Use natural order over sorted unique labels
-        unique_sorted = sorted(class_counts_map.keys())
-        class_counts = np.array([class_counts_map[l] for l in unique_sorted], dtype=np.int64)
-        num_classes = len(class_counts)
+    # Calculate class weights for imbalanced data
+    labels = []
+    for _, label in train_loader:
+        labels.extend(label.numpy())
     
+    # Apply label mapping if provided for class weight calculation
+    if label_mapping is not None:
+        mapped_labels = [label_mapping[label] for label in labels]
+        labels = mapped_labels
+    
+    class_counts = np.bincount(labels)
+    num_classes = len(class_counts)
     # Avoid division by zero if any class absent (should be rare)
     safe_counts = np.where(class_counts == 0, 1, class_counts)
     inv_freq = 1.0 / safe_counts.astype(np.float64)
@@ -963,32 +852,9 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         print(f"[INFO] Using CrossEntropyLoss with label smoothing {args.label_smoothing} for ViT model")
     else:
         if num_classes > 2:
-            # Multiclass CNN: Class-Balanced Focal Loss using effective number of samples
-            class ClassBalancedFocalLoss(nn.Module):
-                def __init__(self, samples_per_class, beta: float = 0.999, gamma: float = 2.0):
-                    super().__init__()
-                    self.gamma = float(gamma)
-                    self.beta = float(beta)
-                    spc = torch.tensor(samples_per_class, dtype=torch.float32)
-                    effective_num = 1.0 - torch.pow(self.beta, spc)
-                    weights = (1.0 - self.beta) / (effective_num + 1e-8)
-                    weights = weights / weights.sum() * len(spc)
-                    self.register_buffer('class_weights', weights)
-                
-                def to(self, device):
-                    super().to(device)
-                    if hasattr(self, 'class_weights'):
-                        self.class_weights = self.class_weights.to(device)
-                    return self
-                def forward(self, logits, targets):
-                    ce = nn.CrossEntropyLoss(weight=self.class_weights, reduction='none')(logits, targets)
-                    pt = torch.exp(-ce)
-                    focal = ((1 - pt) ** self.gamma) * ce
-                    return focal.mean()
-            samples_per_class = class_counts
-            criterion = ClassBalancedFocalLoss(samples_per_class=samples_per_class, beta=args.cb_beta, gamma=args.focal_gamma)
-            criterion = criterion.to(device)  # Move criterion to device
-            print(f"[INFO] Using Class-Balanced Focal Loss (beta={args.cb_beta}, gamma={args.focal_gamma}) for multiclass CNN")
+            # Multiclass CNN: weighted CE with label smoothing
+            criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=args.label_smoothing)
+            print(f"[INFO] Using CrossEntropyLoss (weighted, ls={args.label_smoothing}) for multiclass CNN")
         else:
             # Binary CNN: Focal loss
             class FocalLoss(nn.Module):
@@ -1002,7 +868,7 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
                     pt = torch.exp(-ce)
                     loss = (self.alpha * (1 - pt) ** self.gamma * ce).mean()
                     return loss
-            criterion = FocalLoss(alpha=0.25, gamma=args.focal_gamma)
+            criterion = FocalLoss(alpha=0.25, gamma=2.0)
             print(f"[INFO] Using FocalLoss for binary CNN")
 
     model.to(device)
@@ -1148,15 +1014,8 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         running_loss = 0.0
         running_corrects = 0
         total_samples = 0
-        # Hard-example tracking (multiclass only)
-        hard_indices_epoch = []
 
-        for batch in train_loader:
-            if isinstance(batch, (list, tuple)) and len(batch) == 3:
-                smri, labels, batch_indices = batch
-            else:
-                smri, labels = batch
-                batch_indices = None
+        for smri, labels in train_loader:
             smri, labels = smri.to(device), labels.to(device)
             
             # Apply label mapping if provided
@@ -1215,23 +1074,6 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             preds = torch.argmax(logits, dim=1)
             running_corrects += (preds == labels).sum().item()
             total_samples += smri.size(0)
-
-            # Collect hard examples for PD<->CN confusion emphasis
-            if batch_indices is not None and logits.size(1) > 2:
-                # Map labels back to original class ids if mapping provided
-                if label_mapping is not None:
-                    inv_map = {v: k for k, v in label_mapping.items()}
-                    true_cls = torch.tensor([inv_map[int(x)] for x in labels.cpu().tolist()])
-                else:
-                    true_cls = labels.detach().cpu()
-                pred_cls = preds.detach().cpu()
-                batch_indices_cpu = batch_indices if isinstance(batch_indices, torch.Tensor) else torch.tensor(batch_indices)
-                # Identify CN<->PD confusions (assuming 1=CN, 2=PD per labeling doc)
-                mask_pdcn = (
-                    ((true_cls == 1) & (pred_cls == 2)) | ((true_cls == 2) & (pred_cls == 1))
-                )
-                if mask_pdcn.any():
-                    hard_indices_epoch.extend(batch_indices_cpu[mask_pdcn].tolist())
             
             # Memory optimization: clear cache periodically
             if args.memory_efficient and total_samples % (args.batch_size * 10) == 0:
@@ -1327,23 +1169,6 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             'val_mcc': float(val_mcc)
         }
         training_history.append(epoch_data)
-
-        # --- Update hard-mining weights for BalancedBatchSampler (next epoch) ---
-        sampler_obj = None
-        if hasattr(train_loader, 'batch_sampler') and isinstance(train_loader.batch_sampler, BalancedBatchSampler):
-            sampler_obj = train_loader.batch_sampler
-        elif hasattr(train_loader, 'sampler') and isinstance(train_loader.sampler, BalancedBatchSampler):
-            sampler_obj = train_loader.sampler
-        if sampler_obj is not None and num_classes > 2:
-            # Increase sampling weight for CN<->PD confused indices
-            hard_weight = getattr(args, 'hard_mining_weight', 3.0)
-            # Reset weights but keep previous if any
-            new_weights = {}
-            for i in getattr(sampler_obj, 'hard_index_weights', {}).keys():
-                new_weights[i] = 1.0
-            for i in hard_indices_epoch:
-                new_weights[i] = hard_weight
-            sampler_obj.hard_index_weights = new_weights
         
         # Print learning rate (constant if no scheduler)
         lr_change = ""
@@ -1722,10 +1547,9 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             temp_files_this_run.extend([temp_train_csv, temp_val_csv, temp_test_csv])
 
             # Datasets and loaders
-            train_transform = get_train_transform(args) if args.enable_augment else None
-            train_dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root, transform=train_transform, return_index=True)
-            val_dataset = SMRIDataset(csv_path=temp_val_csv, data_root=args.data_root, transform=None, return_index=False)
-            test_dataset = SMRIDataset(csv_path=temp_test_csv, data_root=args.data_root, transform=None, return_index=False)
+            train_dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root)
+            val_dataset = SMRIDataset(csv_path=temp_val_csv, data_root=args.data_root)
+            test_dataset = SMRIDataset(csv_path=temp_test_csv, data_root=args.data_root)
             
             # Initialize model for this fold
             unique_labels = sorted(train_dataset.df['label'].unique())
@@ -1853,8 +1677,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             
             metrics = calculate_metrics(predictions, probabilities, labels)
             test_eval_dir = os.path.join(model_dir, f"test_evaluation_plots_fold_{fold_idx}")
-            create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir, 
-                                   model_name=model_name, image_type="sMRI")
+            create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
             test_metrics_path = os.path.join(model_dir, f"test_metrics_fold_{fold_idx}.json")
             with open(test_metrics_path, 'w') as f:
                 json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
@@ -2454,7 +2277,7 @@ def create_data_loaders_with_memory_optimization(train_dataset, val_dataset, tes
         if working_batch_size != args.batch_size:
             print(f"[MEMORY] Reduced batch size from {args.batch_size} to {working_batch_size}")
     
-    # Build sampler: if multiclass and flagged, use balanced batch sampler; else optionally weighted sampler
+    # Build weighted sampler for multiclass to mitigate collapse
     # Determine if multiclass from train dataset labels
     try:
         train_labels_np = train_dataset.df['label'].to_numpy()
@@ -2462,24 +2285,14 @@ def create_data_loaders_with_memory_optimization(train_dataset, val_dataset, tes
         # Fallback: extract from dataset items (slower)
         tmp_labels = []
         for i in range(len(train_dataset)):
-            item = train_dataset[i]
-            if isinstance(item, tuple) and len(item) == 3:
-                _, y, _ = item
-            else:
-                _, y = item
+            _, y = train_dataset[i]
             tmp_labels.append(int(y))
         train_labels_np = np.array(tmp_labels)
     unique_train_labels = np.unique(train_labels_np)
-    is_multiclass = len(unique_train_labels) > 2
+    use_weighted_sampler = len(unique_train_labels) > 2
 
     sampler = None
-    if is_multiclass and getattr(args, 'use_balanced_batches', False):
-        # Balanced per-batch sampler. Requires dataset to return indices; ensure dataset has return_index
-        if not getattr(train_dataset, 'return_index', False):
-            # Re-wrap dataset to enable index return
-            train_dataset.return_index = True
-        sampler = BalancedBatchSampler(train_labels_np.tolist(), batch_size=working_batch_size)
-    elif is_multiclass:
+    if use_weighted_sampler:
         from collections import Counter
         counts = Counter(train_labels_np.tolist())
         sample_weights = np.array([1.0 / counts[l] for l in train_labels_np], dtype=np.float64)
@@ -2487,14 +2300,7 @@ def create_data_loaders_with_memory_optimization(train_dataset, val_dataset, tes
         sampler = WeightedRandomSampler(weights=weights_tensor, num_samples=len(train_labels_np), replacement=True)
 
     # Create data loaders with working batch size
-    if sampler is not None and isinstance(sampler, BalancedBatchSampler):
-        train_loader = DataLoader(
-            train_dataset,
-            batch_sampler=sampler,
-            num_workers=args.num_workers,
-            pin_memory=True if 'cuda' in args.device else False
-        )
-    elif sampler is not None:
+    if sampler is not None:
         train_loader = DataLoader(
             train_dataset,
             batch_size=working_batch_size,
@@ -2592,18 +2398,8 @@ def main():
                         help="Number of warmup epochs for Vision Transformer models")
     parser.add_argument("--vit_use_cosine_schedule", action='store_true', default=True,
                         help="Use cosine learning rate schedule for Vision Transformer models")
-    parser.add_argument("--label_smoothing", type=float, default=0.0,
-                        help="Label smoothing factor (0.0 for sharper CN/PD boundaries; 0.1 for ViT)")
-    parser.add_argument("--use_balanced_batches", action='store_true', default=False,
-                        help="Use per-batch class balancing for multiclass training")
-    parser.add_argument("--enable_augment", action='store_true', default=False,
-                        help="Enable light 3D augmentations on training data")
-    parser.add_argument("--cb_beta", type=float, default=0.999,
-                        help="Beta for Class-Balanced Loss effective number (0.99–0.999)")
-    parser.add_argument("--focal_gamma", type=float, default=2.0,
-                        help="Gamma for focal loss focusing parameter")
-    parser.add_argument("--hard_mining_weight", type=float, default=3.0,
-                        help="Sampling weight multiplier for CN/PD hard examples")
+    parser.add_argument("--label_smoothing", type=float, default=0.1,
+                        help="Label smoothing factor (0.1 recommended for ViT)")
     parser.add_argument("--vit_optimizer", type=str, default="adamw", choices=["adamw", "adam"],
                         help="Optimizer for Vision Transformer models")
     parser.add_argument("--vit_weight_decay", type=float, default=0.05,
