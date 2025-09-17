@@ -1853,7 +1853,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             
             metrics = calculate_metrics(predictions, probabilities, labels)
             test_eval_dir = os.path.join(model_dir, f"test_evaluation_plots_fold_{fold_idx}")
-            create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
+            create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir, 
+                                   model_name=model_name, image_type="sMRI")
             test_metrics_path = os.path.join(model_dir, f"test_metrics_fold_{fold_idx}.json")
             with open(test_metrics_path, 'w') as f:
                 json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)

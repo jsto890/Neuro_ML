@@ -285,8 +285,8 @@ def calculate_metrics(predictions, probabilities, labels):
         'classification_report': report
     }
 
-def create_evaluation_plots(predictions, probabilities, labels, metrics, output_dir):
-    """Create comprehensive evaluation plots."""
+def create_evaluation_plots(predictions, probabilities, labels, metrics, output_dir, model_name="Unknown", image_type="sMRI"):
+    """Create comprehensive evaluation plots optimized for journal publications."""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
@@ -306,14 +306,37 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         label_to_disease = {i: f'Class {i}' for i in range(n_classes)}
         disease_names = [f'Class {i}' for i in range(n_classes)]
     
-    # Create comprehensive plot
+    # Set publication-quality style
+    plt.style.use('default')
+    plt.rcParams.update({
+        'font.size': 10,
+        'font.family': 'serif',
+        'font.serif': ['Times New Roman', 'Times'],
+        'axes.linewidth': 0.8,
+        'axes.spines.top': False,
+        'axes.spines.right': False,
+        'axes.grid': True,
+        'axes.grid.alpha': 0.3,
+        'grid.linewidth': 0.5,
+        'legend.frameon': True,
+        'legend.fancybox': False,
+        'legend.shadow': False,
+        'figure.dpi': 300,
+        'savefig.dpi': 300,
+        'savefig.bbox': 'tight',
+        'savefig.pad_inches': 0.1
+    })
+    
+    # Create comprehensive plot with publication-quality sizing
     if n_classes == 2:
-        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        fig, axes = plt.subplots(2, 3, figsize=(12, 8))
     else:
         # For multiclass, we need more space for ROC curves
-        fig, axes = plt.subplots(3, 3, figsize=(20, 18))
+        fig, axes = plt.subplots(3, 3, figsize=(15, 12))
     
-    fig.suptitle('Model Evaluation Results - Disease Classification', fontsize=16, fontweight='bold')
+    # Title with model and image type information
+    fig.suptitle(f'{model_name} Model Evaluation Results - {image_type} Disease Classification', 
+                 fontsize=14, fontweight='bold', y=0.98)
     
     # 1. ROC Curve
     ax1 = axes[0, 0]
@@ -389,59 +412,104 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     ax3.set_ylabel('Actual')
     ax3.set_title('Confusion Matrix')
     
-    # 4. Metrics Bar Chart
+    # 4. Metrics Box Plot (single values as box plots for consistency)
     ax4 = axes[1, 0]
     metric_names = ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'AUC', 'MCC']
     metric_values = [metrics['accuracy'], metrics['precision'], 
                     metrics['recall'], metrics['f1_score'], metrics['auc'], metrics['mcc']]
     
-    bars = ax4.bar(metric_names, metric_values, alpha=0.7, color='skyblue', edgecolor='black')
+    # Create box plot data (single values repeated for box plot format)
+    box_data = [metric_values]  # Single row for all metrics
+    
+    # Use violin plot to show distribution shape, but with single values it will be points
+    parts = ax4.violinplot(box_data, positions=range(len(metric_names)), 
+                          showmeans=True, showmedians=True, widths=0.6)
+    
+    # Color the violin plots
+    for pc in parts['bodies']:
+        pc.set_facecolor('lightblue')
+        pc.set_alpha(0.7)
+    
+    ax4.set_xticks(range(len(metric_names)))
+    ax4.set_xticklabels(metric_names, rotation=45, ha='right')
     ax4.set_ylabel('Score')
     ax4.set_title('Model Performance Metrics')
     ax4.set_ylim(0, 1)
     
-    # Add value labels on bars
-    for bar, value in zip(bars, metric_values):
-        height = bar.get_height()
-        ax4.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                f'{value:.3f}', ha='center', va='bottom')
+    # Add value labels above points
+    for i, value in enumerate(metric_values):
+        ax4.text(i, value + 0.02, f'{value:.3f}', ha='center', va='bottom', fontsize=8)
     
     ax4.grid(True, alpha=0.3)
     
-    # 5. Prediction Distribution
+    # 5. Prediction Distribution Box Plot
     ax5 = axes[1, 1]
     unique_labels, counts = np.unique(predictions, return_counts=True)
     # Convert numeric labels to disease names for x-axis
     disease_labels = [label_to_disease.get(label, f'Class {label}') for label in unique_labels]
     
-    ax5.bar(range(len(unique_labels)), counts, alpha=0.7, color='lightcoral', edgecolor='black')
+    # Create box plot for prediction counts
+    box_data_pred = [counts]
+    parts = ax5.violinplot(box_data_pred, positions=range(len(unique_labels)), 
+                          showmeans=True, showmedians=True, widths=0.6)
+    
+    # Color the violin plots
+    for pc in parts['bodies']:
+        pc.set_facecolor('lightcoral')
+        pc.set_alpha(0.7)
+    
     ax5.set_xlabel('Predicted Class')
     ax5.set_ylabel('Count')
     ax5.set_title('Prediction Distribution')
     ax5.set_xticks(range(len(unique_labels)))
     ax5.set_xticklabels(disease_labels)
+    
+    # Add count labels above points
+    for i, count in enumerate(counts):
+        ax5.text(i, count + max(counts)*0.02, f'{count}', ha='center', va='bottom', fontsize=8)
+    
     ax5.grid(True, alpha=0.3)
     
-    # 6. Probability Distribution
+    # 6. Probability Distribution Box Plot
     ax6 = axes[1, 2]
     if n_classes == 2:
         # For binary classification, show probability distribution
         positive_probs = probabilities[:, 1]
-        ax6.hist(positive_probs, bins=20, alpha=0.7, color='orange', edgecolor='black')
+        ax6.boxplot([positive_probs], patch_artist=True, 
+                   boxprops=dict(facecolor='orange', alpha=0.7),
+                   medianprops=dict(color='black', linewidth=2))
         ax6.set_xlabel('Probability of Positive Class')
-        ax6.set_ylabel('Count')
+        ax6.set_ylabel('Probability')
         ax6.set_title('Probability Distribution (Binary)')
+        ax6.set_xticklabels(['Positive Class'])
         ax6.grid(True, alpha=0.3)
+        
+        # Add statistics text
+        mean_prob = np.mean(positive_probs)
+        std_prob = np.std(positive_probs)
+        ax6.text(0.02, 0.98, f'Mean: {mean_prob:.3f}\nStd: {std_prob:.3f}', 
+                transform=ax6.transAxes, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=8)
     else:
         # For multi-class, show max probability distribution
         max_probs = np.max(probabilities, axis=1)
-        ax6.hist(max_probs, bins=20, alpha=0.7, color='orange', edgecolor='black')
+        ax6.boxplot([max_probs], patch_artist=True,
+                   boxprops=dict(facecolor='orange', alpha=0.7),
+                   medianprops=dict(color='black', linewidth=2))
         ax6.set_xlabel('Maximum Probability')
-        ax6.set_ylabel('Count')
+        ax6.set_ylabel('Probability')
         ax6.set_title('Probability Distribution (Multiclass)')
+        ax6.set_xticklabels(['Max Probability'])
         ax6.grid(True, alpha=0.3)
+        
+        # Add statistics text
+        mean_prob = np.mean(max_probs)
+        std_prob = np.std(max_probs)
+        ax6.text(0.02, 0.98, f'Mean: {mean_prob:.3f}\nStd: {std_prob:.3f}', 
+                transform=ax6.transAxes, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=8)
     
-    # 7. Per-class Performance (only for multiclass)
+    # 7. Per-class Performance Box Plot (only for multiclass)
     if n_classes > 2:
         ax7 = axes[2, 0]
         # Calculate per-class metrics
@@ -450,52 +518,99 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
             labels, predictions, average=None, zero_division=0
         )
         
-        x = np.arange(len(disease_names))
-        width = 0.25
+        # Prepare data for box plot
+        metric_data = [precision_per_class, recall_per_class, f1_per_class]
+        metric_labels = ['Precision', 'Recall', 'F1-Score']
         
-        ax7.bar(x - width, precision_per_class, width, label='Precision', alpha=0.7)
-        ax7.bar(x, recall_per_class, width, label='Recall', alpha=0.7)
-        ax7.bar(x + width, f1_per_class, width, label='F1-Score', alpha=0.7)
+        # Create box plot
+        bp = ax7.boxplot(metric_data, labels=metric_labels, patch_artist=True,
+                        boxprops=dict(alpha=0.7),
+                        medianprops=dict(color='black', linewidth=2))
         
-        ax7.set_xlabel('Classes')
+        # Color the boxes
+        colors = ['lightblue', 'lightgreen', 'lightcoral']
+        for patch, color in zip(bp['boxes'], colors):
+            patch.set_facecolor(color)
+        
+        ax7.set_xlabel('Metrics')
         ax7.set_ylabel('Score')
         ax7.set_title('Per-Class Performance Metrics')
-        ax7.set_xticks(x)
-        ax7.set_xticklabels(disease_names)
-        ax7.legend()
         ax7.grid(True, alpha=0.3)
         ax7.set_ylim(0, 1)
         
-        # 8. Class Balance Analysis
+        # Add mean and std annotations
+        for i, (data, label) in enumerate(zip(metric_data, metric_labels)):
+            mean_val = np.mean(data)
+            std_val = np.std(data)
+            ax7.text(i+1, 0.95, f'μ={mean_val:.3f}\nσ={std_val:.3f}', 
+                    ha='center', va='top', fontsize=8,
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        
+        # 8. Class Balance Analysis Box Plot
         ax8 = axes[2, 1]
         unique_labels_actual, counts_actual = np.unique(labels, return_counts=True)
         disease_labels_actual = [label_to_disease.get(label, f'Class {label}') for label in unique_labels_actual]
         
-        ax8.bar(range(len(unique_labels_actual)), counts_actual, alpha=0.7, color='lightgreen', edgecolor='black')
-        ax8.set_xlabel('Actual Class')
+        # Create box plot for class counts
+        bp = ax8.boxplot([counts_actual], patch_artist=True,
+                        boxprops=dict(facecolor='lightgreen', alpha=0.7),
+                        medianprops=dict(color='black', linewidth=2))
+        
+        ax8.set_xlabel('Class Distribution')
         ax8.set_ylabel('Count')
         ax8.set_title('Class Distribution in Test Set')
-        ax8.set_xticks(range(len(unique_labels_actual)))
-        ax8.set_xticklabels(disease_labels_actual)
+        ax8.set_xticklabels(['All Classes'])
+        
+        # Add statistics text
+        mean_count = np.mean(counts_actual)
+        std_count = np.std(counts_actual)
+        ax8.text(0.02, 0.98, f'Mean: {mean_count:.1f}\nStd: {std_count:.1f}\nTotal: {np.sum(counts_actual)}', 
+                transform=ax8.transAxes, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=8)
+        
         ax8.grid(True, alpha=0.3)
         
-        # 9. Confidence Analysis
+        # 9. Confidence Analysis Box Plot
         ax9 = axes[2, 2]
-        # Show confidence distribution for each class
+        # Show confidence distribution for each class using box plots
+        class_prob_data = []
+        class_labels = []
+        
         for i in range(n_classes):
             class_probs = probabilities[:, i]
-            ax9.hist(class_probs, bins=20, alpha=0.5, label=disease_names[i], density=True)
+            class_prob_data.append(class_probs)
+            class_labels.append(disease_names[i])
         
-        ax9.set_xlabel('Predicted Probability')
-        ax9.set_ylabel('Density')
+        # Create box plot for class-wise probabilities
+        bp = ax9.boxplot(class_prob_data, labels=class_labels, patch_artist=True,
+                        medianprops=dict(color='black', linewidth=2))
+        
+        # Color the boxes
+        colors = ['lightblue', 'lightcoral', 'lightgreen', 'lightyellow', 'lightpink', 'lightgray']
+        for patch, color in zip(bp['boxes'], colors[:len(class_labels)]):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+        
+        ax9.set_xlabel('Classes')
+        ax9.set_ylabel('Predicted Probability')
         ax9.set_title('Class-wise Confidence Distribution')
-        ax9.legend()
         ax9.grid(True, alpha=0.3)
+        
+        # Add mean and std annotations for each class
+        for i, (data, label) in enumerate(zip(class_prob_data, class_labels)):
+            mean_prob = np.mean(data)
+            std_prob = np.std(data)
+            ax9.text(i+1, 0.95, f'μ={mean_prob:.3f}\nσ={std_prob:.3f}', 
+                    ha='center', va='top', fontsize=7,
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
     
     plt.tight_layout()
     plot_path = output_path / 'model_evaluation_analysis.png'
-    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight', facecolor='white', edgecolor='none')
     plt.close()
+    
+    # Reset matplotlib rcParams to default
+    plt.rcParams.update(plt.rcParamsDefault)
     
     print(f"Evaluation plot saved to: {plot_path}")
     
@@ -601,7 +716,8 @@ def main():
     
     # Create plots
     print("Generating evaluation plots...")
-    create_evaluation_plots(predictions, probabilities, labels, metrics, args.output_dir)
+    create_evaluation_plots(predictions, probabilities, labels, metrics, args.output_dir, 
+                           model_name=args.model_name, image_type="sMRI")
     
     print(f"\n✅ Evaluation completed! Results saved to: {args.output_dir}")
 
