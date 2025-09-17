@@ -14,12 +14,13 @@ class SMRIDataset(Dataset):
       - A data_root directory containing smriprep/<subject>/anat/<subject>_desc-preproc_T1w_brain_zscore.nii.gz
     """
 
-    def __init__(self, csv_path: str, data_root: str):
+    def __init__(self, csv_path: str, data_root: str, transform=None):
         """
         Args:
             csv_path  (str): path to CSV; expects columns 'subject_id' and 'label',
                              but can handle headerless files.
             data_root (str): root folder where smriprep/<subject>/anat/... lives.
+            transform (callable, optional): Optional transform to be applied on the image.
         """
         # Read CSV normally
         df = pd.read_csv(csv_path)
@@ -38,6 +39,7 @@ class SMRIDataset(Dataset):
         self.subjects = df['subject_id'].tolist()
         self.labels = df['label'].tolist()
         self.data_root = data_root
+        self.transform = transform
 
     def __len__(self):
         return len(self.subjects)
@@ -60,5 +62,9 @@ class SMRIDataset(Dataset):
 
         # Convert to a torch.FloatTensor with shape [1, D, H, W]
         smri = torch.from_numpy(data).unsqueeze(0).float()
+
+        # Apply transform if provided
+        if self.transform is not None:
+            smri = self.transform(smri)
 
         return smri, label
