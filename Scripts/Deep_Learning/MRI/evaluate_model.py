@@ -316,7 +316,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         'axes.spines.top': False,
         'axes.spines.right': False,
         'axes.grid': True,
-        'axes.grid.alpha': 0.3,
+        'grid.alpha': 0.3,
         'grid.linewidth': 0.5,
         'legend.frameon': True,
         'legend.fancybox': False,
