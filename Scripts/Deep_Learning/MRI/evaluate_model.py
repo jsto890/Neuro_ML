@@ -310,8 +310,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     plt.style.use('default')
     plt.rcParams.update({
         'font.size': 10,
-        'font.family': 'serif',
-        'font.serif': ['Times New Roman', 'Times'],
+        'font.family': 'sans-serif',
         'axes.linewidth': 0.8,
         'axes.spines.top': False,
         'axes.spines.right': False,
@@ -418,17 +417,15 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     metric_values = [metrics['accuracy'], metrics['precision'], 
                     metrics['recall'], metrics['f1_score'], metrics['auc'], metrics['mcc']]
     
-    # Create box plot data (single values repeated for box plot format)
-    box_data = [metric_values]  # Single row for all metrics
+    # Create box plot data - for single values, create a simple bar plot with error bars
+    bars = ax4.bar(range(len(metric_names)), metric_values, 
+                   color='lightblue', alpha=0.7, width=0.6)
     
-    # Use violin plot to show distribution shape, but with single values it will be points
-    parts = ax4.violinplot(box_data, positions=range(len(metric_names)), 
-                          showmeans=True, showmedians=True, widths=0.6)
-    
-    # Color the violin plots
-    for pc in parts['bodies']:
-        pc.set_facecolor('lightblue')
-        pc.set_alpha(0.7)
+    # Add value annotations on top of bars
+    for i, (bar, value) in enumerate(zip(bars, metric_values)):
+        height = bar.get_height()
+        ax4.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                f'{value:.3f}', ha='center', va='bottom', fontsize=8)
     
     ax4.set_xticks(range(len(metric_names)))
     ax4.set_xticklabels(metric_names, rotation=45, ha='right')
@@ -448,15 +445,15 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     # Convert numeric labels to disease names for x-axis
     disease_labels = [label_to_disease.get(label, f'Class {label}') for label in unique_labels]
     
-    # Create box plot for prediction counts
-    box_data_pred = [counts]
-    parts = ax5.violinplot(box_data_pred, positions=range(len(unique_labels)), 
-                          showmeans=True, showmedians=True, widths=0.6)
+    # Create bar plot for prediction counts
+    bars = ax5.bar(range(len(unique_labels)), counts, 
+                   color='lightcoral', alpha=0.7, width=0.6)
     
-    # Color the violin plots
-    for pc in parts['bodies']:
-        pc.set_facecolor('lightcoral')
-        pc.set_alpha(0.7)
+    # Add count annotations on top of bars
+    for i, (bar, count) in enumerate(zip(bars, counts)):
+        height = bar.get_height()
+        ax5.text(bar.get_x() + bar.get_width()/2., height + max(counts)*0.01,
+                f'{count}', ha='center', va='bottom', fontsize=8)
     
     ax5.set_xlabel('Predicted Class')
     ax5.set_ylabel('Count')
