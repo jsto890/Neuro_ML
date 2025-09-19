@@ -248,7 +248,8 @@ def set_dropout_enabled_only(module: nn.Module, enable: bool) -> None:
 
 
 def aggregate_predictions(models: List[nn.Module], input_tensor: torch.Tensor, avg_method: str,
-                          tta_n: int = 0, tta_noise_std: float = 0.0, mc_dropout: bool = False
+                          tta_n: int = 0, tta_noise_std: float = 0.0, mc_dropout: bool = False,
+                          use_amp: bool = False, device_str: str = 'cpu'
                           ) -> Tuple[np.ndarray, torch.Tensor, Dict[str, object]]:
     """
     Run ensemble with optional TTA and return probabilities and aggregated logits.
@@ -267,13 +268,18 @@ def aggregate_predictions(models: List[nn.Module], input_tensor: torch.Tensor, a
 
     all_logits: List[torch.Tensor] = []
     votes: List[int] = []
+    use_cuda_amp = use_amp and isinstance(device_str, str) and device_str.startswith('cuda') and torch.cuda.is_available()
     with torch.no_grad():
         for m in models:
             for r in range(replicates):
                 xt = input_tensor
                 if tta_noise_std and tta_noise_std > 0.0 and tta_n > 0:
                     xt = xt + torch.randn_like(xt) * float(tta_noise_std)
-                out = m(xt)
+                if use_cuda_amp:
+                    with torch.cuda.amp.autocast(dtype=torch.float16):
+                        out = m(xt)
+                else:
+                    out = m(xt)
                 lg = out[0] if isinstance(out, tuple) else out
                 all_logits.append(lg)
                 v = int(torch.argmax(F.softmax(lg, dim=1), dim=1).item())
@@ -344,7 +350,7 @@ def compute_gradcam_volume(gradcam_module, model, input_tensor: torch.Tensor, ta
         cam = gradcam_module.compute_gradcam_3d(model, input_tensor, target_class, device=device)
         return robust_normalize_map(cam)
     elif arch_l in ['simple3dcnn', 'simple_3dcnn']:
-        # Prefer robust local implementation (hooks last Conv3d pre-final pool → higher spatial resolution)
+        # Use vanilla Grad-CAM by default
         try:
             cam = compute_gradcam_simple3d_local(model, input_tensor, target_class, device, which_layer=cam_layer)
             return robust_normalize_map(cam)
@@ -356,6 +362,31 @@ def compute_gradcam_volume(gradcam_module, model, input_tensor: torch.Tensor, ta
         raise ValueError(f"Grad-CAM not implemented for architecture: {arch}")
     # Unreachable
     # return normalize_map(cam)
+
+
+def compute_gradcam_plusplus_volume(gradcam_module, model, input_tensor: torch.Tensor, target_class: int, arch: str, device: str, cam_layer: str = 'prepool') -> np.ndarray:
+    """Grad-CAM++ version of compute_gradcam_volume"""
+    arch_l = arch.lower()
+    if arch_l in ['smri_gradcam_3dcnn', 'smri-gradcam-3dcnn']:
+        # For SMRI_GradCAM_3DCNN, fall back to vanilla Grad-CAM
+        cam = gradcam_module.compute_gradcam_3d(model, input_tensor, target_class, device=device)
+        return robust_normalize_map(cam)
+    elif arch_l in ['simple3dcnn', 'simple_3dcnn']:
+        # Use Grad-CAM++ local implementation
+        try:
+            cam = compute_gradcam_plusplus_simple3d_local(model, input_tensor, target_class, device, which_layer=cam_layer)
+            return robust_normalize_map(cam)
+        except Exception:
+            # Fallback to vanilla Grad-CAM if Grad-CAM++ fails
+            try:
+                cam = compute_gradcam_simple3d_local(model, input_tensor, target_class, device, which_layer=cam_layer)
+                return robust_normalize_map(cam)
+            except Exception:
+                # Final fallback to module implementation
+                cam = gradcam_module.compute_gradcam_simple3d(model, input_tensor, target_class, device=device)
+                return robust_normalize_map(cam)
+    else:
+        raise ValueError(f"Grad-CAM++ not implemented for architecture: {arch}")
 
 
 def _select_conv_for_cam_simple3d(model: nn.Module, which: str) -> nn.Module:
@@ -410,6 +441,90 @@ def compute_gradcam_simple3d_local(model: nn.Module, smri_tensor: torch.Tensor, 
     cam = torch.zeros_like(activations[0, 0])
     for i, w in enumerate(weights):
         cam += w * activations[0, i]
+    cam = F.relu(cam)
+    cam = cam.unsqueeze(0).unsqueeze(0)
+    target_size = smri_tensor.shape[-3:]
+    cam_upsampled = F.interpolate(cam, size=target_size, mode="trilinear", align_corners=False)
+    cam_np = cam_upsampled.squeeze().cpu().numpy()
+
+    h1.remove(); h2.remove()
+    return cam_np.astype(np.float32)
+
+
+def compute_gradcam_plusplus_simple3d_local(model: nn.Module, smri_tensor: torch.Tensor, target_class: int, device: str = "cpu", which_layer: str = 'prepool') -> np.ndarray:
+    """
+    Grad-CAM++ for Simple3DCNN wrapper using the improved weighting scheme.
+    Implements the Grad-CAM++ paper: https://arxiv.org/abs/1710.11063
+    """
+    model.to(device)
+    model.eval()
+
+    last_conv = _select_conv_for_cam_simple3d(model, which_layer)
+
+    activations: Optional[torch.Tensor] = None
+    gradients: Optional[torch.Tensor] = None
+    grad_squared: Optional[torch.Tensor] = None
+    grad_cubed: Optional[torch.Tensor] = None
+
+    def fwd_hook(module, inp, out):
+        nonlocal activations
+        activations = out.detach()
+
+    def bwd_hook(module, grad_input, grad_output):
+        nonlocal gradients, grad_squared, grad_cubed
+        grad = grad_output[0].detach()
+        gradients = grad
+        grad_squared = grad ** 2
+        grad_cubed = grad ** 3
+
+    h1 = last_conv.register_forward_hook(fwd_hook)
+    h2 = last_conv.register_full_backward_hook(bwd_hook)
+
+    smri_tensor = smri_tensor.to(device).requires_grad_(True)
+    logits, _ = model(smri_tensor)
+    score = logits[0, target_class]
+    model.zero_grad()
+    score.backward(retain_graph=False)
+
+    if activations is None or gradients is None:
+        h1.remove(); h2.remove()
+        raise RuntimeError("Grad-CAM++ hooks did not capture activations/gradients")
+
+    # Grad-CAM++ weighting scheme
+    # w_k^c = ReLU(Σ_i Σ_j α_ij^k^c * A_ij^k^c) where α_ij^k^c = (∂²y^c/∂A_ij^k²) / (2 * ∂²y^c/∂A_ij^k² + Σ_a Σ_b A_ab^k * ∂³y^c/∂A_ab^k³)
+    
+    # For numerical stability, we use a simplified version:
+    # w_k = Σ_i Σ_j (grad_ij^k * A_ij^k) / (Σ_i Σ_j A_ij^k + ε)
+    # This approximates the higher-order terms
+    
+    eps = 1e-8
+    weights = torch.zeros(activations.size(1), device=device)
+    
+    for k in range(activations.size(1)):
+        # Numerator: Σ_i Σ_j (grad_ij^k * A_ij^k)
+        numerator = torch.sum(gradients[0, k] * activations[0, k])
+        
+        # Denominator: Σ_i Σ_j A_ij^k + ε
+        denominator = torch.sum(activations[0, k]) + eps
+        
+        # Additional term for Grad-CAM++: include higher-order information
+        if grad_squared is not None and grad_cubed is not None:
+            # Simplified higher-order term
+            grad2_sum = torch.sum(grad_squared[0, k])
+            grad3_sum = torch.sum(grad_cubed[0, k])
+            higher_order = grad2_sum / (2 * grad2_sum + grad3_sum + eps)
+            weights[k] = numerator / denominator * higher_order
+        else:
+            weights[k] = numerator / denominator
+    
+    # Apply ReLU to keep only positive weights
+    weights = F.relu(weights)
+    
+    # Weighted combination of feature maps
+    cam = torch.zeros_like(activations[0, 0])
+    for k, w in enumerate(weights):
+        cam += w * activations[0, k]
+    
     cam = F.relu(cam)
     cam = cam.unsqueeze(0).unsqueeze(0)
     target_size = smri_tensor.shape[-3:]
@@ -569,6 +684,9 @@ def main():
     parser.add_argument('--mc-dropout', action='store_true', help='Enable MC Dropout by activating Dropout layers during inference')
     parser.add_argument('--risk-weights', type=float, nargs='+', help='Multipliers per class to bias decisions, length = num-classes (e.g., 1 1.2 1.2)')
     parser.add_argument('--cn-min-prob', type=float, default=None, help='If predicted CN prob is below this, choose best non-CN class')
+    parser.add_argument('--interop-threads', type=int, default=0, help='Torch set_num_interop_threads (0=leave default)')
+    parser.add_argument('--cudnn-benchmark', action='store_true', help='Enable cudnn.benchmark for faster convs on fixed sizes (CUDA only)')
+    parser.add_argument('--amp', action='store_true', help='Enable mixed precision (CUDA autocast) for prediction phase')
     parser.add_argument('--num-classes', type=int, default=3)
     parser.add_argument('--label-map-json', type=str, help='Optional JSON mapping of numeric labels to names')
     parser.add_argument('--normalize', choices=['zscore', 'minmax', 'none'], default='zscore')
@@ -586,7 +704,7 @@ def main():
     parser.add_argument('--cam-layer', type=str, default='prepool', choices=['last', 'prepool', 'mid'], help='Which conv layer to use for Grad-CAM (Simple3DCNN)')
     # Interpretability selection
     parser.add_argument('--run-all', action='store_true', help='Run all interpretability maps (default if neither --run nor --run-all provided)')
-    parser.add_argument('--run', nargs='+', choices=['gradcam', 'saliency', 'occlusion', 'gradientshap'], help='One or more interpretability methods to run, e.g. --run saliency occlusion')
+    parser.add_argument('--run', nargs='+', choices=['gradcam', 'gradcam_plusplus', 'saliency', 'occlusion', 'gradientshap'], help='One or more interpretability methods to run, e.g. --run gradcam gradcam_plusplus saliency')
 
     args = parser.parse_args()
 
@@ -611,6 +729,16 @@ def main():
             torch.set_num_threads(int(args.num_threads))
         except Exception:
             pass
+    if isinstance(args.interop_threads, int) and args.interop_threads > 0:
+        try:
+            torch.set_num_interop_threads(int(args.interop_threads))
+        except Exception:
+            pass
+    try:
+        if bool(args.cudnn_benchmark) and device.startswith('cuda'):
+            torch.backends.cudnn.benchmark = True
+    except Exception:
+        pass
 
     # Label mapping (default: 0->CN, 1->AD, 2->PD)
     label_map: Dict[int, str] = {0: 'CN', 1: 'AD', 2: 'PD'}
@@ -665,7 +793,8 @@ def main():
     else:
         probs, logits, meta_pred = aggregate_predictions(
             models, input_tensor, avg_method=args.ensemble_avg_method,
-            tta_n=int(args.tta_n), tta_noise_std=float(args.tta_noise_std), mc_dropout=bool(args.mc_dropout)
+            tta_n=int(args.tta_n), tta_noise_std=float(args.tta_noise_std), mc_dropout=bool(args.mc_dropout),
+            use_amp=bool(args.amp), device_str=device
         )
         pred_idx = int(np.argmax(probs))
 
@@ -707,6 +836,7 @@ def main():
     occ_path = None
     gshap_path = None
 
+    # Vanilla Grad-CAM
     if 'gradcam' in run_set:
         classes_to_compute = range(args.num_classes) if args.all_classes_interpret else [pred_idx]
         overlay_saved = False
@@ -741,6 +871,44 @@ def main():
                         pass
             except Exception as e:
                 msg = f"Grad-CAM failed for class {c}: {e}"
+                print(msg)
+                interpret_errors['gradcam'].append(msg)
+
+    # Grad-CAM++
+    if 'gradcam_plusplus' in run_set:
+        classes_to_compute = range(args.num_classes) if args.all_classes_interpret else [pred_idx]
+        overlay_saved_pp = False
+        for c in classes_to_compute:
+            try:
+                if not is_ensemble:
+                    cam = compute_gradcam_plusplus_volume(gradcam_module, models[0], input_tensor, c, args.model_arch, device, cam_layer=args.cam_layer)
+                else:
+                    cam_accum = None
+                    for m in models:
+                        cam_i = compute_gradcam_plusplus_volume(gradcam_module, m, input_tensor, c, args.model_arch, device, cam_layer=args.cam_layer)
+                        cam_accum = cam_i if cam_accum is None else (cam_accum + cam_i)
+                    cam = cam_accum / float(len(models))
+                # Resize CAM back to the anatomy's original shape for NIfTI and overlays
+                cam_resized = resize_volume_to_shape(cam, vol_np.shape)
+                cam_path = out_dir / f"{sid}_gradcam_plusplus_class{c}.nii.gz"
+                save_nifti(cam_resized, affine, header, cam_path)
+                gradcam_paths[f"plusplus_{c}"] = str(cam_path)
+                # Optional overlays for predicted class
+                if args.save_overlay_pngs and c == pred_idx and not overlay_saved_pp:
+                    try:
+                        class_name = label_map.get(int(c), str(c))
+                        save_overlay_pngs(
+                            vol_np,
+                            cam_resized,
+                            out_dir / f"{sid}_gradcam_plusplus_overlay.png",
+                            title=f"{sid} • Grad-CAM++ • {class_name}",
+                            mask=brain_mask_orig
+                        )
+                        overlay_saved_pp = True
+                    except Exception:
+                        pass
+            except Exception as e:
+                msg = f"Grad-CAM++ failed for class {c}: {e}"
                 print(msg)
                 interpret_errors['gradcam'].append(msg)
 

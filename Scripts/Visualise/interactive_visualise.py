@@ -248,8 +248,7 @@ def create_overlay_viewer(base_img, base_data, overlay_data, title="Overlay View
 
     # Auto contrast buttons
     ax_btn = plt.axes([0.02, 0.68, 0.12, 0.08])
-    btn_auto = Button(ax_btn, 'Auto
-Contrast')
+    btn_auto = Button(ax_btn, 'Auto\nContrast')
 
     def update_views():
         z = int(s_z.val); x = int(s_x.val); y = int(s_y.val)
