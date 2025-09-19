@@ -9,6 +9,9 @@ Interactive Visualization Tool
 
 import os
 import sys
+import re
+import json
+import glob as glob_mod
 import numpy as np
 import nibabel as nib
 import matplotlib.pyplot as plt
@@ -200,7 +203,7 @@ def create_overlay_viewer(base_img, base_data, overlay_data, title="Overlay View
     nx, ny, nz = base.shape
     x_idx, y_idx, z_idx = nx // 2, ny // 2, nz // 2
 
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
     fig.suptitle(title, fontsize=16)
 
     # Initial plots
@@ -218,13 +221,6 @@ def create_overlay_viewer(base_img, base_data, overlay_data, title="Overlay View
     hm3 = ax3.imshow(heat[:, y_idx, :].T, cmap='hot', origin='lower', alpha=init_alpha)
     ax3.set_title(f'Coronal (Y={y_idx})')
     ax3.axis('off')
-
-    # Histogram of overlay inside brain
-    nzv = overlay_data[base_data != 0]
-    ax4.hist(nzv.flatten(), bins=50, alpha=0.7, color='red')
-    ax4.set_title('Overlay intensity (in-brain voxels)')
-    ax4.set_xlabel('Intensity')
-    ax4.set_ylabel('Frequency')
 
     plt.subplots_adjust(bottom=0.05)
 
@@ -306,11 +302,6 @@ def create_overlay_viewer(base_img, base_data, overlay_data, title="Overlay View
     # Connect mouse motion and keyboard events
     fig.canvas.mpl_connect('motion_notify_event', on_motion)
     fig.canvas.mpl_connect('key_press_event', on_key)
-    
-    # Instructions
-    ax1.text(0.02, 0.98, 'Move mouse over images to navigate\nArrow keys: Z slice\nLeft/Right: X slice\nPgUp/PgDn: Y slice', 
-             transform=ax1.transAxes, verticalalignment='top', fontsize=8, 
-             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
     plt.show()
 
@@ -348,7 +339,35 @@ def main():
         if o_data.ndim != 3:
             print("❌ Overlay must be 3D or 4D")
             return
-        title = f"Overlay Viewer: {os.path.basename(args.base)} + {os.path.basename(args.overlay)}"
+        
+        # Extract subject ID and predicted disease from JSON if available
+        sub_id = "Unknown"
+        predicted_disease = "Unknown"
+        
+        # Try to find corresponding JSON file
+        base_dir = os.path.dirname(args.base)
+        base_name = os.path.basename(args.base)
+        json_pattern = base_name.replace('.nii.gz', '').replace('.nii', '') + '*clinical_prediction_deep.json'
+        json_files = glob_mod.glob(os.path.join(base_dir, json_pattern))
+        
+        if json_files:
+            try:
+                import json
+                with open(json_files[0], 'r') as f:
+                    json_data = json.load(f)
+                # Extract subject ID from image path
+                if 'image' in json_data:
+                    img_path = json_data['image']
+                    sub_match = re.search(r'sub-([A-Za-z0-9]+)', img_path)
+                    if sub_match:
+                        sub_id = sub_match.group(1)
+                # Extract predicted disease
+                if 'prediction' in json_data and 'label_name' in json_data['prediction']:
+                    predicted_disease = json_data['prediction']['label_name']
+            except Exception as e:
+                print(f"⚠️ Could not parse JSON: {e}")
+        
+        title = f"{sub_id} • {predicted_disease}"
         create_overlay_viewer(b_img, b_data, o_data, title=title, init_alpha=float(args.overlay_alpha))
         return
 
