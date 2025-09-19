@@ -226,20 +226,10 @@ def create_overlay_viewer(base_img, base_data, overlay_data, title="Overlay View
     ax4.set_xlabel('Intensity')
     ax4.set_ylabel('Frequency')
 
-    plt.subplots_adjust(bottom=0.22)
-
-    # Sliders
-    ax_z = plt.axes([0.2, 0.12, 0.6, 0.03])
-    s_z = Slider(ax_z, 'Z', 0, nz-1, valinit=z_idx, valstep=1)
-
-    ax_x = plt.axes([0.2, 0.08, 0.6, 0.03])
-    s_x = Slider(ax_x, 'X', 0, nx-1, valinit=x_idx, valstep=1)
-
-    ax_y = plt.axes([0.2, 0.04, 0.6, 0.03])
-    s_y = Slider(ax_y, 'Y', 0, ny-1, valinit=y_idx, valstep=1)
+    plt.subplots_adjust(bottom=0.15)
 
     # Overlay alpha slider
-    ax_a = plt.axes([0.85, 0.12, 0.1, 0.03])
+    ax_a = plt.axes([0.2, 0.05, 0.6, 0.03])
     s_a = Slider(ax_a, 'Alpha', 0.0, 1.0, valinit=init_alpha, valstep=0.05)
 
     # Overlay toggle
@@ -251,18 +241,17 @@ def create_overlay_viewer(base_img, base_data, overlay_data, title="Overlay View
     btn_auto = Button(ax_btn, 'Auto\nContrast')
 
     def update_views():
-        z = int(s_z.val); x = int(s_x.val); y = int(s_y.val)
-        im1.set_array(base[:, :, z].T)
-        hm1.set_array(heat[:, :, z].T)
-        ax1.set_title(f'Axial (Z={z})')
+        im1.set_array(base[:, :, z_idx].T)
+        hm1.set_array(heat[:, :, z_idx].T)
+        ax1.set_title(f'Axial (Z={z_idx})')
 
-        im2.set_array(base[x, :, :].T)
-        hm2.set_array(heat[x, :, :].T)
-        ax2.set_title(f'Sagittal (X={x})')
+        im2.set_array(base[x_idx, :, :].T)
+        hm2.set_array(heat[x_idx, :, :].T)
+        ax2.set_title(f'Sagittal (X={x_idx})')
 
-        im3.set_array(base[:, y, :].T)
-        hm3.set_array(heat[:, y, :].T)
-        ax3.set_title(f'Coronal (Y={y})')
+        im3.set_array(base[:, y_idx, :].T)
+        hm3.set_array(heat[:, y_idx, :].T)
+        ax3.set_title(f'Coronal (Y={y_idx})')
         fig.canvas.draw_idle()
 
     def on_alpha(val):
@@ -283,12 +272,54 @@ def create_overlay_viewer(base_img, base_data, overlay_data, title="Overlay View
         heat = _normalize_overlay_within_mask(overlay_data, base_data)
         update_views()
 
-    s_z.on_changed(lambda v: update_views())
-    s_x.on_changed(lambda v: update_views())
-    s_y.on_changed(lambda v: update_views())
+    def on_click(event):
+        nonlocal x_idx, y_idx, z_idx
+        if event.inaxes == ax1:  # Axial view - click sets Z
+            if event.xdata is not None and event.ydata is not None:
+                z_idx = max(0, min(nz-1, int(event.ydata)))
+                update_views()
+        elif event.inaxes == ax2:  # Sagittal view - click sets X
+            if event.xdata is not None and event.ydata is not None:
+                x_idx = max(0, min(nx-1, int(event.ydata)))
+                update_views()
+        elif event.inaxes == ax3:  # Coronal view - click sets Y
+            if event.xdata is not None and event.ydata is not None:
+                y_idx = max(0, min(ny-1, int(event.ydata)))
+                update_views()
+
+    def on_key(event):
+        nonlocal x_idx, y_idx, z_idx
+        if event.key == 'up':
+            z_idx = min(nz-1, z_idx + 1)
+            update_views()
+        elif event.key == 'down':
+            z_idx = max(0, z_idx - 1)
+            update_views()
+        elif event.key == 'left':
+            x_idx = max(0, x_idx - 1)
+            update_views()
+        elif event.key == 'right':
+            x_idx = min(nx-1, x_idx + 1)
+            update_views()
+        elif event.key == 'pageup':
+            y_idx = min(ny-1, y_idx + 1)
+            update_views()
+        elif event.key == 'pagedown':
+            y_idx = max(0, y_idx - 1)
+            update_views()
+
     s_a.on_changed(on_alpha)
     chk.on_clicked(on_toggle)
     btn_auto.on_clicked(on_auto)
+    
+    # Connect click and keyboard events
+    fig.canvas.mpl_connect('button_press_event', on_click)
+    fig.canvas.mpl_connect('key_press_event', on_key)
+    
+    # Instructions
+    ax1.text(0.02, 0.98, 'Click on images to navigate\nArrow keys: Z slice\nLeft/Right: X slice\nPgUp/PgDn: Y slice', 
+             transform=ax1.transAxes, verticalalignment='top', fontsize=8, 
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
     plt.show()
 
