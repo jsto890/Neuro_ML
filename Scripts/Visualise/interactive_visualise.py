@@ -226,21 +226,20 @@ def create_overlay_viewer(base_img, base_data, overlay_data, title="Overlay View
     ax4.set_xlabel('Intensity')
     ax4.set_ylabel('Frequency')
 
-    plt.subplots_adjust(bottom=0.15)
+    plt.subplots_adjust(bottom=0.05)
 
-    # Overlay alpha slider
-    ax_a = plt.axes([0.2, 0.05, 0.6, 0.03])
-    s_a = Slider(ax_a, 'Alpha', 0.0, 1.0, valinit=init_alpha, valstep=0.05)
-
-    # Overlay toggle
-    ax_chk = plt.axes([0.02, 0.8, 0.12, 0.12])
-    chk = CheckButtons(ax_chk, ['Overlay'], [True])
-
-    # Auto contrast buttons
-    ax_btn = plt.axes([0.02, 0.68, 0.12, 0.08])
-    btn_auto = Button(ax_btn, 'Auto\nContrast')
+    # Crosshair lines
+    vline1 = ax1.axvline(x_idx, color='cyan', linewidth=1, alpha=0.8)
+    hline1 = ax1.axhline(y_idx, color='cyan', linewidth=1, alpha=0.8)
+    
+    vline2 = ax2.axvline(y_idx, color='cyan', linewidth=1, alpha=0.8)
+    hline2 = ax2.axhline(z_idx, color='cyan', linewidth=1, alpha=0.8)
+    
+    vline3 = ax3.axvline(x_idx, color='cyan', linewidth=1, alpha=0.8)
+    hline3 = ax3.axhline(z_idx, color='cyan', linewidth=1, alpha=0.8)
 
     def update_views():
+        # Update images
         im1.set_array(base[:, :, z_idx].T)
         hm1.set_array(heat[:, :, z_idx].T)
         ax1.set_title(f'Axial (Z={z_idx})')
@@ -252,39 +251,35 @@ def create_overlay_viewer(base_img, base_data, overlay_data, title="Overlay View
         im3.set_array(base[:, y_idx, :].T)
         hm3.set_array(heat[:, y_idx, :].T)
         ax3.set_title(f'Coronal (Y={y_idx})')
+        
+        # Update crosshairs
+        vline1.set_xdata([x_idx, x_idx])
+        hline1.set_ydata([y_idx, y_idx])
+        
+        vline2.set_xdata([y_idx, y_idx])
+        hline2.set_ydata([z_idx, z_idx])
+        
+        vline3.set_xdata([x_idx, x_idx])
+        hline3.set_ydata([z_idx, z_idx])
+        
         fig.canvas.draw_idle()
 
-    def on_alpha(val):
-        a = float(s_a.val)
-        for hm in (hm1, hm2, hm3):
-            hm.set_alpha(a)
-        fig.canvas.draw_idle()
-
-    def on_toggle(label):
-        visible = chk.get_status()[0]
-        for hm in (hm1, hm2, hm3):
-            hm.set_visible(visible)
-        fig.canvas.draw_idle()
-
-    def on_auto(event):
-        # Re-normalize overlay based on current base percentiles
-        nonlocal heat
-        heat = _normalize_overlay_within_mask(overlay_data, base_data)
-        update_views()
-
-    def on_click(event):
+    def on_motion(event):
         nonlocal x_idx, y_idx, z_idx
-        if event.inaxes == ax1:  # Axial view - click sets Z
+        if event.inaxes == ax1:  # Axial view - Y position sets Y, X position sets X
             if event.xdata is not None and event.ydata is not None:
+                x_idx = max(0, min(nx-1, int(event.xdata)))
+                y_idx = max(0, min(ny-1, int(event.ydata)))
+                update_views()
+        elif event.inaxes == ax2:  # Sagittal view - Y position sets Z, X position sets Y
+            if event.xdata is not None and event.ydata is not None:
+                y_idx = max(0, min(ny-1, int(event.xdata)))
                 z_idx = max(0, min(nz-1, int(event.ydata)))
                 update_views()
-        elif event.inaxes == ax2:  # Sagittal view - click sets X
+        elif event.inaxes == ax3:  # Coronal view - Y position sets Z, X position sets X
             if event.xdata is not None and event.ydata is not None:
-                x_idx = max(0, min(nx-1, int(event.ydata)))
-                update_views()
-        elif event.inaxes == ax3:  # Coronal view - click sets Y
-            if event.xdata is not None and event.ydata is not None:
-                y_idx = max(0, min(ny-1, int(event.ydata)))
+                x_idx = max(0, min(nx-1, int(event.xdata)))
+                z_idx = max(0, min(nz-1, int(event.ydata)))
                 update_views()
 
     def on_key(event):
@@ -308,16 +303,12 @@ def create_overlay_viewer(base_img, base_data, overlay_data, title="Overlay View
             y_idx = max(0, y_idx - 1)
             update_views()
 
-    s_a.on_changed(on_alpha)
-    chk.on_clicked(on_toggle)
-    btn_auto.on_clicked(on_auto)
-    
-    # Connect click and keyboard events
-    fig.canvas.mpl_connect('button_press_event', on_click)
+    # Connect mouse motion and keyboard events
+    fig.canvas.mpl_connect('motion_notify_event', on_motion)
     fig.canvas.mpl_connect('key_press_event', on_key)
     
     # Instructions
-    ax1.text(0.02, 0.98, 'Click on images to navigate\nArrow keys: Z slice\nLeft/Right: X slice\nPgUp/PgDn: Y slice', 
+    ax1.text(0.02, 0.98, 'Move mouse over images to navigate\nArrow keys: Z slice\nLeft/Right: X slice\nPgUp/PgDn: Y slice', 
              transform=ax1.transAxes, verticalalignment='top', fontsize=8, 
              bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
