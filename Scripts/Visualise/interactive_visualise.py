@@ -367,13 +367,19 @@ def main():
                 import json
                 with open(json_files[0], 'r') as f:
                     json_data = json.load(f)
-                # Extract predicted disease
+                # Extract predicted disease and map to full names
                 if 'prediction' in json_data and 'label_name' in json_data['prediction']:
-                    predicted_disease = json_data['prediction']['label_name']
+                    disease_code = json_data['prediction']['label_name']
+                    disease_mapping = {
+                        'CN': 'Healthy',
+                        'PD': 'Parkinsons Disease', 
+                        'AD': 'Alzheimers Disease'
+                    }
+                    predicted_disease = disease_mapping.get(disease_code, disease_code)
             except Exception as e:
                 print(f"⚠️ Could not parse JSON: {e}")
         
-        title = f"{sub_id} • {predicted_disease}"
+        title = f"Subject: {sub_id} | Disease Prediction: {predicted_disease}"
         create_overlay_viewer(b_img, b_data, o_data, title=title, init_alpha=float(args.overlay_alpha))
         return
 
