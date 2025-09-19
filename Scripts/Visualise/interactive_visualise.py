@@ -277,6 +277,12 @@ def create_overlay_viewer(base_img, base_data, overlay_data, title="Overlay View
                 x_idx = max(0, min(nx-1, int(event.xdata)))
                 z_idx = max(0, min(nz-1, int(event.ydata)))
                 update_views()
+        else:
+            # Mouse is outside all view boxes - reset to middle slices
+            x_idx = nx // 2
+            y_idx = ny // 2
+            z_idx = nz // 2
+            update_views()
 
     def on_key(event):
         nonlocal x_idx, y_idx, z_idx
@@ -345,22 +351,22 @@ def main():
         predicted_disease = "Unknown"
         
         # Try to find corresponding JSON file
-        base_dir = os.path.dirname(args.base)
+        overlay_dir = os.path.dirname(args.overlay)
         base_name = os.path.basename(args.base)
-        json_pattern = base_name.replace('.nii.gz', '').replace('.nii', '') + '*clinical_prediction_deep.json'
-        json_files = glob_mod.glob(os.path.join(base_dir, json_pattern))
+        # Extract subject ID from base filename for JSON lookup
+        sub_match = re.search(r'sub-([A-Za-z0-9]+)', base_name)
+        if sub_match:
+            sub_id = sub_match.group(1)
+            json_pattern = f"*{sub_id}*_clinical_prediction_deep.json"
+            json_files = glob_mod.glob(os.path.join(overlay_dir, json_pattern))
+        else:
+            json_files = []
         
         if json_files:
             try:
                 import json
                 with open(json_files[0], 'r') as f:
                     json_data = json.load(f)
-                # Extract subject ID from image path
-                if 'image' in json_data:
-                    img_path = json_data['image']
-                    sub_match = re.search(r'sub-([A-Za-z0-9]+)', img_path)
-                    if sub_match:
-                        sub_id = sub_match.group(1)
                 # Extract predicted disease
                 if 'prediction' in json_data and 'label_name' in json_data['prediction']:
                     predicted_disease = json_data['prediction']['label_name']
