@@ -547,6 +547,125 @@ def compute_saliency_volume(model, input_tensor: torch.Tensor, target_class: int
     return sal.astype(np.float32)
 
 
+def compute_smoothgrad_volume(model, input_tensor: torch.Tensor, target_class: int, n_samples: int = 40, noise_std: float = 0.1) -> np.ndarray:
+    """
+    SmoothGrad: Average gradients over noisy versions of the input.
+    Reduces noise and provides more stable saliency maps.
+    """
+    model.eval()
+    saliency_maps = []
+    
+    # Get in-mask intensity std for noise scaling
+    mask = (input_tensor != 0).float()
+    if mask.sum() > 0:
+        in_mask_std = input_tensor[mask > 0].std().item()
+        noise_scale = noise_std * in_mask_std
+    else:
+        noise_scale = noise_std * input_tensor.std().item()
+    
+    for _ in range(n_samples):
+        # Add noise to input
+        noise = torch.randn_like(input_tensor) * noise_scale
+        noisy_input = input_tensor + noise
+        noisy_input = noisy_input.requires_grad_(True)
+        
+        model.zero_grad()
+        out = model(noisy_input)
+        logits = out[0] if isinstance(out, tuple) else out
+        score = F.softmax(logits, dim=1)[0, target_class]
+        score.backward()
+        
+        grad = noisy_input.grad.detach().squeeze(0).squeeze(0).cpu().numpy()
+        saliency_maps.append(np.abs(grad))
+    
+    # Average over all samples
+    smooth_sal = np.mean(saliency_maps, axis=0)
+    return smooth_sal.astype(np.float32)
+
+
+def compute_integrated_gradients_volume(model, input_tensor: torch.Tensor, target_class: int, n_steps: int = 64, baseline_type: str = 'zeros') -> np.ndarray:
+    """
+    Integrated Gradients: Integrate gradients along path from baseline to input.
+    Provides more faithful attributions than vanilla gradients.
+    """
+    model.eval()
+    
+    # Create baseline (zeros or mean)
+    if baseline_type == 'zeros':
+        baseline = torch.zeros_like(input_tensor)
+    elif baseline_type == 'mean':
+        mask = (input_tensor != 0).float()
+        if mask.sum() > 0:
+            mean_val = input_tensor[mask > 0].mean()
+            baseline = torch.zeros_like(input_tensor)
+            baseline[mask > 0] = mean_val
+        else:
+            baseline = torch.zeros_like(input_tensor)
+    else:
+        baseline = torch.zeros_like(input_tensor)
+    
+    # Generate interpolated inputs
+    alphas = torch.linspace(0, 1, n_steps + 1, device=input_tensor.device)
+    integrated_grads = torch.zeros_like(input_tensor)
+    
+    for alpha in alphas[1:]:  # Skip alpha=0
+        interpolated = baseline + alpha * (input_tensor - baseline)
+        interpolated = interpolated.requires_grad_(True)
+        
+        model.zero_grad()
+        out = model(interpolated)
+        logits = out[0] if isinstance(out, tuple) else out
+        score = F.softmax(logits, dim=1)[0, target_class]
+        score.backward()
+        
+        grad = interpolated.grad.detach()
+        integrated_grads += grad / n_steps
+    
+    # Multiply by input difference
+    integrated_grads *= (input_tensor - baseline)
+    ig_sal = integrated_grads.squeeze(0).squeeze(0).cpu().numpy()
+    return np.abs(ig_sal).astype(np.float32)
+
+
+def compute_fused_saliency_volume(model, input_tensor: torch.Tensor, target_class: int, 
+                                 sg_samples: int = 40, ig_steps: int = 64, 
+                                 noise_std: float = 0.1, baseline_type: str = 'zeros') -> np.ndarray:
+    """
+    Fused SmoothGrad + Integrated Gradients using geometric mean.
+    Combines benefits of both methods for more robust saliency.
+    """
+    # Compute both methods
+    sg_sal = compute_smoothgrad_volume(model, input_tensor, target_class, sg_samples, noise_std)
+    ig_sal = compute_integrated_gradients_volume(model, input_tensor, target_class, ig_steps, baseline_type)
+    
+    # Z-score normalize within brain mask
+    mask = (input_tensor.squeeze(0).squeeze(0).cpu().numpy() != 0)
+    
+    def zscore_within_mask(arr, mask):
+        if mask.sum() == 0:
+            return arr
+        masked_vals = arr[mask]
+        mean_val = masked_vals.mean()
+        std_val = masked_vals.std()
+        if std_val < 1e-8:
+            return arr
+        zscored = (arr - mean_val) / std_val
+        return zscored
+    
+    sg_norm = zscore_within_mask(sg_sal, mask)
+    ig_norm = zscore_within_mask(ig_sal, mask)
+    
+    # Clamp negatives to 0 and take geometric mean
+    sg_pos = np.maximum(sg_norm, 0)
+    ig_pos = np.maximum(ig_norm, 0)
+    
+    # Geometric mean (avoid zeros)
+    eps = 1e-8
+    fused = np.sqrt((sg_pos + eps) * (ig_pos + eps))
+    
+    return fused.astype(np.float32)
+
+
 def compute_occlusion_volume(model, input_tensor: torch.Tensor, target_class: int, ksize: int = 16, stride: Optional[int] = None, baseline: float = 0.0) -> np.ndarray:
     stride = stride or ksize
     model.eval()
@@ -704,7 +823,12 @@ def main():
     parser.add_argument('--cam-layer', type=str, default='prepool', choices=['last', 'prepool', 'mid'], help='Which conv layer to use for Grad-CAM (Simple3DCNN)')
     # Interpretability selection
     parser.add_argument('--run-all', action='store_true', help='Run all interpretability maps (default if neither --run nor --run-all provided)')
-    parser.add_argument('--run', nargs='+', choices=['gradcam', 'gradcam_plusplus', 'saliency', 'occlusion', 'gradientshap'], help='One or more interpretability methods to run, e.g. --run gradcam gradcam_plusplus saliency')
+    parser.add_argument('--run', nargs='+', choices=['gradcam', 'gradcam_plusplus', 'saliency', 'smoothgrad', 'integrated_gradients', 'fused_saliency', 'occlusion', 'gradientshap'], help='One or more interpretability methods to run, e.g. --run gradcam smoothgrad fused_saliency')
+    # Advanced saliency parameters
+    parser.add_argument('--sg-samples', type=int, default=40, help='SmoothGrad samples (40=fast, 80=HQ)')
+    parser.add_argument('--sg-noise-std', type=float, default=0.1, help='SmoothGrad noise std (fraction of in-mask intensity std)')
+    parser.add_argument('--ig-steps', type=int, default=64, help='Integrated Gradients steps (64=fast, 128=HQ)')
+    parser.add_argument('--ig-baseline', type=str, default='zeros', choices=['zeros', 'mean'], help='Integrated Gradients baseline type')
 
     args = parser.parse_args()
 
@@ -944,6 +1068,115 @@ def main():
             print(msg)
             interpret_errors['saliency'].append(msg)
             sal_path = None
+
+    # SmoothGrad
+    if 'smoothgrad' in run_set:
+        try:
+            if not is_ensemble:
+                sg_sal = compute_smoothgrad_volume(models[0], input_tensor, pred_idx, 
+                                                 n_samples=int(args.sg_samples), 
+                                                 noise_std=float(args.sg_noise_std))
+            else:
+                sg_accum = None
+                for m in models:
+                    sg_i = compute_smoothgrad_volume(m, input_tensor, pred_idx, 
+                                                   n_samples=int(args.sg_samples), 
+                                                   noise_std=float(args.sg_noise_std))
+                    sg_accum = sg_i if sg_accum is None else (sg_accum + sg_i)
+                sg_sal = sg_accum / float(len(models))
+            sg_resized = resize_volume_to_shape(sg_sal, vol_np.shape)
+            sg_resized = robust_normalize_within_mask(sg_resized, brain_mask_orig)
+            sg_path = out_dir / f"{sid}_smoothgrad.nii.gz"
+            save_nifti(sg_resized, affine, header, sg_path)
+            if args.save_overlay_pngs:
+                try:
+                    save_overlay_pngs(
+                        vol_np,
+                        sg_resized,
+                        out_dir / f"{sid}_smoothgrad_overlay.png",
+                        title=f"{sid} • SmoothGrad • Pred={pred_name}",
+                        mask=brain_mask_orig
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            msg = f"SmoothGrad failed: {e}"
+            print(msg)
+            interpret_errors['saliency'].append(msg)
+
+    # Integrated Gradients
+    if 'integrated_gradients' in run_set:
+        try:
+            if not is_ensemble:
+                ig_sal = compute_integrated_gradients_volume(models[0], input_tensor, pred_idx, 
+                                                           n_steps=int(args.ig_steps), 
+                                                           baseline_type=args.ig_baseline)
+            else:
+                ig_accum = None
+                for m in models:
+                    ig_i = compute_integrated_gradients_volume(m, input_tensor, pred_idx, 
+                                                             n_steps=int(args.ig_steps), 
+                                                             baseline_type=args.ig_baseline)
+                    ig_accum = ig_i if ig_accum is None else (ig_accum + ig_i)
+                ig_sal = ig_accum / float(len(models))
+            ig_resized = resize_volume_to_shape(ig_sal, vol_np.shape)
+            ig_resized = robust_normalize_within_mask(ig_resized, brain_mask_orig)
+            ig_path = out_dir / f"{sid}_integrated_gradients.nii.gz"
+            save_nifti(ig_resized, affine, header, ig_path)
+            if args.save_overlay_pngs:
+                try:
+                    save_overlay_pngs(
+                        vol_np,
+                        ig_resized,
+                        out_dir / f"{sid}_integrated_gradients_overlay.png",
+                        title=f"{sid} • Integrated Gradients • Pred={pred_name}",
+                        mask=brain_mask_orig
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            msg = f"Integrated Gradients failed: {e}"
+            print(msg)
+            interpret_errors['saliency'].append(msg)
+
+    # Fused Saliency (SmoothGrad + Integrated Gradients)
+    if 'fused_saliency' in run_set:
+        try:
+            if not is_ensemble:
+                fused_sal = compute_fused_saliency_volume(models[0], input_tensor, pred_idx, 
+                                                        sg_samples=int(args.sg_samples), 
+                                                        ig_steps=int(args.ig_steps),
+                                                        noise_std=float(args.sg_noise_std), 
+                                                        baseline_type=args.ig_baseline)
+            else:
+                fused_accum = None
+                for m in models:
+                    fused_i = compute_fused_saliency_volume(m, input_tensor, pred_idx, 
+                                                          sg_samples=int(args.sg_samples), 
+                                                          ig_steps=int(args.ig_steps),
+                                                          noise_std=float(args.sg_noise_std), 
+                                                          baseline_type=args.ig_baseline)
+                    fused_accum = fused_i if fused_accum is None else (fused_accum + fused_i)
+                fused_sal = fused_accum / float(len(models))
+            fused_resized = resize_volume_to_shape(fused_sal, vol_np.shape)
+            fused_resized = robust_normalize_within_mask(fused_resized, brain_mask_orig)
+            fused_path = out_dir / f"{sid}_fused_saliency.nii.gz"
+            save_nifti(fused_resized, affine, header, fused_path)
+            if args.save_overlay_pngs:
+                try:
+                    save_overlay_pngs(
+                        vol_np,
+                        fused_resized,
+                        out_dir / f"{sid}_fused_saliency_overlay.png",
+                        title=f"{sid} • Fused Saliency • Pred={pred_name}",
+                        mask=brain_mask_orig
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            msg = f"Fused Saliency failed: {e}"
+            print(msg)
+            interpret_errors['saliency'].append(msg)
 
     # Occlusion sensitivity
     if 'occlusion' in run_set:

@@ -326,24 +326,24 @@ def main():
     # Overlay mode takes precedence if both paths provided
     if args.base and args.overlay:
         if not os.path.exists(args.base):
-            print(f"❌ Base file not found: {args.base}")
+            print(f"Base file not found: {args.base}")
             return
         if not os.path.exists(args.overlay):
-            print(f"❌ Overlay file not found: {args.overlay}")
+            print(f"Overlay file not found: {args.overlay}")
             return
         try:
             b_img = nib.load(args.base); b_data = b_img.get_fdata().astype(np.float32)
             o_img = nib.load(args.overlay); o_data = o_img.get_fdata().astype(np.float32)
         except Exception as e:
-            print(f"❌ Failed to load NIfTI: {e}")
+            print(f"Failed to load NIfTI: {e}")
             return
         if b_data.ndim != 3:
-            print("❌ Base volume must be 3D")
+            print("Base volume must be 3D")
             return
         if o_data.ndim == 4:
             o_data = o_data.mean(axis=-1)
         if o_data.ndim != 3:
-            print("❌ Overlay must be 3D or 4D")
+            print("Overlay must be 3D or 4D")
             return
         
         # Extract subject ID and predicted disease from JSON if available
@@ -377,7 +377,7 @@ def main():
                     }
                     predicted_disease = disease_mapping.get(disease_code, disease_code)
             except Exception as e:
-                print(f"⚠️ Could not parse JSON: {e}")
+                print(f"Could not parse JSON: {e}")
         
         title = f"Subject: {sub_id} | Disease Prediction: {predicted_disease}"
         create_overlay_viewer(b_img, b_data, o_data, title=title, init_alpha=float(args.overlay_alpha))
@@ -386,7 +386,7 @@ def main():
     if args.file:
         # Load specific file
         if not os.path.exists(args.file):
-            print(f"❌ File not found: {args.file}")
+            print(f"File not found: {args.file}")
             return
         
         img, data = load_spect_image(args.file)
@@ -399,7 +399,7 @@ def main():
     available_data = find_spect_data()
     
     if not available_data:
-        print("❌ No SPECT data found in /Users/jacksonschofield/Desktop/SPECT/")
+        print("No SPECT data found in /Users/jacksonschofield/Desktop/SPECT/")
         print("Please ensure you have run the preprocessing pipeline first.")
         return
     
@@ -415,12 +415,12 @@ def main():
         available_data = [d for d in available_data if d['step'] == args.step]
     
     if not available_data:
-        print(f"❌ No data found matching diagnosis={args.diagnosis}, step={args.step}")
+        print(f"No data found matching diagnosis={args.diagnosis}, step={args.step}")
         return
     
     # Select data to visualize
     selected_data = available_data[0]  # Use first available
-    print(f"\n🎯 Using: {selected_data['diagnosis']} - {selected_data['step']}")
+    print(f"\nUsing: {selected_data['diagnosis']} - {selected_data['step']}")
     
     # Find a subject with valid data
     valid_subject = None
