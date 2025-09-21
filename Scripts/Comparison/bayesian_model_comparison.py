@@ -435,13 +435,14 @@ class BayesianModelComparison:
             return {}
         
         try:
-            # Mixed-effects logistic: model effect + site & subject random intercepts
-            print("Creating Bambi model...")
-            bm = bmb.Model(
-                "correct ~ 0 + model + (1|site) + (1|subject_id)",
-                data=df_skill,
-                family="bernoulli",
-            )
+        # Mixed-effects logistic: start simpler to reduce divergences
+        # First try without subject random effects; these are very high-dimensional
+        print("Creating Bambi model (simplified: random intercept by site only)...")
+        bm = bmb.Model(
+            "correct ~ 0 + model + (1|site)",
+            data=df_skill,
+            family="bernoulli",
+        )
             print("Bambi model created successfully")
         except Exception as e:
             print(f"Error creating Bambi model: {e}")
@@ -449,8 +450,8 @@ class BayesianModelComparison:
         
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            # Use include_sample=True to include log likelihood
-            idata = bm.fit(target_accept=0.95, random_seed=self.random_seed, draws=1000, tune=1000, include_sample=True)
+            # Use include_sample=True to include log likelihood; bump target_accept to reduce divergences
+            idata = bm.fit(target_accept=0.98, random_seed=self.random_seed, draws=1000, tune=1500, include_sample=True)
         
         # PSIS-LOO 
         try:
@@ -458,18 +459,18 @@ class BayesianModelComparison:
             loo = az.loo(idata)
             print("✅ LOO computation successful!")
         except Exception as e:
-            print(f"Warning: Could not compute LOO: {e}")
-            # Try alternative approach - compute WAIC instead
-            try:
-                waic = az.waic(idata)
-                print(f"✅ WAIC computation successful: {waic}")
-                loo = waic  # Use WAIC as alternative
-            except Exception as e2:
-                print(f"Warning: Could not compute WAIC either: {e2}")
-                loo = None
+            print(f"Info: Skipping LOO/WAIC (log likelihood unavailable for this model): {e}")
+            loo = None
         
         # Extract fixed effects (model coefficients)
-        model_effects = idata.posterior["model"].values.reshape(-1, -1)
+        try:
+            coef_da = idata.posterior["model"]  # xarray DataArray with dims (chain, draw, model)
+            coef_vals = coef_da.values
+            # Flatten chains and draws into samples: (chains*draws, n_coefs)
+            model_effects = coef_vals.reshape((-1, coef_vals.shape[-1]))
+        except Exception as e:
+            print(f"Warning: Could not extract model effects cleanly: {e}")
+            model_effects = np.empty((0,))
         
         results = {
             'idata': idata,
@@ -591,9 +592,12 @@ class BayesianModelComparison:
         # 3. AUC comparison plots (skipped for now)
         
         # 4. Model comparison heatmaps
-        if results.accuracy_results:
+        if results.accuracy_results and isinstance(results.accuracy_results.get('model_comparisons'), pd.DataFrame):
             try:
-                self._plot_model_comparison_heatmap(results.accuracy_results)
+                if not results.accuracy_results['model_comparisons'].empty:
+                    self._plot_model_comparison_heatmap(results.accuracy_results)
+                else:
+                    print("Info: Model comparison dataframe is empty; skipping heatmap")
             except Exception as e:
                 print(f"Warning: Could not create comparison heatmap: {e}")
     
@@ -608,7 +612,8 @@ class BayesianModelComparison:
         print(f"Models: {results.get('models', 'Not found')}")
         print(f"Accuracy means shape: {results.get('accuracy_means', 'Not found')}")
         
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+        ax1, ax2 = axes[0], axes[1]
         
         # Accuracy forest plot
         models = results['models']
@@ -619,8 +624,12 @@ class BayesianModelComparison:
         print(f"Plotting {len(models)} models with means: {means}")
         
         y_pos = np.arange(len(models))
-        ax1.errorbar(means, y_pos, xerr=[means - ci_lower, ci_upper - means], 
-                    fmt='o', capsize=5, capthick=2)
+        try:
+            xerr = np.vstack([means - ci_lower, ci_upper - means])
+        except Exception as e:
+            print(f"Warning: xerr shape issue: {e}; falling back to zeros")
+            xerr = np.zeros((2, len(models)))
+        ax1.errorbar(means, y_pos, xerr=xerr, fmt='o', capsize=5, capthick=2)
         ax1.set_yticks(y_pos)
         ax1.set_yticklabels(models)
         ax1.set_xlabel('Accuracy')
