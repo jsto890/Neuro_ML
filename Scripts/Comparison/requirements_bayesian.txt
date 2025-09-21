@@ -1,0 +1,26 @@
+# Bayesian Model Comparison Dependencies
+# Install with: pip install -r requirements_bayesian.txt
+
+# Core Bayesian libraries
+pymc>=5.0.0
+arviz>=0.15.0
+bambi>=0.12.0
+
+# Data manipulation and analysis
+numpy>=1.21.0
+pandas>=1.3.0
+scipy>=1.7.0
+
+# Visualization
+matplotlib>=3.5.0
+seaborn>=0.11.0
+
+# Machine learning metrics
+scikit-learn>=1.0.0
+
+# Optional: JAX backend for PyMC (faster sampling)
+jax>=0.3.0
+jaxlib>=0.3.0
+
+# Optional: Additional statistical libraries
+statsmodels>=0.13.0
