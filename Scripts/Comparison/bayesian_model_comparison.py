@@ -342,13 +342,16 @@ class BayesianModelComparison:
         if df_accuracy.empty:
             return {}
         
-        models = df_accuracy["model"].unique()
-        sites = df_accuracy["site"].unique()
+        # Enforce consistent ordering across the pipeline
+        models = np.array(sorted(df_accuracy["model"].unique().tolist()))
+        sites = np.array(sorted(df_accuracy["site"].unique().tolist()))
         M, S = len(models), len(sites)
         
         # Create indices
-        model_idx = df_accuracy["model"].astype("category").cat.codes.values
-        site_idx = df_accuracy["site"].astype("category").cat.codes.values
+        model_cat = pd.Categorical(df_accuracy["model"], categories=models, ordered=True)
+        site_cat = pd.Categorical(df_accuracy["site"], categories=sites, ordered=True)
+        model_idx = model_cat.codes
+        site_idx = site_cat.codes
         k = df_accuracy["k"].values
         n = df_accuracy["n"].values
         
@@ -433,7 +436,9 @@ class BayesianModelComparison:
         print(f"Missing values:\n{df_skill.isnull().sum()}")
         
         # Check data types and values
-        print(f"Model column unique values: {df_skill['model'].unique()}")
+        # Enforce consistent ordering
+        ordered_models = np.array(sorted(df_skill['model'].unique().tolist()))
+        print(f"Model column unique values: {ordered_models}")
         print(f"Site column unique values: {df_skill['site'].unique()}")
         print(f"Correct column unique values: {df_skill['correct'].unique()}")
         print(f"Subject_id column sample: {df_skill['subject_id'].head().tolist()}")
@@ -447,6 +452,10 @@ class BayesianModelComparison:
             # Mixed-effects logistic: start simpler to reduce divergences
             # First try without subject random effects; these are very high-dimensional
             print("Creating Bambi model (simplified: random intercept by site only)...")
+            # Use ordered categorical to ensure stable design matrix
+            df_skill = df_skill.copy()
+            df_skill['model'] = pd.Categorical(df_skill['model'], categories=ordered_models, ordered=True)
+            df_skill['site'] = pd.Categorical(df_skill['site'], categories=sorted(df_skill['site'].unique().tolist()), ordered=True)
             bm = bmb.Model(
                 "correct ~ 0 + model + (1|site)",
                 data=df_skill,
@@ -460,7 +469,15 @@ class BayesianModelComparison:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             # Use include_sample=True to include log likelihood; bump target_accept to reduce divergences
-            idata = bm.fit(target_accept=0.98, random_seed=self.random_seed, draws=1000, tune=1500, include_sample=True)
+            idata = bm.fit(
+                target_accept=0.995,
+                random_seed=self.random_seed,
+                draws=1500,
+                tune=2500,
+                chains=4,
+                cores=4,
+                include_sample=True,
+            )
         
         # PSIS-LOO 
         try:
@@ -554,14 +571,16 @@ class BayesianModelComparison:
             model_predictions[data.model]['labels'].extend(data.labels)
         
         # Convert to numpy arrays
-        for model in model_predictions:
+        # Convert to numpy arrays in a stable, sorted model order
+        models_sorted = sorted(model_predictions.keys())
+        for model in models_sorted:
             model_predictions[model]['predictions'] = np.array(model_predictions[model]['predictions'])
             model_predictions[model]['probabilities'] = np.array(model_predictions[model]['probabilities'])
             model_predictions[model]['labels'] = np.array(model_predictions[model]['labels'])
         
         # Ensemble with multiple weighting strategies
         if len(model_predictions) > 1:
-            models = list(model_predictions.keys())
+            models = models_sorted
             all_probs = np.array([model_predictions[model]['probabilities'] for model in models])
             
             # Calculate individual accuracies first
