@@ -181,7 +181,7 @@ def evaluate_model_with_temperature_scaling(model, test_loader, device, val_load
 
 def load_model(model_path, num_classes=2, device='cpu', model_name=None):
     """Load a trained model from .pth file."""
-    from Scripts.Deep_Learning.MRI.models_smri import get_3d_model
+    from models_smri import get_3d_model
     
     # Load the state dict first to determine model architecture
     state_dict = torch.load(model_path, map_location=device)
