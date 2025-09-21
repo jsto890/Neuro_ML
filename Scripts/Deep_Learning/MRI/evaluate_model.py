@@ -179,22 +179,65 @@ def evaluate_model_with_temperature_scaling(model, test_loader, device, val_load
     
     return np.array(all_predictions), np.array(all_probabilities), np.array(all_labels), temperature_info
 
-def load_model(model_path, num_classes=2, device='cpu'):
+def load_model(model_path, num_classes=2, device='cpu', model_name=None):
     """Load a trained model from .pth file."""
-    model = Simple3DCNN(num_classes=num_classes)
+    from Scripts.Deep_Learning.MRI.models_smri import get_3d_model
     
-    # Load the state dict
+    # Load the state dict first to determine model architecture
     state_dict = torch.load(model_path, map_location=device)
     
-    # Extract the actual input size from the saved classifier weight
-    classifier_weight = state_dict['classifier.0.weight']
-    actual_input_size = classifier_weight.shape[1]
+    # Try to infer model type from state dict keys
+    if model_name is None:
+        if 'classifier.0.weight' in state_dict:
+            model_name = "Simple3DCNN"
+        elif '_fc.weight' in state_dict:
+            model_name = "EfficientNetB0_3D"
+        elif 'backbone' in state_dict:
+            model_name = "ResNet18_3D"  # or ResNet50_3D, DenseNet121_3D
+        elif 'transformer' in state_dict:
+            model_name = "VisionTransformer3D"
+        elif 'swin' in str(state_dict.keys()):
+            model_name = "SwinUNETRClassifier"
+        else:
+            # Default fallback
+            model_name = "Simple3DCNN"
     
-    # Update the classifier with the correct input size
-    model.classifier[0] = nn.Linear(actual_input_size, 256)
-    model._initialized = True
+    print(f"Detected/using model type: {model_name}")
     
-    # Now load the state dict
+    # Create the appropriate model
+    if model_name == "Simple3DCNN":
+        model = Simple3DCNN(num_classes=num_classes)
+        
+        # Extract the actual input size from the saved classifier weight
+        classifier_weight = state_dict['classifier.0.weight']
+        actual_input_size = classifier_weight.shape[1]
+        
+        # Update the classifier with the correct input size
+        model.classifier[0] = nn.Linear(actual_input_size, 256)
+        model._initialized = True
+        
+    elif model_name == "EfficientNetB0_3D":
+        # For EfficientNet, create model and let it handle the architecture
+        model = get_3d_model("EfficientNetB0_3D", num_classes=num_classes, in_channels=1)
+        
+    elif model_name in ["ResNet18_3D", "ResNet50_3D", "DenseNet121_3D"]:
+        # For ResNet/DenseNet models
+        model = get_3d_model(model_name, num_classes=num_classes, in_channels=1)
+        
+    elif model_name in ["VisionTransformer3D", "SwinUNETRClassifier", "FullSwinUNETRClassifier"]:
+        # For transformer models
+        model = get_3d_model(model_name, num_classes=num_classes, in_channels=1)
+        
+    else:
+        # Fallback to Simple3DCNN
+        print(f"Unknown model {model_name}, falling back to Simple3DCNN")
+        model = Simple3DCNN(num_classes=num_classes)
+        classifier_weight = state_dict['classifier.0.weight']
+        actual_input_size = classifier_weight.shape[1]
+        model.classifier[0] = nn.Linear(actual_input_size, 256)
+        model._initialized = True
+    
+    # Load the state dict
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
@@ -670,12 +713,14 @@ def main():
                         help="Whether to apply temperature scaling for multiclass calibration")
     parser.add_argument("--val_csv", type=str,
                         help="Path to validation labels CSV file for temperature scaling (required if --use_temperature_scaling is True)")
+    parser.add_argument("--model_name", type=str, default=None,
+                        help="Model name (e.g., EfficientNetB0_3D, Simple3DCNN). If not provided, will be auto-detected.")
     
     args = parser.parse_args()
     
     # Load model
     print(f"Loading model from: {args.model_path}")
-    model = load_model(args.model_path, args.num_classes, args.device)
+    model = load_model(args.model_path, args.num_classes, args.device, args.model_name)
     
     # Create test dataset
     print(f"Loading test data from: {args.test_csv}")
