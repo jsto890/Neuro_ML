@@ -736,7 +736,8 @@ Examples:
     
     # Save test plots
     test_eval_dir = os.path.join(run_dir, "test_evaluation_plots")
-    create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
+    create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir, 
+                           model_name=args.model, image_type="sMRI")
     
     print(f"Test evaluation completed!")
     print(f"Test AUC: {metrics['auc']:.4f}")

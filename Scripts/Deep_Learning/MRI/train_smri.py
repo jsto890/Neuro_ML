@@ -21,6 +21,82 @@ from sklearn.model_selection import train_test_split
 import contextlib
 import math
 
+def get_train_transform(args):
+    """Return a callable that applies light 3D augmentations on tensors [1, D, H, W].
+    Uses MONAI when available for spatial ops; otherwise falls back to intensity-only jitters.
+    """
+    transforms = []
+    augmentation_info = []
+
+    # Try MONAI for spatial transforms
+    try:
+        from monai.transforms import Compose, RandAffine, RandBiasField, RandGaussianNoise, RandAdjustContrast
+
+        def monai_transform(x: torch.Tensor) -> torch.Tensor:
+            # x: [1, D, H, W] -> MONAI expects [C, H, W, D]
+            x_m = x.permute(0, 2, 3, 1)
+            t = Compose([
+                RandAffine(prob=0.5, rotate_range=(
+                    math.radians(5.0), math.radians(5.0), math.radians(5.0)
+                ), scale_range=(0.05, 0.05, 0.05), mode="bilinear"),
+                RandBiasField(prob=0.3, coeff_range=(0.0, 0.3)),
+                RandAdjustContrast(prob=0.5, gamma=(0.9, 1.1)),
+                RandGaussianNoise(prob=0.3, mean=0.0, std=0.02),
+            ])
+            x_m = t(x_m)
+            x = x_m.permute(0, 3, 1, 2)
+            return x
+
+        transforms.append(monai_transform)
+        augmentation_info.append("MONAI spatial transforms (affine, bias field, contrast, noise)")
+        print(f"[AUGMENTATION] Using MONAI transforms: RandAffine, RandBiasField, RandAdjustContrast, RandGaussianNoise")
+    except Exception as e:
+        print(f"[AUGMENTATION] MONAI not available ({e}), falling back to basic transforms")
+        # Fall back to simple intensity-only transforms
+        def intensity_jitter(x: torch.Tensor) -> torch.Tensor:
+            # Brightness and contrast jitter (small)
+            b = float(torch.empty(1).uniform_(-0.05, 0.05))
+            c = float(torch.empty(1).uniform_(0.95, 1.05))
+            x = x * c + b
+            return x
+
+        def gaussian_noise(x: torch.Tensor) -> torch.Tensor:
+            std = 0.02
+            noise = torch.randn_like(x) * std
+            return x + noise
+
+        transforms.extend([intensity_jitter, gaussian_noise])
+        augmentation_info.extend(["Intensity jitter (±5% brightness, ±5% contrast)", "Gaussian noise (σ=0.02)"])
+        print(f"[AUGMENTATION] Using basic transforms: intensity jitter, Gaussian noise")
+
+    # Track augmentation statistics
+    augmentation_stats = {
+        'applied_count': 0,
+        'total_count': 0,
+        'mean_diff': 0.0,
+        'std_diff': 0.0
+    }
+
+    def apply_all(x: torch.Tensor) -> torch.Tensor:
+        original_x = x.clone()
+        augmentation_stats['total_count'] += 1
+        
+        for t in transforms:
+            x = t(x)
+        
+        # Track augmentation effect
+        diff = torch.abs(x - original_x).mean().item()
+        augmentation_stats['applied_count'] += 1
+        augmentation_stats['mean_diff'] = (augmentation_stats['mean_diff'] * (augmentation_stats['applied_count'] - 1) + diff) / augmentation_stats['applied_count']
+        
+        return x
+
+    # Add info method to the transform function
+    apply_all.augmentation_info = augmentation_info
+    apply_all.augmentation_stats = augmentation_stats
+    
+    return apply_all
+
 from dataset import SMRIDataset
 from models_smri import Simple3DCNN, get_3d_model
 from evaluate_model import evaluate_model, calculate_metrics, create_evaluation_plots
@@ -1178,11 +1254,20 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
               f"Val AUC={val_auc:.4f}, Val acc={val_acc:.4f}  "
               f"LR={new_lr:.6f}{lr_change}")
 
+        # Log augmentation statistics every 10 epochs
+        if epoch % 10 == 0 and hasattr(train_loader.dataset, 'transform') and train_loader.dataset.transform is not None:
+            stats = train_loader.dataset.transform.augmentation_stats
+            if stats['total_count'] > 0:
+                print(f"  [AUGMENTATION] Applied to {stats['applied_count']}/{stats['total_count']} samples, "
+                      f"mean intensity change: {stats['mean_diff']:.6f}")
+
         # Checkpoint if this is the best AUC so far
         if val_auc > best_val_auc:
             best_val_auc = val_auc
             best_val_acc = val_acc
-            best_state = model.state_dict().copy()
+            # Deep copy state dict to avoid mutation by future training steps
+            import copy
+            best_state = copy.deepcopy(model.state_dict())
             os.makedirs(checkpoint_dir, exist_ok=True)
             
             # Save model with fold-specific filename
@@ -1239,17 +1324,28 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
             print(f"\n[LEGACY] Early stopping triggered after {epoch} epochs (no improvement in AUC)")
             break
 
-    # Load best model weights before returning
-    if best_state is not None:
+    # Load best model weights before returning (prefer saved checkpoint to avoid accidental mutation)
+    if fold_num is not None:
+        best_model_path = os.path.join(checkpoint_dir, f"best_smri_model_fold_{fold_num}.pth")
+    else:
+        best_model_path = os.path.join(checkpoint_dir, "best_smri_model.pth")
+    if os.path.exists(best_model_path):
+        state_dict = torch.load(best_model_path, map_location=device)
+        model.load_state_dict(state_dict)
+    elif best_state is not None:
         model.load_state_dict(best_state)
     
     # Print training summary
-    if early_stopping_count >= early_stopping_patience:
+    legacy_early_stopped = (no_improvement_count >= 20)
+    if early_stopping_count >= early_stopping_patience or legacy_early_stopped:
         print(f"\n{'='*60}")
         print(f"TRAINING COMPLETED WITH EARLY STOPPING")
         print(f"{'='*60}")
         print(f"Final epoch: {epoch}/{epochs}")
-        print(f"Early stopping triggered: {early_stopping_monitor} did not improve for {early_stopping_patience} epochs")
+        if legacy_early_stopped:
+            print(f"[LEGACY] Early stopping triggered (no improvement in AUC for 20 epochs)")
+        else:
+            print(f"Early stopping triggered: {early_stopping_monitor} did not improve for {early_stopping_patience} epochs")
         print(f"Best {early_stopping_monitor}: {best_monitored_metric:.6f}")
         print(f"Best validation AUC: {best_val_auc:.6f}")
         print(f"Best validation accuracy: {best_val_acc:.6f}")
@@ -1534,7 +1630,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             temp_files_this_run.extend([temp_train_csv, temp_val_csv, temp_test_csv])
 
             # Datasets and loaders
-            train_dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root)
+            train_transform = get_train_transform(args) if getattr(args, 'enable_augment', False) else None
+            train_dataset = SMRIDataset(csv_path=temp_train_csv, data_root=args.data_root, transform=train_transform)
             val_dataset = SMRIDataset(csv_path=temp_val_csv, data_root=args.data_root)
             test_dataset = SMRIDataset(csv_path=temp_test_csv, data_root=args.data_root)
             
@@ -1664,7 +1761,15 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             
             metrics = calculate_metrics(predictions, probabilities, labels)
             test_eval_dir = os.path.join(model_dir, f"test_evaluation_plots_fold_{fold_idx}")
-            create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir)
+            
+            # Save predictions and probabilities for later regeneration
+            os.makedirs(test_eval_dir, exist_ok=True)
+            np.save(os.path.join(test_eval_dir, 'predictions.npy'), predictions)
+            np.save(os.path.join(test_eval_dir, 'probabilities.npy'), probabilities)
+            np.save(os.path.join(test_eval_dir, 'labels.npy'), labels)
+            
+            create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir, 
+                                   model_name=model_name, image_type="sMRI")
             test_metrics_path = os.path.join(model_dir, f"test_metrics_fold_{fold_idx}.json")
             with open(test_metrics_path, 'w') as f:
                 json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
@@ -2387,6 +2492,8 @@ def main():
                         help="Use cosine learning rate schedule for Vision Transformer models")
     parser.add_argument("--label_smoothing", type=float, default=0.1,
                         help="Label smoothing factor (0.1 recommended for ViT)")
+    parser.add_argument("--enable_augment", action='store_true', default=False,
+                        help="Enable light 3D augmentations on training data")
     parser.add_argument("--vit_optimizer", type=str, default="adamw", choices=["adamw", "adam"],
                         help="Optimizer for Vision Transformer models")
     parser.add_argument("--vit_weight_decay", type=float, default=0.05,

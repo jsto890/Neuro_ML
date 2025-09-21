@@ -1,0 +1,117 @@
+# Configuration for Transformer-based 3D Medical Image Classification Models
+
+# Vision Transformer 3D Configuration (Large)
+vision_transformer_3d:
+  img_size: [97, 115, 97]  # Input volume size (actual image dimensions)
+  patch_size: 16           # Patch size for embedding
+  in_channels: 1           # Single channel for PET
+  num_classes: 2           # Binary classification (AD vs CN)
+  embed_dim: 1024          # Embedding dimension (Large)
+  depth: 16                # Number of transformer blocks (Large)
+  num_heads: 16            # Number of attention heads (Large)
+  mlp_ratio: 4.0           # MLP expansion ratio
+  qkv_bias: true           # Use bias in QKV projection
+  drop_rate: 0.1           # Dropout rate
+  attn_drop_rate: 0.0      # Attention dropout rate
+  drop_path_rate: 0.1      # Stochastic depth rate
+
+# Swin UNETR Configuration (Medium)
+swin_unetr_classifier:
+  in_channels: 1           # Single channel for PET
+  num_classes: 2           # Binary classification
+  feature_size: 48         # Feature size for Swin Transformer (Medium)
+  drop_rate: 0.1           # Dropout rate
+  attn_drop_rate: 0.0      # Attention dropout rate
+  dropout_path_rate: 0.1   # Stochastic depth rate
+  use_checkpoint: false    # Use gradient checkpointing for memory efficiency
+  spatial_dims: 3          # 3D spatial dimensions
+
+# Full Swin UNETR Configuration (Small - for memory efficiency)
+full_swin_unetr_classifier:
+  in_channels: 1           # Single channel for PET
+  num_classes: 2           # Binary classification
+  feature_size: 24         # Feature size for Swin Transformer (Small - for memory efficiency)
+  drop_rate: 0.1           # Dropout rate
+  attn_drop_rate: 0.0      # Attention dropout rate
+  dropout_path_rate: 0.1   # Stochastic depth rate
+  use_checkpoint: false    # Use gradient checkpointing for memory efficiency
+  spatial_dims: 3          # 3D spatial dimensions
+  # Note: Input will be automatically resized to [96, 128, 96] to meet Swin UNETR requirements
+
+# Training Configuration for Transformer Models
+training:
+  # Learning rate schedules
+  learning_rate: 1e-4     # Initial learning rate
+  weight_decay: 1e-5      # Weight decay
+  warmup_epochs: 5        # Warmup epochs for transformer models
+  cosine_schedule: true   # Use cosine learning rate schedule
+  
+  # Optimizer settings
+  optimizer: "adamw"      # Use AdamW for transformers
+  betas: [0.9, 0.999]    # AdamW betas
+  eps: 1e-8              # AdamW epsilon
+  
+  # Data augmentation (specific to transformers)
+  augmentation:
+    random_rotation: 10   # Random rotation in degrees
+    random_flip: true     # Random flip
+    random_crop: true     # Random crop
+    color_jitter: false   # No color jitter for PET
+    mixup: 0.1           # Mixup alpha
+  
+  # Regularization
+  label_smoothing: 0.1    # Label smoothing for transformers
+  mixup_alpha: 0.2       # Mixup alpha
+  
+  # Memory optimization
+  gradient_accumulation_steps: 1  # Reduced for RTX 6000 (24GB VRAM)
+  mixed_precision: true   # Use mixed precision training
+
+# Model-specific hyperparameters
+model_variants:
+  # Small Vision Transformer
+  vit_small:
+    embed_dim: 384
+    depth: 6
+    num_heads: 6
+    mlp_ratio: 4.0
+  
+  # Medium Vision Transformer
+  vit_medium:
+    embed_dim: 512
+    depth: 8
+    num_heads: 8
+    mlp_ratio: 4.0
+  
+  # Large Vision Transformer
+  vit_large:
+    embed_dim: 768
+    depth: 12
+    num_heads: 12
+    mlp_ratio: 4.0
+  
+  # Swin UNETR variants
+  swin_unetr_small:
+    feature_size: 24
+    drop_rate: 0.1
+  
+  swin_unetr_medium:
+    feature_size: 48
+    drop_rate: 0.1
+  
+  swin_unetr_large:
+    feature_size: 96
+    drop_rate: 0.1
+
+# Evaluation settings
+evaluation:
+  batch_size: 4          # Larger batch size for RTX 6000 (24GB VRAM)
+  num_workers: 16        # More workers for 128-thread CPU
+  mixed_precision: true  # Use mixed precision for evaluation
+  
+# Hardware requirements
+hardware:
+  min_gpu_memory: 8      # Minimum GPU memory in GB
+  recommended_gpu_memory: 24  # Recommended GPU memory in GB (RTX 6000)
+  cpu_cores: 64          # Recommended CPU cores (Threadripper 3990X)
+  ram: 64                # Recommended RAM in GB 

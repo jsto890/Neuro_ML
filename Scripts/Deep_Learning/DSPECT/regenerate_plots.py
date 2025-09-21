@@ -9,7 +9,7 @@ import seaborn as sns
 
 # Reuse plotting helpers from training script
 try:
-    from train_pet import create_training_plots, create_test_summary_plots, get_label_description
+    from train_spect import create_training_plots, create_test_summary_plots, get_label_description
 except Exception:
     # Fallback: minimal stubs to avoid import failure; will exit if not available
     create_training_plots = None
@@ -133,7 +133,7 @@ def main():
 
     # Import checks
     if create_training_plots is None or create_test_summary_plots is None:
-        raise RuntimeError("Could not import plotting helpers from train_smri.py. Please run from the same environment/repo.")
+        raise RuntimeError("Could not import plotting helpers from train_spect.py. Please run from the same environment/repo.")
 
     # Prepare output dir
     evaluation_dir = os.path.join(model_dir, "evaluation_plots")
@@ -193,7 +193,7 @@ def main():
                 metrics=pseudo_metrics if 'pseudo_metrics' in locals() else fold_test_metrics[0]['metrics'],
                 output_dir=evaluation_dir,
                 model_name=model_name,
-                image_type="PET"
+                image_type="SPECT"
             )
             print(f"[INFO] Generated new box plot format evaluation plots")
         else:
@@ -255,5 +255,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

@@ -21,8 +21,23 @@ from sklearn.model_selection import train_test_split
 import contextlib
 import math
 
-from dataset import PETDataset
-from models_pet import Simple3DCNN, get_3d_model
+from dataset import SPECTDataset
+from models_spect import Simple3DCNN, get_3d_model
+
+# Optional: MONAI transforms (only if installed)
+try:
+    from monai.transforms import (
+        Compose,
+        RandFlipd,
+        RandRotate90d,
+        RandGaussianNoised,
+        RandAffined,
+        RandZoomd,
+        RandShiftIntensityd,
+    )
+    MONAI_AVAILABLE = True
+except Exception:
+    MONAI_AVAILABLE = False
 from evaluate_model import evaluate_model, calculate_metrics, create_evaluation_plots
 
 # Set style for plots
@@ -292,7 +307,7 @@ def balance_and_split_dataset_90_10(df, test_ratio=0.1, random_state=None):
 
 def get_label_description(labels):
     """Convert numeric labels to descriptive names."""
-    label_map = {0: 'CN', 1: 'AD', 2: 'PD'}
+    label_map = {0: 'CN', 1: 'PD'}
     return ' vs '.join([label_map[label] for label in sorted(labels)])
 
 def log_metrics(run_id, model_name, args, best_val_auc, best_val_acc, final_train_loss, final_train_acc, notes=""):
@@ -347,7 +362,7 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_
     
     # Create comprehensive plot with more subplots
     fig, axes = plt.subplots(3, 3, figsize=(20, 16))
-    fig.suptitle(f'Deep Learning Training Results - {model_name} - AD vs CN Classification', fontsize=16, fontweight='bold')
+    fig.suptitle(f'Deep Learning Training Results - {model_name} - CN vs PD Classification', fontsize=16, fontweight='bold')
     
     # 1. Training Loss
     ax1 = axes[0, 0]
@@ -500,7 +515,7 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_
     if cm_count > 0:
         avg_cm /= cm_count
         sns.heatmap(avg_cm, annot=True, fmt='.1f', cmap='Blues', 
-                   xticklabels=['CN', 'AD'], yticklabels=['CN', 'AD'],
+                   xticklabels=['CN', 'PD'], yticklabels=['CN', 'PD'],
                    ax=ax8)
         ax8.set_title(f'{model_name} - Average Confusion Matrix')
         ax8.set_xlabel('Predicted')
@@ -684,9 +699,9 @@ def create_test_summary_plots(fold_test_metrics, output_dir="./deep_learning_plo
         # Determine labels based on confusion matrix shape
         n_classes = avg_cm.shape[0]
         if n_classes == 2:
-            class_labels = ['CN', 'AD']
+            class_labels = ['CN', 'PD']
         elif n_classes == 3:
-            class_labels = ['CN', 'AD', 'PD']
+            class_labels = ['CN', 'PD']
         else:
             class_labels = [f'Class {i}' for i in range(n_classes)]
         
@@ -856,20 +871,32 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
             criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=args.label_smoothing)
             print(f"[INFO] Using CrossEntropyLoss (weighted, ls={args.label_smoothing}) for multiclass CNN")
         else:
-            # Binary CNN: Focal loss
+            # Binary CNN: Focal loss with data-driven alpha
             class FocalLoss(nn.Module):
-                def __init__(self, alpha=0.25, gamma=2.0):
+                def __init__(self, alpha: torch.Tensor | None = None, gamma: float = 2.0):
                     super().__init__()
-                    self.alpha = alpha
+                    self.register_buffer('alpha', alpha if alpha is not None else None)
                     self.gamma = gamma
 
-                def forward(self, inputs, targets):
+                def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
                     ce = nn.CrossEntropyLoss(reduction='none')(inputs, targets)
                     pt = torch.exp(-ce)
-                    loss = (self.alpha * (1 - pt) ** self.gamma * ce).mean()
+                    if self.alpha is not None:
+                        alpha_t = self.alpha.gather(0, targets)
+                    else:
+                        alpha_t = 1.0
+                    loss = (alpha_t * (1 - pt) ** self.gamma * ce).mean()
                     return loss
-            criterion = FocalLoss(alpha=0.25, gamma=2.0)
-            print(f"[INFO] Using FocalLoss for binary CNN")
+            # Optionally scale minority alpha to push recall
+            focal_alpha = class_weights.clone()
+            if getattr(args, 'focal_alpha_scale', 1.0) != 1.0:
+                # Identify minority class id
+                minority_id = int(np.argmin(class_counts))
+                focal_alpha[minority_id] = focal_alpha[minority_id] * float(args.focal_alpha_scale)
+                # Re-normalize to keep magnitudes reasonable
+                focal_alpha = focal_alpha / focal_alpha.sum() * class_weights.sum()
+            criterion = FocalLoss(alpha=focal_alpha, gamma=float(getattr(args, 'focal_gamma', 2.0)))
+            print(f"[INFO] Using FocalLoss (gamma={getattr(args, 'focal_gamma', 2.0)}, alpha scaled={getattr(args, 'focal_alpha_scale', 1.0)}) for binary CNN")
 
     model.to(device)
     best_val_auc = 0.0
@@ -1197,16 +1224,16 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
             
             # Save model with fold-specific filename
             if fold_num is not None:
-                model_filename = f"best_pet_model_fold_{fold_num}.pth"
+                model_filename = f"best_spect_model_fold_{fold_num}.pth"
             else:
-                model_filename = "best_pet_model.pth"
+                model_filename = "best_spect_model.pth"
             model_path = os.path.join(checkpoint_dir, model_filename)
             
             torch.save(best_state, model_path)
             print(f"  [Checkpoint] Saved new best model (AUC={val_auc:.4f}) -> {model_filename}")
             
             # Also save with general filename for backward compatibility
-            general_model_path = os.path.join(checkpoint_dir, "best_pet_model.pth")
+            general_model_path = os.path.join(checkpoint_dir, "best_spect_model.pth")
             torch.save(best_state, general_model_path)
             no_improvement_count = 0
             
@@ -1244,8 +1271,8 @@ def train_PET_model(model, train_loader, val_loader, epochs, device, checkpoint_
             print(f"[EARLY STOPPING] Stopping training at epoch {epoch}/{epochs}")
             break
             
-        # Legacy early stopping (keeping for backward compatibility)
-        if no_improvement_count >= 20:
+        # Legacy early stopping (optional)
+        if getattr(args, 'legacy_early_stop', False) and no_improvement_count >= 20:
             print(f"\n[LEGACY] Early stopping triggered after {epoch} epochs (no improvement in AUC)")
             break
 
@@ -1497,8 +1524,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     # Model variants to try
     if models_to_run is None:
         models_to_run = [
-            "Simple3DCNN", "ResNet18_3D", "DenseNet121_3D", "EfficientNetB0_3D",
-            "VisionTransformer3D", "SwinUNETRClassifier", "FullSwinUNETRClassifier"
+            "Simple3DCNN", "ResNet18_3D", "ResNet50_3D", "EfficientNetB0_3D"
         ]
 
     all_model_results = []
@@ -1543,10 +1569,46 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             test_df.to_csv(temp_test_csv, index=False)
             temp_files_this_run.extend([temp_train_csv, temp_val_csv, temp_test_csv])
 
+            # Build optional MONAI transforms for training
+            train_transform = None
+            if MONAI_AVAILABLE and (args.aug_flip or args.aug_rot90 or args.aug_noise or args.aug_rotate_deg > 0 or args.aug_zoom > 0 or args.aug_shift > 0):
+                tfms = []
+                # Apply spatial/intensity transforms on channel-first 3D tensor
+                # We use dict transforms with key 'img' for simple wrapping
+                if args.aug_flip:
+                    tfms.append(RandFlipd(keys=['img'], prob=0.5, spatial_axis=[0]))
+                    tfms.append(RandFlipd(keys=['img'], prob=0.5, spatial_axis=[1]))
+                    tfms.append(RandFlipd(keys=['img'], prob=0.5, spatial_axis=[2]))
+                if args.aug_rot90:
+                    tfms.append(RandRotate90d(keys=['img'], prob=0.5, max_k=3))
+                # Small-angle rotation
+                if args.aug_rotate_deg and args.aug_rotate_deg > 0:
+                    # RandAffined expects radians if using rotate_params, we pass degrees via rotate_range in radians
+                    import math
+                    r = math.radians(float(args.aug_rotate_deg))
+                    tfms.append(RandAffined(keys=['img'], prob=0.5, rotate_range=(r, r, r), mode='bilinear', padding_mode='zeros'))
+                if args.aug_zoom and args.aug_zoom > 0:
+                    m = float(args.aug_zoom)
+                    tfms.append(RandZoomd(keys=['img'], prob=0.5, min_zoom=1.0 - m, max_zoom=1.0 + m, mode='trilinear', align_corners=False))
+                if args.aug_shift and args.aug_shift > 0:
+                    tfms.append(RandShiftIntensityd(keys=['img'], offsets=float(args.aug_shift), prob=0.5))
+                if args.aug_noise:
+                    tfms.append(RandGaussianNoised(keys=['img'], prob=0.25, mean=0.0, std=float(args.aug_noise_std)))
+
+                monai_compose = Compose(tfms) if tfms else None
+
+                # Wrap to accept/return tensors directly
+                def _apply_monai(t):
+                    d = {'img': t}
+                    d = monai_compose(d)
+                    return d['img']
+
+                train_transform = _apply_monai if monai_compose is not None else None
+
             # Datasets and loaders
-            train_dataset = PETDataset(csv_path=temp_train_csv, data_root=args.data_root)
-            val_dataset = PETDataset(csv_path=temp_val_csv, data_root=args.data_root)
-            test_dataset = PETDataset(csv_path=temp_test_csv, data_root=args.data_root)
+            train_dataset = SPECTDataset(csv_path=temp_train_csv, data_root=args.data_root, transform=train_transform)
+            val_dataset = SPECTDataset(csv_path=temp_val_csv, data_root=args.data_root)
+            test_dataset = SPECTDataset(csv_path=temp_test_csv, data_root=args.data_root)
             
             # Initialize model for this fold
             unique_labels = sorted(train_dataset.df['label'].unique())
@@ -1555,27 +1617,14 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             label_mapping = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
             print(f"[INFO] Label mapping: {label_mapping}")
             
-            if model_name == "VisionTransformer3D":
-                model = get_3d_model(
-                    model_name,
-                    num_classes=num_classes,
-                    in_channels=1,
-                    base_channels=args.base_channels,
-                    use_pretrained=args.use_pretrained,
-                    dropout_p=0.0,
-                    vit_drop_rate=args.vit_drop_rate,
-                    vit_attn_drop_rate=args.vit_attn_drop_rate,
-                    vit_drop_path_rate=args.vit_drop_path_rate,
-                )
-            else:
-                model = get_3d_model(
-                    model_name,
-                    num_classes=num_classes,
-                    in_channels=1,
-                    base_channels=args.base_channels,
-                    use_pretrained=args.use_pretrained,
-                    dropout_p=(args.cnn_drop_rate if model_name == "Simple3DCNN" else 0.0),
-                )
+            model = get_3d_model(
+                model_name,
+                num_classes=num_classes,
+                in_channels=1,
+                base_channels=args.base_channels,
+                use_pretrained=args.use_pretrained,
+                dropout_p=(args.cnn_drop_rate if model_name == "Simple3DCNN" else 0.0),
+            )
             
             # Move model to device immediately after creation
             model = model.to(args.device)
@@ -1682,7 +1731,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             np.save(os.path.join(test_eval_dir, 'labels.npy'), labels)
             
             create_evaluation_plots(predictions, probabilities, labels, metrics, test_eval_dir, 
-                                   model_name=model_name, image_type="PET")
+                                   model_name=model_name, image_type="SPECT")
             test_metrics_path = os.path.join(model_dir, f"test_metrics_fold_{fold_idx}.json")
             with open(test_metrics_path, 'w') as f:
                 json.dump(metrics, f, indent=2, default=lambda x: x.tolist() if hasattr(x, 'tolist') else x)
@@ -1786,7 +1835,7 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             'run_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             'run_folder': run_folder,
             'model_name': model_name,
-            'model_filename': f"{model_name}_best_pet_model.pth",
+            'model_filename': f"{model_name}_best_spect_model.pth",
             'folds_data_filename': folds_data_filename,
             'average_val_auc': avg_val_auc,
             'average_val_acc': avg_val_acc,
@@ -2018,7 +2067,7 @@ def ensemble_evaluate_models(model_name, model_dir, test_loader, device, args, f
         fold_auc = fold_result['best_val_auc']
         fold_aucs.append(fold_auc)
         
-        model_path = os.path.join(model_dir, f"best_pet_model_fold_{fold_num}.pth")
+        model_path = os.path.join(model_dir, f"best_spect_model_fold_{fold_num}.pth")
         
         if not os.path.exists(model_path):
             print(f"Warning: Model for fold {fold_num} not found: {model_path}")
@@ -2035,20 +2084,7 @@ def ensemble_evaluate_models(model_name, model_dir, test_loader, device, args, f
             model.classifier[0] = nn.Linear(actual_input_size, 256)
             model._initialized = True
             model.load_state_dict(state_dict)
-        elif model_name == "SwinUNETRClassifier":
-            classifier_weight = state_dict['classifier.0.weight']
-            actual_input_size = classifier_weight.shape[1]
-            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained, dropout_p=0.25)
-            model.classifier[0] = nn.Linear(actual_input_size, 512)
-            model._initialized = True
-            model.load_state_dict(state_dict)
-        elif model_name == "FullSwinUNETRClassifier":
-            classifier_weight = state_dict['classifier.0.weight']
-            actual_input_size = classifier_weight.shape[1]
-            model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained, dropout_p=0.25)
-            model.classifier[0] = nn.Linear(actual_input_size, 512)
-            model._initialized = True
-            model.load_state_dict(state_dict)
+        # Drop unsupported transformer branches for DSPECT
         else:
             model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
             model.load_state_dict(state_dict)
@@ -2294,12 +2330,14 @@ def create_data_loaders_with_memory_optimization(train_dataset, val_dataset, tes
             tmp_labels.append(int(y))
         train_labels_np = np.array(tmp_labels)
     unique_train_labels = np.unique(train_labels_np)
-    use_weighted_sampler = len(unique_train_labels) > 2
+    # Use weighted sampler for binary too, unless explicitly disabled
+    use_weighted_sampler = (not getattr(args, 'disable_weighted_sampler', False)) and getattr(args, 'weighted_sampler', True)
 
     sampler = None
     if use_weighted_sampler:
         from collections import Counter
         counts = Counter(train_labels_np.tolist())
+        # Inverse-frequency sampling to oversample minority class
         sample_weights = np.array([1.0 / counts[l] for l in train_labels_np], dtype=np.float64)
         weights_tensor = torch.from_numpy(sample_weights)
         sampler = WeightedRandomSampler(weights=weights_tensor, num_samples=len(train_labels_np), replacement=True)
@@ -2342,13 +2380,13 @@ def create_data_loaders_with_memory_optimization(train_dataset, val_dataset, tes
     return train_loader, val_loader, test_loader, working_batch_size
 
 def main():
-    parser = argparse.ArgumentParser(description='Train sMRI models with k-fold cross-validation')
+    parser = argparse.ArgumentParser(description='Train SPECT models (CN vs PD) with k-fold cross-validation')
     
     # Data arguments
     parser.add_argument("--master_csv", type=str, required=True,
                         help="Path to master CSV file with subject IDs and labels")
     parser.add_argument("--data_root", type=str, required=True,
-                        help="Root directory containing preprocessed PET data")
+                        help="Root directory containing preprocessed SPECT data (CN_/PD_ folders)")
     parser.add_argument("--checkpoint_dir", type=str, required=True,
                         help="Directory to save model checkpoints and results")
     
@@ -2358,7 +2396,7 @@ def main():
     parser.add_argument("--model", type=str, default=None,
                         help="Single model to train (alternative to --models)")
     parser.add_argument("--models", nargs='+', type=str, default=None,
-                        choices=['Simple3DCNN', 'VisionTransformer3D', 'SwinUNETRClassifier', 'FullSwinUNETRClassifier'],
+                        choices=['Simple3DCNN', 'ResNet18_3D', 'ResNet50_3D', 'EfficientNetB0_3D'],
                         help="List of models to train (alternative to --model)")
     parser.add_argument("--run_all", action='store_true', default=False,
                         help="Run all available models")
@@ -2381,6 +2419,8 @@ def main():
     parser.add_argument("--early_stopping_monitor", type=str, default="val_auc",
                         choices=["val_auc", "val_acc", "val_loss"],
                         help="Metric to monitor for early stopping")
+    parser.add_argument("--legacy_early_stop", action='store_true', default=False,
+                        help="Enable old hard-coded early stop after 20 epochs without AUC improvement")
     
     # Hardware arguments
     parser.add_argument("--device", type=str, default="cuda", help="Device to use (cuda, cpu, or specific GPU)")
@@ -2397,6 +2437,9 @@ def main():
     
     # CNN-specific arguments
     parser.add_argument("--cnn_drop_rate", type=float, default=0.0, help="Dropout rate for CNN models")
+    parser.add_argument("--focal_gamma", type=float, default=2.0, help="Focal loss gamma (binary)")
+    parser.add_argument("--focal_alpha_scale", type=float, default=1.0,
+                        help="Multiply minority class alpha in focal loss (e.g., 1.5)")
     
     # Vision Transformer specific arguments
     parser.add_argument("--vit_warmup_epochs", type=int, default=5,
@@ -2424,6 +2467,21 @@ def main():
     parser.add_argument("--use_temperature_scaling", action='store_true', default=True,
                         help="Enable temperature scaling for multiclass calibration (improves accuracy by 2-5%)")
     
+    # Augmentation arguments
+    parser.add_argument("--aug_flip", action='store_true', default=False, help="Enable random flips (monai)")
+    parser.add_argument("--aug_rot90", action='store_true', default=False, help="Enable random 90-degree rotations (strong)")
+    parser.add_argument("--aug_rotate_deg", type=float, default=0.0, help="Enable small random rotation in degrees (e.g., 5)")
+    parser.add_argument("--aug_zoom", type=float, default=0.0, help="Random zoom magnitude (e.g., 0.05 gives [0.95,1.05])")
+    parser.add_argument("--aug_shift", type=float, default=0.0, help="Random intensity shift magnitude (e.g., 0.05)")
+    parser.add_argument("--aug_noise", action='store_true', default=False, help="Enable random gaussian noise")
+    parser.add_argument("--aug_noise_std", type=float, default=0.02, help="Std for gaussian noise if enabled (default 0.02)")
+
+    # Sampling/balancing arguments
+    parser.add_argument("--weighted_sampler", action='store_true', default=True,
+                        help="Use WeightedRandomSampler to oversample minority class in training")
+    parser.add_argument("--disable_weighted_sampler", action='store_true', default=False,
+                        help="Disable weighted sampler and use plain shuffle")
+    
     # Memory optimization arguments
     parser.add_argument("--auto_batch_size", action='store_true', default=True,
                         help="Automatically reduce batch size if CUDA out of memory occurs")
@@ -2437,8 +2495,7 @@ def main():
     args = parser.parse_args()
 
     # Define available models
-    available_models = ["Simple3DCNN", "ResNet18_3D", "ResNet50_3D", "DenseNet121_3D", "EfficientNetB0_3D",
-                       "VisionTransformer3D", "SwinUNETRClassifier", "FullSwinUNETRClassifier"]
+    available_models = ["Simple3DCNN", "ResNet18_3D", "ResNet50_3D", "EfficientNetB0_3D"]
     
     # Determine which models to run
     if args.model:
