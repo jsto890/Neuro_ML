@@ -87,7 +87,7 @@ class BayesianModelComparison:
         
         # Set random seeds
         np.random.seed(random_seed)
-        pm.set_utilities_random_seed(random_seed)
+        # pm.set_utilities_random_seed(random_seed)  # Not available in PyMC 5.x
         
         # Create subdirectories
         self.plots_dir = self.output_dir / "plots"

@@ -84,8 +84,10 @@ def test_bayesian_functionality():
             'group': np.random.choice(['A', 'B'], 100)
         }
         
-        # Test Bambi model
-        model = bmb.Model('y ~ x + (1|group)', test_data, family='bernoulli')
+        # Test Bambi model (convert dict to DataFrame)
+        import pandas as pd
+        test_df = pd.DataFrame(test_data)
+        model = bmb.Model('y ~ x + (1|group)', test_df, family='bernoulli')
         print("✅ Bambi model creation")
         
         print("\n✅ All Bayesian functionality tests passed!")
