@@ -858,18 +858,65 @@ class BayesianModelComparison:
         
         # Create visualizations
         try:
+            print("Attempting to create visualizations...")
             self.create_visualizations(results, data_dict)
+            print("✅ Visualizations created successfully")
         except Exception as e:
-            print(f"Warning: Could not create visualizations: {e}")
+            print(f"❌ Error creating visualizations: {e}")
+            print(f"Error type: {type(e).__name__}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
         
         # Save results
         try:
+            print("Attempting to save results...")
             self.save_results(results, data_dict)
+            print("✅ Results saved successfully")
         except Exception as e:
-            print(f"Warning: Could not save results: {e}")
+            print(f"❌ Error saving results: {e}")
+            print(f"Error type: {type(e).__name__}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
         
         print("Bayesian analysis complete!")
+        
+        # Print summary of results
+        self._print_results_summary(results)
+        
         return results
+    
+    def _print_results_summary(self, results: BayesianResults):
+        """Print a summary of the analysis results."""
+        print("\n" + "="*60)
+        print("BAYESIAN ANALYSIS SUMMARY")
+        print("="*60)
+        
+        if results.accuracy_results:
+            print("\n📊 Hierarchical Accuracy Results:")
+            models = results.accuracy_results['models']
+            means = results.accuracy_results['accuracy_means']
+            ci_lower = results.accuracy_results['accuracy_ci_lower']
+            ci_upper = results.accuracy_results['accuracy_ci_upper']
+            
+            for i, model in enumerate(models):
+                print(f"  {model}: {means[i]:.4f} ({ci_lower[i]:.4f}, {ci_upper[i]:.4f})")
+            
+            if 'model_comparisons' in results.accuracy_results:
+                print("\n🔍 Model Comparison Probabilities:")
+                comp_df = results.accuracy_results['model_comparisons']
+                for _, row in comp_df.iterrows():
+                    print(f"  P({row['model_a']} > {row['model_b']}) = {row['prob_a_better']:.4f}")
+        
+        if results.stacking_results:
+            print(f"\n🤝 Ensemble Results:")
+            if 'ensemble_accuracy' in results.stacking_results:
+                print(f"  Ensemble Accuracy: {results.stacking_results['ensemble_accuracy']:.4f}")
+            if 'individual_accuracies' in results.stacking_results:
+                print("  Individual Model Accuracies:")
+                for model, acc in results.stacking_results['individual_accuracies'].items():
+                    print(f"    {model}: {acc:.4f}")
+        
+        print("="*60)
 
 
 def main():
