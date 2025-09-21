@@ -435,14 +435,14 @@ class BayesianModelComparison:
             return {}
         
         try:
-        # Mixed-effects logistic: start simpler to reduce divergences
-        # First try without subject random effects; these are very high-dimensional
-        print("Creating Bambi model (simplified: random intercept by site only)...")
-        bm = bmb.Model(
-            "correct ~ 0 + model + (1|site)",
-            data=df_skill,
-            family="bernoulli",
-        )
+            # Mixed-effects logistic: start simpler to reduce divergences
+            # First try without subject random effects; these are very high-dimensional
+            print("Creating Bambi model (simplified: random intercept by site only)...")
+            bm = bmb.Model(
+                "correct ~ 0 + model + (1|site)",
+                data=df_skill,
+                family="bernoulli",
+            )
             print("Bambi model created successfully")
         except Exception as e:
             print(f"Error creating Bambi model: {e}")
