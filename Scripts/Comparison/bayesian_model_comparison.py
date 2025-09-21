@@ -717,55 +717,36 @@ class BayesianModelComparison:
         fig, axes = plt.subplots(1, 2, figsize=(15, 6))
         ax1, ax2 = axes[0], axes[1]
         
-        # Accuracy forest plot
+        # Overlaid normal distributions on a single shared axis for easier comparison
         models = results['models']
         means = results['accuracy_means']
         ci_lower = results['accuracy_ci_lower']
         ci_upper = results['accuracy_ci_upper']
-        
         print(f"Plotting {len(models)} models with means: {means}")
-        
-        y_pos = np.arange(len(models))
         try:
-            xerr = np.vstack([means - ci_lower, ci_upper - means])
+            # Build x-range from CI envelope, clipped to [0,1]
+            x_min = max(0.0, float(np.min(ci_lower) - 0.05))
+            x_max = min(1.0, float(np.max(ci_upper) + 0.05))
+            x = np.linspace(x_min, x_max, 1000)
+            colors = plt.cm.tab10(np.linspace(0, 1, len(models)))
+            from scipy.stats import norm
+            for i, model in enumerate(models):
+                mu = float(means[i])
+                sd = float((ci_upper[i] - ci_lower[i]) / (2*1.96))
+                sd = max(sd, 1e-3)
+                pdf = norm.pdf(x, loc=mu, scale=sd)
+                pdf = pdf / np.max(pdf)  # normalize each curve height to 1
+                ax1.plot(x, pdf, color=colors[i], lw=2, label=model)
+                ax1.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
+                # mean marker
+                ax1.axvline(mu, color=colors[i], lw=1, alpha=0.6)
+            ax1.set_xlabel('Accuracy')
+            ax1.set_ylabel('Relative density')
+            ax1.set_title('Posterior accuracy distributions (normal approx)')
+            ax1.grid(True, alpha=0.3)
+            ax1.legend(title='Models', bbox_to_anchor=(1.04, 1), loc='upper left')
         except Exception as e:
-            print(f"Warning: xerr shape issue: {e}; falling back to zeros")
-            xerr = np.zeros((2, len(models)))
-        ax1.errorbar(means, y_pos, xerr=xerr, fmt='o', capsize=5, capthick=2)
-        ax1.set_yticks(y_pos)
-        ax1.set_yticklabels(models)
-        ax1.set_xlabel('Accuracy')
-        ax1.set_title('Hierarchical Accuracy Estimates\n(95% Credible Intervals)')
-        ax1.grid(True, alpha=0.3)
-
-        # Overlay normal distributions approximating posterior for each model
-        try:
-            samples = results.get('accuracy_samples', None)
-            if samples is not None and isinstance(samples, np.ndarray):
-                # x-range for plotting densities
-                x = np.linspace(max(0.0, float(np.min(means - 4*np.sqrt(np.maximum(1e-6, (ci_upper-ci_lower)/4))))),
-                                min(1.0, float(np.max(means + 4*np.sqrt(np.maximum(1e-6, (ci_upper-ci_lower)/4))))),
-                                1000)
-                # color cycle
-                colors = plt.cm.tab10(np.linspace(0, 1, len(models)))
-                for i, model in enumerate(models):
-                    mu = float(means[i])
-                    # approximate std from CI (95% CI ~ mu ± 1.96*sd)
-                    sd = float((ci_upper[i] - ci_lower[i]) / (2*1.96))
-                    sd = max(sd, 1e-3)
-                    from scipy.stats import norm
-                    pdf = norm.pdf(x, loc=mu, scale=sd)
-                    # scale pdf to fit visually on the same axis as points: use a small height and offset at y=i
-                    pdf_scaled = pdf / np.max(pdf) * 0.35  # height scale
-                    ax1.fill_betweenx(
-                        y=i + pdf_scaled, x1=x, x2=mu, color=colors[i], alpha=0.15
-                    )
-                    ax1.plot(x, np.full_like(x, i) + pdf_scaled, color=colors[i], lw=1.5, label=model if i==0 else None)
-                # Legend for colors
-                handles = [plt.Line2D([0], [0], color=colors[i], lw=2, label=models[i]) for i in range(len(models))]
-                ax1.legend(handles=handles, title='Models', bbox_to_anchor=(1.04, 1), loc='upper left')
-        except Exception as e:
-            print(f"Warning: failed to overlay normal densities: {e}")
+            print(f"Warning: failed to draw overlaid normal densities: {e}")
         
         # Model comparison probabilities
         if 'model_comparisons' in results:
