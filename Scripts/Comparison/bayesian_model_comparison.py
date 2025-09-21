@@ -343,7 +343,7 @@ class BayesianModelComparison:
             # Sample
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                idata = pm.sample(2000, tune=2000, target_accept=0.9, random_seed=self.random_seed)
+                idata = pm.sample(1000, tune=1000, target_accept=0.95, random_seed=self.random_seed)
                 idata.extend(pm.sample_posterior_predictive(idata, random_seed=self.random_seed))
         
         # Extract results
@@ -396,10 +396,14 @@ class BayesianModelComparison:
         
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            idata = bm.fit(target_accept=0.9, random_seed=self.random_seed)
+            idata = bm.fit(target_accept=0.95, random_seed=self.random_seed, draws=1000, tune=1000)
         
-        # PSIS-LOO
-        loo = az.loo(idata)
+        # PSIS-LOO (skip if log_likelihood not available)
+        try:
+            loo = az.loo(idata)
+        except Exception as e:
+            print(f"Warning: Could not compute LOO: {e}")
+            loo = None
         
         # Extract fixed effects (model coefficients)
         model_effects = idata.posterior["model"].values.reshape(-1, -1)
@@ -457,7 +461,7 @@ class BayesianModelComparison:
                 
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    idata_cal = pm.sample(2000, tune=2000, target_accept=0.9, random_seed=self.random_seed)
+                    idata_cal = pm.sample(1000, tune=1000, target_accept=0.95, random_seed=self.random_seed)
             
             calibration_results[class_idx] = {
                 'idata': idata_cal,
@@ -510,7 +514,7 @@ class BayesianModelComparison:
                     
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore")
-                        idata_auc = pm.sample(2000, tune=2000, target_accept=0.9, random_seed=self.random_seed)
+                        idata_auc = pm.sample(1000, tune=1000, target_accept=0.95, random_seed=self.random_seed)
                 
                 if class_idx not in auc_results:
                     auc_results[class_idx] = {}
