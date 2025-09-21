@@ -354,9 +354,10 @@ class BayesianModelComparison:
         
         with pm.Model() as accuracy_model:
             # Partial pooling: logit accuracy per model with site-specific random effects
-            alpha_model = pm.Normal("alpha_model", 0, 1.5, shape=M)
+            # Tighter priors help reduce divergences
+            alpha_model = pm.Normal("alpha_model", 0, 1.0, shape=M)
             u_site_raw = pm.Normal("u_site_raw", 0, 1, shape=S)
-            sigma_site = pm.HalfNormal("sigma_site", 1.0)
+            sigma_site = pm.HalfNormal("sigma_site", 0.5)
             u_site = pm.Deterministic("u_site", u_site_raw * sigma_site)
             
             logit_theta = alpha_model[model_idx] + u_site[site_idx]
@@ -372,12 +373,13 @@ class BayesianModelComparison:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 idata = pm.sample(
-                    2000, tune=2000, 
-                    target_accept=0.98,  # Higher target accept rate
+                    2000,
+                    tune=3000,
+                    target_accept=0.995,
                     random_seed=self.random_seed,
                     return_inferencedata=True,
                     progressbar=True,
-                    cores=4
+                    cores=4,
                 )
                 idata.extend(pm.sample_posterior_predictive(idata, random_seed=self.random_seed))
         
@@ -569,14 +571,30 @@ class BayesianModelComparison:
                 for model in models
             }
             
+            # helper to compute macro AUC given probs and true labels
+            def compute_macro_auc(probabilities: np.ndarray, labels: np.ndarray) -> float:
+                # one-vs-rest macro AUC
+                y_true = labels
+                y_score = probabilities
+                # handle labels starting at 0
+                classes = np.unique(y_true)
+                aucs = []
+                for c in classes:
+                    y_bin = (y_true == c).astype(int)
+                    aucs.append(roc_auc_score(y_bin, y_score[:, int(c)]))
+                return float(np.mean(aucs))
+
+            true_labels = model_predictions[models[0]]['labels']
+
             # 1. Equal weight ensemble (original)
             equal_weights = np.ones(len(models)) / len(models)
             equal_ensemble_probs = np.average(all_probs, axis=0, weights=equal_weights)
             equal_ensemble_preds = np.argmax(equal_ensemble_probs, axis=1)
             equal_ensemble_acc = accuracy_score(
-                model_predictions[models[0]]['labels'], 
+                true_labels, 
                 equal_ensemble_preds
             )
+            equal_ensemble_auc = compute_macro_auc(equal_ensemble_probs, true_labels)
             
             # 2. Performance-weighted ensemble (based on individual accuracies)
             acc_values = np.array([individual_accs[model] for model in models])
@@ -585,9 +603,10 @@ class BayesianModelComparison:
             weighted_ensemble_probs = np.average(all_probs, axis=0, weights=performance_weights)
             weighted_ensemble_preds = np.argmax(weighted_ensemble_probs, axis=1)
             weighted_ensemble_acc = accuracy_score(
-                model_predictions[models[0]]['labels'], 
+                true_labels, 
                 weighted_ensemble_preds
             )
+            weighted_ensemble_auc = compute_macro_auc(weighted_ensemble_probs, true_labels)
             
             # 3. Top-2 weighted ensemble (DenseNet + Simple3DCNN only)
             top2_models = ['DenseNet121_3D', 'Simple3DCNN']
@@ -599,13 +618,15 @@ class BayesianModelComparison:
                 top2_ensemble_probs = np.average(top2_probs, axis=0, weights=top2_weights)
                 top2_ensemble_preds = np.argmax(top2_ensemble_probs, axis=1)
                 top2_ensemble_acc = accuracy_score(
-                    model_predictions[models[0]]['labels'], 
+                    true_labels, 
                     top2_ensemble_preds
                 )
+                top2_ensemble_auc = compute_macro_auc(top2_ensemble_probs, true_labels)
             else:
                 top2_ensemble_acc = None
                 top2_ensemble_preds = None
                 top2_ensemble_probs = None
+                top2_ensemble_auc = None
             
             return {
                 'models': models,
@@ -619,17 +640,20 @@ class BayesianModelComparison:
                     'equal_weight': {
                         'predictions': equal_ensemble_preds,
                         'probabilities': equal_ensemble_probs,
-                        'accuracy': equal_ensemble_acc
+                        'accuracy': equal_ensemble_acc,
+                        'auc_macro_ovr': equal_ensemble_auc
                     },
                     'performance_weighted': {
                         'predictions': weighted_ensemble_preds,
                         'probabilities': weighted_ensemble_probs,
-                        'accuracy': weighted_ensemble_acc
+                        'accuracy': weighted_ensemble_acc,
+                        'auc_macro_ovr': weighted_ensemble_auc
                     },
                     'top2_weighted': {
                         'predictions': top2_ensemble_preds,
                         'probabilities': top2_ensemble_probs,
-                        'accuracy': top2_ensemble_acc
+                        'accuracy': top2_ensemble_acc,
+                        'auc_macro_ovr': top2_ensemble_auc
                     } if top2_ensemble_acc is not None else None
                 }
             }
@@ -694,6 +718,35 @@ class BayesianModelComparison:
         ax1.set_xlabel('Accuracy')
         ax1.set_title('Hierarchical Accuracy Estimates\n(95% Credible Intervals)')
         ax1.grid(True, alpha=0.3)
+
+        # Overlay normal distributions approximating posterior for each model
+        try:
+            samples = results.get('accuracy_samples', None)
+            if samples is not None and isinstance(samples, np.ndarray):
+                # x-range for plotting densities
+                x = np.linspace(max(0.0, float(np.min(means - 4*np.sqrt(np.maximum(1e-6, (ci_upper-ci_lower)/4))))),
+                                min(1.0, float(np.max(means + 4*np.sqrt(np.maximum(1e-6, (ci_upper-ci_lower)/4))))),
+                                1000)
+                # color cycle
+                colors = plt.cm.tab10(np.linspace(0, 1, len(models)))
+                for i, model in enumerate(models):
+                    mu = float(means[i])
+                    # approximate std from CI (95% CI ~ mu ± 1.96*sd)
+                    sd = float((ci_upper[i] - ci_lower[i]) / (2*1.96))
+                    sd = max(sd, 1e-3)
+                    from scipy.stats import norm
+                    pdf = norm.pdf(x, loc=mu, scale=sd)
+                    # scale pdf to fit visually on the same axis as points: use a small height and offset at y=i
+                    pdf_scaled = pdf / np.max(pdf) * 0.35  # height scale
+                    ax1.fill_betweenx(
+                        y=i + pdf_scaled, x1=x, x2=mu, color=colors[i], alpha=0.15
+                    )
+                    ax1.plot(x, np.full_like(x, i) + pdf_scaled, color=colors[i], lw=1.5, label=model if i==0 else None)
+                # Legend for colors
+                handles = [plt.Line2D([0], [0], color=colors[i], lw=2, label=models[i]) for i in range(len(models))]
+                ax1.legend(handles=handles, title='Models', bbox_to_anchor=(1.04, 1), loc='upper left')
+        except Exception as e:
+            print(f"Warning: failed to overlay normal densities: {e}")
         
         # Model comparison probabilities
         if 'model_comparisons' in results:
@@ -858,18 +911,18 @@ class BayesianModelComparison:
         if results.accuracy_results:
             with open(self.results_dir / 'accuracy_results.json', 'w') as f:
                 # Convert numpy arrays to lists for JSON serialization
-                acc_results = results.accuracy_results.copy()
-                for key in ['accuracy_samples', 'accuracy_means', 'accuracy_std', 
-                           'accuracy_ci_lower', 'accuracy_ci_upper']:
-                    if key in acc_results:
-                        acc_results[key] = acc_results[key].tolist()
-                
-                # Handle model_comparisons DataFrame separately
-                if 'model_comparisons' in acc_results:
-                    # Convert DataFrame to dict for JSON serialization
-                    acc_results['model_comparisons'] = acc_results['model_comparisons'].to_dict('records')
-                
-                del acc_results['idata']  # Can't serialize PyMC objects
+                acc_results = {}
+                for k, v in results.accuracy_results.items():
+                    if k == 'idata':
+                        continue
+                    if isinstance(v, np.ndarray):
+                        acc_results[k] = v.tolist()
+                    elif isinstance(v, pd.DataFrame):
+                        acc_results[k] = v.to_dict('records')
+                    elif isinstance(v, (np.floating, np.integer)):
+                        acc_results[k] = v.item()
+                    else:
+                        acc_results[k] = v
                 json.dump(acc_results, f, indent=2)
             
             if 'model_comparisons' in results.accuracy_results:
@@ -878,16 +931,41 @@ class BayesianModelComparison:
         
         # Save other results (simplified for JSON serialization)
         if results.skill_results:
-            skill_simple = {k: v for k, v in results.skill_results.items() 
-                           if k != 'idata' and k != 'loo'}
+            skill_simple = {}
+            for k, v in results.skill_results.items():
+                if k in ('idata', 'loo'):
+                    continue
+                if isinstance(v, np.ndarray):
+                    skill_simple[k] = v.tolist()
+                elif isinstance(v, (np.floating, np.integer)):
+                    skill_simple[k] = v.item()
+                else:
+                    skill_simple[k] = v
             with open(self.results_dir / 'skill_results.json', 'w') as f:
                 json.dump(skill_simple, f, indent=2)
         
         # Save ensemble results
         if results.stacking_results:
             with open(self.results_dir / 'ensemble_results.json', 'w') as f:
-                ensemble_simple = {k: v for k, v in results.stacking_results.items() 
-                                 if not isinstance(v, np.ndarray)}
+                ensemble_simple = {}
+                for k, v in results.stacking_results.items():
+                    if isinstance(v, np.ndarray):
+                        ensemble_simple[k] = v.tolist()
+                    elif isinstance(v, dict):
+                        # recursively handle nested dicts
+                        def to_jsonable(obj):
+                            if isinstance(obj, np.ndarray):
+                                return obj.tolist()
+                            if isinstance(obj, (np.floating, np.integer)):
+                                return obj.item()
+                            if isinstance(obj, dict):
+                                return {kk: to_jsonable(vv) for kk, vv in obj.items()}
+                            return obj
+                        ensemble_simple[k] = to_jsonable(v)
+                    elif isinstance(v, (np.floating, np.integer)):
+                        ensemble_simple[k] = v.item()
+                    else:
+                        ensemble_simple[k] = v
                 json.dump(ensemble_simple, f, indent=2)
         
         print(f"Results saved to {self.output_dir}")
@@ -996,10 +1074,10 @@ class BayesianModelComparison:
                 ensemble_results = results.stacking_results['ensemble_results']
                 
                 if 'equal_weight' in ensemble_results:
-                    print(f"    Equal Weight: {ensemble_results['equal_weight']['accuracy']:.4f}")
+                    print(f"    Equal Weight: {ensemble_results['equal_weight']['accuracy']:.4f} (AUC: {ensemble_results['equal_weight']['auc_macro_ovr']:.4f})")
                 
                 if 'performance_weighted' in ensemble_results:
-                    print(f"    Performance Weighted: {ensemble_results['performance_weighted']['accuracy']:.4f}")
+                    print(f"    Performance Weighted: {ensemble_results['performance_weighted']['accuracy']:.4f} (AUC: {ensemble_results['performance_weighted']['auc_macro_ovr']:.4f})")
                     
                     # Show the weights used
                     if 'ensemble_weights' in results.stacking_results:
@@ -1010,7 +1088,7 @@ class BayesianModelComparison:
                             print(f"      {model}: {weight:.3f}")
                 
                 if 'top2_weighted' in ensemble_results and ensemble_results['top2_weighted']:
-                    print(f"    Top-2 Weighted (DenseNet + Simple3DCNN): {ensemble_results['top2_weighted']['accuracy']:.4f}")
+                    print(f"    Top-2 Weighted (DenseNet + Simple3DCNN): {ensemble_results['top2_weighted']['accuracy']:.4f} (AUC: {ensemble_results['top2_weighted']['auc_macro_ovr']:.4f})")
                     
                     if 'ensemble_weights' in results.stacking_results and results.stacking_results['ensemble_weights']['top2_weighted']:
                         top2_weights = results.stacking_results['ensemble_weights']['top2_weighted']
@@ -1021,6 +1099,25 @@ class BayesianModelComparison:
             # Legacy support for old format
             elif 'ensemble_accuracy' in results.stacking_results:
                 print(f"  Ensemble Accuracy: {results.stacking_results['ensemble_accuracy']:.4f}")
+        
+        # Add best ensemble summary (accuracy and AUC)
+        if results.stacking_results and 'ensemble_results' in results.stacking_results:
+            er = results.stacking_results['ensemble_results']
+            best_name = None
+            best_acc = -1.0
+            best_auc = -1.0
+            for name, d in er.items():
+                if d is None:
+                    continue
+                acc = d.get('accuracy', float('nan'))
+                auc = d.get('auc_macro_ovr', float('nan'))
+                if acc > best_acc:
+                    best_acc = acc
+                    best_auc = auc
+                    best_name = name
+            if best_name is not None:
+                print("\n🏅 Best Ensemble:")
+                print(f"  {best_name.replace('_',' ').title()}: {best_acc:.4f} (AUC: {best_auc:.4f})")
         
         print("="*60)
 
