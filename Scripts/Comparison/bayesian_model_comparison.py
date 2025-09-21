@@ -432,9 +432,8 @@ class BayesianModelComparison:
         # Run calibration per class and model
         calibration_results = {}
         
-            # Skip calibration analysis for now due to dimension issues
-            print("Skipping calibration analysis due to data structure complexity...")
-            calibration_results = {}
+        # Skip calibration analysis for now due to dimension issues
+        print("Skipping calibration analysis due to data structure complexity...")
         
         return calibration_results
     
