@@ -217,6 +217,7 @@ class BayesianModelComparison:
             Dictionary with dataframes for different analyses
         """
         print("Preparing data for Bayesian analysis...")
+        print(f"Total model data entries: {len(model_data)}")
         
         # 1. Hierarchical accuracy data (model × site/fold level)
         accuracy_rows = []
@@ -231,6 +232,11 @@ class BayesianModelComparison:
         auc_rows = []
         
         for data in model_data:
+            print(f"Processing {data.model}, fold {data.fold}, n_classes={data.n_classes}")
+            print(f"  Predictions shape: {data.predictions.shape}, unique values: {np.unique(data.predictions)}")
+            print(f"  Probabilities shape: {data.probabilities.shape}")
+            print(f"  Labels shape: {data.labels.shape}, unique values: {np.unique(data.labels)}")
+            
             # Hierarchical accuracy data
             correct = (data.predictions == data.labels).sum()
             total = len(data.labels)
@@ -254,14 +260,18 @@ class BayesianModelComparison:
                 })
             
             # Calibration data (multiclass - one-vs-rest for each class)
+            print(f"  Processing calibration for {data.n_classes} classes")
             for class_idx in range(data.n_classes):
                 class_mask = data.labels == class_idx
+                print(f"    Class {class_idx}: {np.sum(class_mask)} samples")
                 if not np.any(class_mask):
+                    print(f"    Skipping class {class_idx} - no samples")
                     continue
                     
                 # Use logits for calibration (log probabilities)
                 if len(data.probabilities.shape) > 1:
                     class_probs = data.probabilities[class_mask, class_idx]
+                    print(f"    Class {class_idx} probabilities shape: {class_probs.shape}")
                     # Convert to logits
                     class_logits = np.log(class_probs / (1 - class_probs + 1e-8))
                 else:
@@ -296,11 +306,29 @@ class BayesianModelComparison:
                         'y': int(true_label == class_idx)  # Binary for this class
                     })
         
+        # Create dataframes and add debugging info
+        accuracy_df = pd.DataFrame(accuracy_rows)
+        skill_df = pd.DataFrame(skill_rows)
+        calib_df = pd.DataFrame(calib_rows)
+        auc_df = pd.DataFrame(auc_rows)
+        
+        print(f"\nData preparation summary:")
+        print(f"  Accuracy data: {len(accuracy_df)} rows")
+        print(f"  Skill data: {len(skill_df)} rows")
+        print(f"  Calibration data: {len(calib_df)} rows")
+        print(f"  AUC data: {len(auc_df)} rows")
+        
+        if not skill_df.empty:
+            print(f"  Skill data columns: {skill_df.columns.tolist()}")
+            print(f"  Skill data models: {skill_df['model'].unique()}")
+            print(f"  Skill data sites: {skill_df['site'].unique()}")
+            print(f"  Skill data correct values: {skill_df['correct'].unique()}")
+        
         return {
-            'accuracy': pd.DataFrame(accuracy_rows),
-            'skill': pd.DataFrame(skill_rows),
-            'calibration': pd.DataFrame(calib_rows),
-            'auc': pd.DataFrame(auc_rows)
+            'accuracy': accuracy_df,
+            'skill': skill_df,
+            'calibration': calib_df,
+            'auc': auc_df
         }
     
     def hierarchical_accuracy_analysis(self, df_accuracy: pd.DataFrame) -> Dict[str, Any]:
@@ -385,14 +413,39 @@ class BayesianModelComparison:
         print("Running trial-level skill analysis...")
         
         if df_skill.empty:
+            print("Warning: Skill dataframe is empty, skipping trial-level analysis")
             return {}
         
-        # Mixed-effects logistic: model effect + site & subject random intercepts
-        bm = bmb.Model(
-            "correct ~ 0 + model + (1|site) + (1|subject_id)",
-            data=df_skill,
-            family="bernoulli",
-        )
+        print(f"Skill dataframe shape: {df_skill.shape}")
+        print(f"Skill dataframe columns: {df_skill.columns.tolist()}")
+        print(f"Skill dataframe dtypes:\n{df_skill.dtypes}")
+        
+        # Check for missing values
+        print(f"Missing values:\n{df_skill.isnull().sum()}")
+        
+        # Check data types and values
+        print(f"Model column unique values: {df_skill['model'].unique()}")
+        print(f"Site column unique values: {df_skill['site'].unique()}")
+        print(f"Correct column unique values: {df_skill['correct'].unique()}")
+        print(f"Subject_id column sample: {df_skill['subject_id'].head().tolist()}")
+        
+        # Check if we have enough variation
+        if df_skill['correct'].nunique() < 2:
+            print("Warning: No variation in correct column, skipping analysis")
+            return {}
+        
+        try:
+            # Mixed-effects logistic: model effect + site & subject random intercepts
+            print("Creating Bambi model...")
+            bm = bmb.Model(
+                "correct ~ 0 + model + (1|site) + (1|subject_id)",
+                data=df_skill,
+                family="bernoulli",
+            )
+            print("Bambi model created successfully")
+        except Exception as e:
+            print(f"Error creating Bambi model: {e}")
+            return {}
         
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -546,8 +599,14 @@ class BayesianModelComparison:
     
     def _plot_hierarchical_accuracy(self, results: Dict[str, Any]):
         """Plot hierarchical accuracy results."""
+        print("Creating hierarchical accuracy plots...")
         if not results:
+            print("Warning: No results to plot")
             return
+        
+        print(f"Results keys: {results.keys()}")
+        print(f"Models: {results.get('models', 'Not found')}")
+        print(f"Accuracy means shape: {results.get('accuracy_means', 'Not found')}")
         
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
         
@@ -556,6 +615,8 @@ class BayesianModelComparison:
         means = results['accuracy_means']
         ci_lower = results['accuracy_ci_lower']
         ci_upper = results['accuracy_ci_upper']
+        
+        print(f"Plotting {len(models)} models with means: {means}")
         
         y_pos = np.arange(len(models))
         ax1.errorbar(means, y_pos, xerr=[means - ci_lower, ci_upper - means], 
