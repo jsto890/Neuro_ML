@@ -557,28 +557,80 @@ class BayesianModelComparison:
             model_predictions[model]['probabilities'] = np.array(model_predictions[model]['probabilities'])
             model_predictions[model]['labels'] = np.array(model_predictions[model]['labels'])
         
-        # Simple ensemble using equal weights (placeholder for proper stacking)
+        # Ensemble with multiple weighting strategies
         if len(model_predictions) > 1:
             models = list(model_predictions.keys())
             all_probs = np.array([model_predictions[model]['probabilities'] for model in models])
-            ensemble_probs = np.mean(all_probs, axis=0)
-            ensemble_preds = np.argmax(ensemble_probs, axis=1)
             
-            # Calculate ensemble performance
-            ensemble_acc = accuracy_score(
+            # Calculate individual accuracies first
+            individual_accs = {
+                model: accuracy_score(model_predictions[model]['labels'], 
+                                    model_predictions[model]['predictions'])
+                for model in models
+            }
+            
+            # 1. Equal weight ensemble (original)
+            equal_weights = np.ones(len(models)) / len(models)
+            equal_ensemble_probs = np.average(all_probs, axis=0, weights=equal_weights)
+            equal_ensemble_preds = np.argmax(equal_ensemble_probs, axis=1)
+            equal_ensemble_acc = accuracy_score(
                 model_predictions[models[0]]['labels'], 
-                ensemble_preds
+                equal_ensemble_preds
             )
+            
+            # 2. Performance-weighted ensemble (based on individual accuracies)
+            acc_values = np.array([individual_accs[model] for model in models])
+            # Softmax weights to make them sum to 1 and emphasize differences
+            performance_weights = np.exp(acc_values * 10) / np.sum(np.exp(acc_values * 10))
+            weighted_ensemble_probs = np.average(all_probs, axis=0, weights=performance_weights)
+            weighted_ensemble_preds = np.argmax(weighted_ensemble_probs, axis=1)
+            weighted_ensemble_acc = accuracy_score(
+                model_predictions[models[0]]['labels'], 
+                weighted_ensemble_preds
+            )
+            
+            # 3. Top-2 weighted ensemble (DenseNet + Simple3DCNN only)
+            top2_models = ['DenseNet121_3D', 'Simple3DCNN']
+            top2_mask = [model in top2_models for model in models]
+            if sum(top2_mask) >= 2:
+                top2_probs = all_probs[top2_mask]
+                top2_weights = np.array([individual_accs[model] for model in models if model in top2_models])
+                top2_weights = top2_weights / np.sum(top2_weights)
+                top2_ensemble_probs = np.average(top2_probs, axis=0, weights=top2_weights)
+                top2_ensemble_preds = np.argmax(top2_ensemble_probs, axis=1)
+                top2_ensemble_acc = accuracy_score(
+                    model_predictions[models[0]]['labels'], 
+                    top2_ensemble_preds
+                )
+            else:
+                top2_ensemble_acc = None
+                top2_ensemble_preds = None
+                top2_ensemble_probs = None
             
             return {
                 'models': models,
-                'ensemble_predictions': ensemble_preds,
-                'ensemble_probabilities': ensemble_probs,
-                'ensemble_accuracy': ensemble_acc,
-                'individual_accuracies': {
-                    model: accuracy_score(model_predictions[model]['labels'], 
-                                        model_predictions[model]['predictions'])
-                    for model in models
+                'individual_accuracies': individual_accs,
+                'ensemble_weights': {
+                    'equal': equal_weights.tolist(),
+                    'performance_weighted': performance_weights.tolist(),
+                    'top2_weighted': top2_weights.tolist() if 'top2_weights' in locals() else None
+                },
+                'ensemble_results': {
+                    'equal_weight': {
+                        'predictions': equal_ensemble_preds,
+                        'probabilities': equal_ensemble_probs,
+                        'accuracy': equal_ensemble_acc
+                    },
+                    'performance_weighted': {
+                        'predictions': weighted_ensemble_preds,
+                        'probabilities': weighted_ensemble_probs,
+                        'accuracy': weighted_ensemble_acc
+                    },
+                    'top2_weighted': {
+                        'predictions': top2_ensemble_preds,
+                        'probabilities': top2_ensemble_probs,
+                        'accuracy': top2_ensemble_acc
+                    } if top2_ensemble_acc is not None else None
                 }
             }
         
@@ -931,12 +983,44 @@ class BayesianModelComparison:
         
         if results.stacking_results:
             print(f"\n🤝 Ensemble Results:")
-            if 'ensemble_accuracy' in results.stacking_results:
-                print(f"  Ensemble Accuracy: {results.stacking_results['ensemble_accuracy']:.4f}")
+            
+            # Individual model accuracies
             if 'individual_accuracies' in results.stacking_results:
                 print("  Individual Model Accuracies:")
                 for model, acc in results.stacking_results['individual_accuracies'].items():
                     print(f"    {model}: {acc:.4f}")
+            
+            # Ensemble comparison
+            if 'ensemble_results' in results.stacking_results:
+                print("\n  📊 Ensemble Comparison:")
+                ensemble_results = results.stacking_results['ensemble_results']
+                
+                if 'equal_weight' in ensemble_results:
+                    print(f"    Equal Weight: {ensemble_results['equal_weight']['accuracy']:.4f}")
+                
+                if 'performance_weighted' in ensemble_results:
+                    print(f"    Performance Weighted: {ensemble_results['performance_weighted']['accuracy']:.4f}")
+                    
+                    # Show the weights used
+                    if 'ensemble_weights' in results.stacking_results:
+                        weights = results.stacking_results['ensemble_weights']['performance_weighted']
+                        models = results.stacking_results['models']
+                        print("    Performance Weights:")
+                        for model, weight in zip(models, weights):
+                            print(f"      {model}: {weight:.3f}")
+                
+                if 'top2_weighted' in ensemble_results and ensemble_results['top2_weighted']:
+                    print(f"    Top-2 Weighted (DenseNet + Simple3DCNN): {ensemble_results['top2_weighted']['accuracy']:.4f}")
+                    
+                    if 'ensemble_weights' in results.stacking_results and results.stacking_results['ensemble_weights']['top2_weighted']:
+                        top2_weights = results.stacking_results['ensemble_weights']['top2_weighted']
+                        print("    Top-2 Weights:")
+                        for model, weight in zip(['DenseNet121_3D', 'Simple3DCNN'], top2_weights):
+                            print(f"      {model}: {weight:.3f}")
+            
+            # Legacy support for old format
+            elif 'ensemble_accuracy' in results.stacking_results:
+                print(f"  Ensemble Accuracy: {results.stacking_results['ensemble_accuracy']:.4f}")
         
         print("="*60)
 
