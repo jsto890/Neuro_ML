@@ -756,12 +756,21 @@ def main():
     print("Calculating metrics...")
     metrics = calculate_metrics(predictions, probabilities, labels)
     
+    # Save predictions and probabilities for later regeneration (same as training script)
+    print("Saving predictions and probabilities...")
+    np.save(os.path.join(args.output_dir, 'predictions.npy'), predictions)
+    np.save(os.path.join(args.output_dir, 'probabilities.npy'), probabilities)
+    np.save(os.path.join(args.output_dir, 'labels.npy'), labels)
+    
     # Create plots
     print("Generating evaluation plots...")
     create_evaluation_plots(predictions, probabilities, labels, metrics, args.output_dir, 
                            model_name=args.model_name, image_type="sMRI")
     
     print(f"\n✅ Evaluation completed! Results saved to: {args.output_dir}")
+    print(f"   - NPY files: predictions.npy, probabilities.npy, labels.npy")
+    print(f"   - Evaluation plots: model_evaluation_analysis.png")
+    print(f"   - Metrics: evaluation_metrics.json")
 
 if __name__ == "__main__":
     main() 
