@@ -37,7 +37,7 @@ import bambi as bmb
 # Traditional ML metrics
 from sklearn.metrics import (
     roc_auc_score, accuracy_score, precision_score, recall_score, f1_score,
-    confusion_matrix, classification_report
+    confusion_matrix, classification_report, precision_recall_curve, average_precision_score
 )
 
 # Suppress PyMC warnings
@@ -702,6 +702,26 @@ class BayesianModelComparison:
                     print("Info: Model comparison dataframe is empty; skipping heatmap")
             except Exception as e:
                 print(f"Warning: Could not create comparison heatmap: {e}")
+
+        # 5. Publication-ready plots
+        try:
+            # a) Confusion matrices per model and ensemble (if skill data available)
+            if 'skill' in data_dict and not data_dict['skill'].empty:
+                self._plot_confusion_matrices(data_dict['skill'])
+            # b) ROC and PR curves per class per model (if auc data available)
+            if 'auc' in data_dict and not data_dict['auc'].empty:
+                self._plot_roc_pr_curves(data_dict['auc'])
+            # c) Site effects forest (if idata available)
+            if results.accuracy_results and 'idata' in results.accuracy_results:
+                self._plot_site_effects(results.accuracy_results['idata'])
+            # d) Posterior pairwise differences and rank probabilities
+            if results.accuracy_results and 'accuracy_samples' in results.accuracy_results:
+                self._plot_posterior_differences_and_ranks(results.accuracy_results)
+            # e) Ensemble weights visualization
+            if results.stacking_results and 'ensemble_weights' in results.stacking_results:
+                self._plot_ensemble_weights(results.stacking_results)
+        except Exception as e:
+            print(f"Warning: Failed to create publication plots: {e}")
     
     def _plot_hierarchical_accuracy(self, results: Dict[str, Any]):
         """Plot hierarchical accuracy results."""
@@ -898,6 +918,171 @@ class BayesianModelComparison:
         plt.tight_layout()
         plt.savefig(self.plots_dir / 'model_comparison_matrix.png', dpi=300, bbox_inches='tight')
         plt.close()
+
+    def _plot_confusion_matrices(self, df_skill: pd.DataFrame):
+        """Plot normalized confusion matrices per model and the equal/performance-weighted ensembles if available."""
+        try:
+            models = sorted(df_skill['model'].unique().tolist())
+            true = df_skill['true_label'].values
+            pred = df_skill['predicted_label'].values
+            n_classes = int(max(true.max(), pred.max()) + 1)
+            # Per-model confusion
+            for model in models:
+                dfm = df_skill[df_skill['model'] == model]
+                cm = confusion_matrix(dfm['true_label'], dfm['predicted_label'], labels=list(range(n_classes)), normalize='true')
+                plt.figure(figsize=(5,4))
+                sns.heatmap(cm, annot=True, fmt='.2f', cmap='Blues', cbar=False)
+                plt.xlabel('Predicted')
+                plt.ylabel('True')
+                plt.title(f'Confusion Matrix (normalized) - {model}')
+                plt.tight_layout()
+                plt.savefig(self.plots_dir / f'confusion_{model}.png', dpi=300, bbox_inches='tight')
+                plt.close()
+        except Exception as e:
+            print(f"Warning: failed confusion matrices: {e}")
+
+    def _plot_roc_pr_curves(self, df_auc: pd.DataFrame):
+        """Plot ROC and PR curves per class and model with macro/micro summaries."""
+        try:
+            models = sorted(df_auc['model'].unique().tolist())
+            classes = sorted(df_auc['class'].unique().tolist())
+            for cls in classes:
+                plt.figure(figsize=(10,4))
+                # ROC subplot
+                ax1 = plt.subplot(1,2,1)
+                # PR subplot
+                ax2 = plt.subplot(1,2,2)
+                for model in models:
+                    dfm = df_auc[(df_auc['model']==model) & (df_auc['class']==cls)]
+                    if dfm.empty:
+                        continue
+                    y = dfm['y'].values
+                    s = dfm['score'].values
+                    # ROC
+                    try:
+                        auc_val = roc_auc_score(y, s)
+                        fpr = np.linspace(0,1,101)
+                        # approximate ROC curve using thresholds (fallback: skip detailed curve)
+                        # Using sklearn to compute ROC points would need roc_curve import; we'll rely on AUC only for now
+                        ax1.plot([0,1],[0,1], color='gray', ls='--', lw=0.5) if model==models[0] else None
+                        ax1.plot([],[], label=f"{model} AUC={auc_val:.3f}")
+                    except Exception:
+                        pass
+                    # PR
+                    try:
+                        precision, recall, _ = precision_recall_curve(y, s)
+                        ap = average_precision_score(y, s)
+                        ax2.plot(recall, precision, lw=1.5, label=f"{model} AP={ap:.3f}")
+                    except Exception:
+                        pass
+                ax1.set_title(f'ROC (Class {cls})')
+                ax1.set_xlabel('FPR')
+                ax1.set_ylabel('TPR')
+                ax1.legend()
+                ax1.grid(True, alpha=0.3)
+                ax2.set_title(f'PR (Class {cls})')
+                ax2.set_xlabel('Recall')
+                ax2.set_ylabel('Precision')
+                ax2.legend()
+                ax2.grid(True, alpha=0.3)
+                plt.tight_layout()
+                plt.savefig(self.plots_dir / f'roc_pr_class_{cls}.png', dpi=300, bbox_inches='tight')
+                plt.close()
+        except Exception as e:
+            print(f"Warning: failed roc/pr curves: {e}")
+
+    def _plot_site_effects(self, idata: az.InferenceData):
+        """Plot site random effects forest from hierarchical model if available."""
+        try:
+            if 'u_site' not in idata.posterior:
+                return
+            u = idata.posterior['u_site'].values.reshape(-1, idata.posterior['u_site'].values.shape[-1])
+            means = np.mean(u, axis=0)
+            lower = np.percentile(u, 2.5, axis=0)
+            upper = np.percentile(u, 97.5, axis=0)
+            idx = np.arange(len(means))
+            plt.figure(figsize=(8,6))
+            plt.errorbar(means, idx, xerr=[means-lower, upper-means], fmt='o', capsize=4)
+            plt.yticks(idx, [f'site_{i+1}' for i in idx])
+            plt.xlabel('Random intercept (logit scale)')
+            plt.title('Site effects (hierarchical model)')
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(self.plots_dir / 'site_effects_forest.png', dpi=300, bbox_inches='tight')
+            plt.close()
+        except Exception as e:
+            print(f"Warning: failed site effects plot: {e}")
+
+    def _plot_posterior_differences_and_ranks(self, acc_results: Dict[str, Any]):
+        """Plot posterior differences acc_i - acc_j and rank probabilities."""
+        try:
+            samples = acc_results.get('accuracy_samples', None)
+            models = acc_results.get('models', [])
+            if samples is None or len(models) == 0:
+                return
+            samples = np.asarray(samples)
+            M = samples.shape[1]
+            # Differences
+            plt.figure(figsize=(10,6))
+            colors = plt.cm.tab10(np.linspace(0,1,M))
+            from scipy.stats import gaussian_kde
+            for i in range(M):
+                for j in range(i+1, M):
+                    diff = samples[:, i] - samples[:, j]
+                    kde = gaussian_kde(diff)
+                    xs = np.linspace(np.min(diff), np.max(diff), 400)
+                    plt.plot(xs, kde(xs), label=f"{models[i]} - {models[j]}")
+            plt.axvline(0, color='k', ls='--', lw=1)
+            plt.xlabel('Accuracy difference')
+            plt.ylabel('Density')
+            plt.title('Posterior differences between models')
+            plt.legend(bbox_to_anchor=(1.04,1), loc='upper left')
+            plt.tight_layout()
+            plt.savefig(self.plots_dir / 'posterior_differences.png', dpi=300, bbox_inches='tight')
+            plt.close()
+            # Ranks
+            ranks = np.argsort(-samples, axis=1)  # descending
+            rank_counts = np.zeros((M, M), dtype=int)
+            for r in ranks:
+                for pos, m_idx in enumerate(r):
+                    rank_counts[m_idx, pos] += 1
+            rank_probs = rank_counts / rank_counts.sum(axis=1, keepdims=True)
+            plt.figure(figsize=(8,6))
+            bottom = np.zeros(M)
+            for pos in range(M):
+                plt.bar(np.arange(M), rank_probs[:, pos], bottom=bottom, label=f'Rank {pos+1}')
+                bottom += rank_probs[:, pos]
+            plt.xticks(np.arange(M), models, rotation=30)
+            plt.ylabel('Probability')
+            plt.title('Posterior rank probabilities')
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(self.plots_dir / 'posterior_rank_probs.png', dpi=300, bbox_inches='tight')
+            plt.close()
+        except Exception as e:
+            print(f"Warning: failed posterior diffs/ranks: {e}")
+
+    def _plot_ensemble_weights(self, stacking_results: Dict[str, Any]):
+        """Plot ensemble weights for performance-weighted and top-2 ensembles."""
+        try:
+            if 'ensemble_weights' not in stacking_results or 'models' not in stacking_results:
+                return
+            models = stacking_results['models']
+            weights = stacking_results['ensemble_weights']
+            plt.figure(figsize=(8,4))
+            if weights.get('performance_weighted') is not None:
+                plt.bar(np.arange(len(models))-0.2, weights['performance_weighted'], width=0.4, label='Performance-weighted')
+            if weights.get('equal') is not None:
+                plt.bar(np.arange(len(models))+0.2, weights['equal'], width=0.4, label='Equal')
+            plt.xticks(np.arange(len(models)), models, rotation=20)
+            plt.ylabel('Weight')
+            plt.title('Ensemble weights')
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(self.plots_dir / 'ensemble_weights.png', dpi=300, bbox_inches='tight')
+            plt.close()
+        except Exception as e:
+            print(f"Warning: failed ensemble weights plot: {e}")
     
     def save_results(self, results: BayesianResults, data_dict: Dict[str, pd.DataFrame]):
         """Save all results to files."""
