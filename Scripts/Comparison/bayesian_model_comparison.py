@@ -368,10 +368,17 @@ class BayesianModelComparison:
             # Posterior accuracy per model (marginalised over sites)
             acc_model = pm.Deterministic("acc_model", pm.math.sigmoid(alpha_model))
             
-            # Sample
+            # Sample with improved parameters to reduce divergences
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                idata = pm.sample(1000, tune=1000, target_accept=0.95, random_seed=self.random_seed)
+                idata = pm.sample(
+                    2000, tune=2000, 
+                    target_accept=0.98,  # Higher target accept rate
+                    random_seed=self.random_seed,
+                    return_inferencedata=True,
+                    progressbar=True,
+                    cores=4
+                )
                 idata.extend(pm.sample_posterior_predictive(idata, random_seed=self.random_seed))
         
         # Extract results
@@ -804,6 +811,12 @@ class BayesianModelComparison:
                            'accuracy_ci_lower', 'accuracy_ci_upper']:
                     if key in acc_results:
                         acc_results[key] = acc_results[key].tolist()
+                
+                # Handle model_comparisons DataFrame separately
+                if 'model_comparisons' in acc_results:
+                    # Convert DataFrame to dict for JSON serialization
+                    acc_results['model_comparisons'] = acc_results['model_comparisons'].to_dict('records')
+                
                 del acc_results['idata']  # Can't serialize PyMC objects
                 json.dump(acc_results, f, indent=2)
             
