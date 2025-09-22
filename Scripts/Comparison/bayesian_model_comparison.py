@@ -97,6 +97,8 @@ class BayesianModelComparison:
         
         for d in [self.plots_dir, self.results_dir, self.data_dir]:
             d.mkdir(exist_ok=True)
+        # Fixed class label mapping: 0→CN, 1→AD, 2→PD
+        self.class_labels = ["CN", "AD", "PD"]
     
     def load_model_data(self, run_dirs: List[str], models: Optional[List[str]] = None) -> List[ModelFoldData]:
         """
@@ -1337,54 +1339,83 @@ class BayesianModelComparison:
             print(f"Warning: failed ensemble weights plot: {e}")
 
     def _plot_ovr_acc_auc(self, df_skill: pd.DataFrame, df_auc: pd.DataFrame):
-        """Create six plots: for each class (0,1,2), show ACC vs rest and AUC vs rest across models.
-        Saves: ovr_acc_class_{c}.png and ovr_auc_class_{c}.png"""
+        """Create two combined plots summarizing one-vs-rest ACC and AUC by model and class.
+        - Combined ACC: bar per model, with per-class markers and range whiskers; title includes per-model mean±range
+        - Combined AUC: same style
+        Also writes class-specific labels using disease names instead of numbers.
+        Saves: ovr_acc_combined.png, ovr_auc_combined.png"""
         try:
             models = sorted(df_skill['model'].unique().tolist())
             classes = sorted(df_auc['class'].unique().tolist())
+            class_names = [self.class_labels[c] if c < len(self.class_labels) else f"Class {c}" for c in classes]
             # ACC (one-vs-rest): accuracy of detecting class c vs others
-            for c in classes:
-                acc_values = []
-                for m in models:
-                    dfs = df_skill[df_skill['model']==m]
+            acc_by_model_class = {m: [] for m in models}
+            for m in models:
+                dfs = df_skill[df_skill['model']==m]
+                for c in classes:
                     if dfs.empty:
-                        acc_values.append(np.nan)
+                        acc_by_model_class[m].append(np.nan)
                         continue
                     y_true = (dfs['true_label'].values == c).astype(int)
                     y_pred = (dfs['predicted_label'].values == c).astype(int)
-                    acc = accuracy_score(y_true, y_pred)
-                    acc_values.append(acc)
-                plt.figure(figsize=(6,4))
-                sns.barplot(x=models, y=acc_values)
-                plt.ylabel('Accuracy (one-vs-rest)')
-                plt.xlabel('Model')
-                plt.title(f'ACC: Class {c} vs rest')
-                plt.xticks(rotation=20)
-                plt.ylim(0,1)
-                plt.grid(True, axis='y', alpha=0.3)
-                plt.tight_layout()
-                plt.savefig(self.plots_dir / f'ovr_acc_class_{c}.png', dpi=300, bbox_inches='tight')
-                plt.close()
+                    acc_by_model_class[m].append(accuracy_score(y_true, y_pred))
+            # Plot combined ACC
+            plt.figure(figsize=(10,5))
+            x = np.arange(len(models))
+            means = np.array([np.nanmean(acc_by_model_class[m]) for m in models])
+            mins = np.array([np.nanmin(acc_by_model_class[m]) for m in models])
+            maxs = np.array([np.nanmax(acc_by_model_class[m]) for m in models])
+            # bar for mean
+            sns.barplot(x=models, y=means, color='skyblue', edgecolor='black')
+            # whiskers for range
+            for i in range(len(models)):
+                plt.plot([i, i], [mins[i], maxs[i]], color='black', lw=1.5)
+            # per-class markers
+            colors = plt.cm.tab10(np.linspace(0,1,len(classes)))
+            for ci, c in enumerate(classes):
+                vals = [acc_by_model_class[m][ci] for m in models]
+                plt.plot(x, vals, marker='o', linestyle='-', color=colors[ci], label=class_names[ci])
+            plt.ylabel('Accuracy (one-vs-rest)')
+            plt.xlabel('Model')
+            plt.title('One-vs-rest ACC by model (mean bar, range whiskers, class markers)')
+            plt.xticks(rotation=20)
+            plt.ylim(0,1)
+            plt.grid(True, axis='y', alpha=0.3)
+            plt.legend(title='Class', bbox_to_anchor=(1.04,1), loc='upper left')
+            plt.tight_layout()
+            plt.savefig(self.plots_dir / 'ovr_acc_combined.png', dpi=300, bbox_inches='tight')
+            plt.close()
             # AUC (one-vs-rest): from df_auc
-            for c in classes:
-                auc_values = []
-                for m in models:
+            auc_by_model_class = {m: [] for m in models}
+            for m in models:
+                for c in classes:
                     dmc = df_auc[(df_auc['model']==m) & (df_auc['class']==c)]
                     if dmc.empty:
-                        auc_values.append(np.nan)
+                        auc_by_model_class[m].append(np.nan)
                         continue
-                    auc_values.append(roc_auc_score(dmc['y'].values, dmc['score'].values))
-                plt.figure(figsize=(6,4))
-                sns.barplot(x=models, y=auc_values)
-                plt.ylabel('AUC (one-vs-rest)')
-                plt.xlabel('Model')
-                plt.title(f'AUC: Class {c} vs rest')
-                plt.xticks(rotation=20)
-                plt.ylim(0,1)
-                plt.grid(True, axis='y', alpha=0.3)
-                plt.tight_layout()
-                plt.savefig(self.plots_dir / f'ovr_auc_class_{c}.png', dpi=300, bbox_inches='tight')
-                plt.close()
+                    auc_by_model_class[m].append(roc_auc_score(dmc['y'].values, dmc['score'].values))
+            plt.figure(figsize=(10,5))
+            x = np.arange(len(models))
+            means = np.array([np.nanmean(auc_by_model_class[m]) for m in models])
+            mins = np.array([np.nanmin(auc_by_model_class[m]) for m in models])
+            maxs = np.array([np.nanmax(auc_by_model_class[m]) for m in models])
+            sns.barplot(x=models, y=means, color='lightgreen', edgecolor='black')
+            for i in range(len(models)):
+                plt.plot([i, i], [mins[i], maxs[i]], color='black', lw=1.5)
+            colors = plt.cm.tab10(np.linspace(0,1,len(classes)))
+            for ci, c in enumerate(classes):
+                vals = [auc_by_model_class[m][ci] for m in models]
+                plt.plot(x, vals, marker='s', linestyle='--', color=colors[ci], label=class_names[ci])
+            plt.ylabel('AUC (one-vs-rest)')
+            plt.xlabel('Model')
+            plt.title('One-vs-rest AUC by model (mean bar, range whiskers, class markers)')
+            plt.xticks(rotation=20)
+            plt.ylim(0,1)
+            plt.grid(True, axis='y', alpha=0.3)
+            plt.legend(title='Class', bbox_to_anchor=(1.04,1), loc='upper left')
+            plt.tight_layout()
+            plt.savefig(self.plots_dir / 'ovr_auc_combined.png', dpi=300, bbox_inches='tight')
+            plt.close()
         except Exception as e:
             print(f"Warning: failed OVR acc/auc plots: {e}")
     
