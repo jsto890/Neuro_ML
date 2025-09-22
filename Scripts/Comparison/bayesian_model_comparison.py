@@ -112,6 +112,7 @@ class BayesianModelComparison:
         print("Loading model data...")
         model_data = []
         
+        self.model_source_dirs: Dict[str, str] = {}
         for run_dir in run_dirs:
             run_dir = Path(run_dir)
             if not run_dir.exists():
@@ -126,6 +127,8 @@ class BayesianModelComparison:
                     continue
                     
                 print(f"Processing model: {model_name}")
+                # Track source directory for this model
+                self.model_source_dirs[model_name] = str(model_dir)
                 
                 # Load fold data
                 fold_data = self._load_model_folds(model_dir, model_name)
@@ -651,6 +654,7 @@ class BayesianModelComparison:
             return {
                 'models': models,
                 'individual_accuracies': individual_accs,
+                'model_source_dirs': {m: self.model_source_dirs.get(m, '') for m in models},
                 'ensemble_weights': {
                     'equal': equal_weights.tolist(),
                     'performance_weighted': performance_weights.tolist(),
@@ -1392,6 +1396,10 @@ class BayesianModelComparison:
                     else:
                         ensemble_simple[k] = v
                 json.dump(ensemble_simple, f, indent=2)
+            # Write a dedicated sources file for convenience
+            if 'model_source_dirs' in results.stacking_results:
+                with open(self.results_dir / 'ensemble_sources.json', 'w') as f:
+                    json.dump(results.stacking_results['model_source_dirs'], f, indent=2)
         
         print(f"Results saved to {self.output_dir}")
     
