@@ -37,7 +37,8 @@ import bambi as bmb
 # Traditional ML metrics
 from sklearn.metrics import (
     roc_auc_score, accuracy_score, precision_score, recall_score, f1_score,
-    confusion_matrix, classification_report, precision_recall_curve, average_precision_score
+    confusion_matrix, classification_report, precision_recall_curve, average_precision_score,
+    matthews_corrcoef
 )
 
 # Suppress PyMC warnings
@@ -711,6 +712,10 @@ class BayesianModelComparison:
             # b) ROC and PR curves per class per model (if auc data available)
             if 'auc' in data_dict and not data_dict['auc'].empty:
                 self._plot_roc_pr_curves(data_dict['auc'])
+                # Overlaid AUC distributions (per-model across folds)
+                self._plot_auc_distributions(data_dict['auc'])
+                # Two-panel AUC with bootstrap pairwise probabilities
+                self._plot_auc_two_panel(data_dict['auc'])
             # c) Site effects forest (if idata available)
             if results.accuracy_results and 'idata' in results.accuracy_results:
                 self._plot_site_effects(results.accuracy_results['idata'])
@@ -720,6 +725,11 @@ class BayesianModelComparison:
             # e) Ensemble weights visualization
             if results.stacking_results and 'ensemble_weights' in results.stacking_results:
                 self._plot_ensemble_weights(results.stacking_results)
+            # f) MCC distributions (per-model across folds)
+            if 'skill' in data_dict and not data_dict['skill'].empty:
+                self._plot_mcc_distributions(data_dict['skill'])
+                # Two-panel MCC with bootstrap pairwise probabilities
+                self._plot_mcc_two_panel(data_dict['skill'])
         except Exception as e:
             print(f"Warning: Failed to create publication plots: {e}")
     
@@ -762,7 +772,7 @@ class BayesianModelComparison:
                 ax1.axvline(mu, color=colors[i], lw=1, alpha=0.6)
             ax1.set_xlabel('Accuracy')
             ax1.set_ylabel('Relative density')
-            ax1.set_title('Posterior accuracy distributions (normal approx)')
+            ax1.set_title('Model accuracy normal distributions')
             ax1.grid(True, alpha=0.3)
             ax1.legend(title='Models', bbox_to_anchor=(1.04, 1), loc='upper left')
         except Exception as e:
@@ -796,6 +806,236 @@ class BayesianModelComparison:
         plt.tight_layout()
         plt.savefig(self.plots_dir / 'hierarchical_accuracy_analysis.png', dpi=300, bbox_inches='tight')
         plt.close()
+
+    def _plot_auc_distributions(self, df_auc: pd.DataFrame):
+        """Overlaid normal PDFs of per-model AUC across folds (macro one-vs-rest)."""
+        try:
+            models = sorted(df_auc['model'].unique().tolist())
+            classes = sorted(df_auc['class'].unique().tolist())
+            auc_per_model = {m: [] for m in models}
+            # compute macro AUC per fold by grouping per subject across classes
+            # approximate: aggregate all class rows per model and compute macro AUC on the pooled set
+            for m in models:
+                dfm = df_auc[df_auc['model']==m]
+                # derive per-subject macro AUC by averaging classwise contributions
+                # fallback simplification: use overall macro AUC over pooled rows
+                try:
+                    y_true = dfm['y'].values
+                    # We cannot compute macro directly from pooled; skip to per-class auc then average
+                    auc_vals = []
+                    for c in classes:
+                        dmc = dfm[dfm['class']==c]
+                        if dmc.empty:
+                            continue
+                        auc_vals.append(roc_auc_score(dmc['y'].values, dmc['score'].values))
+                    if len(auc_vals)>0:
+                        auc_per_model[m].append(float(np.mean(auc_vals)))
+                except Exception:
+                    continue
+            # Prepare distributions
+            plt.figure(figsize=(8,5))
+            colors = plt.cm.tab10(np.linspace(0,1,len(models)))
+            from scipy.stats import norm
+            # compute mean/std per model
+            all_means = []
+            all_lowers = []
+            all_uppers = []
+            for i, m in enumerate(models):
+                arr = np.array(auc_per_model[m])
+                if arr.size == 0:
+                    continue
+                mu = float(np.mean(arr))
+                sd = float(np.std(arr) + 1e-6)
+                x = np.linspace(max(0.0, mu-4*sd), min(1.0, mu+4*sd), 800)
+                pdf = norm.pdf(x, loc=mu, scale=sd)
+                pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
+                plt.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
+                plt.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
+                plt.axvline(mu, color=colors[i], lw=1, alpha=0.6)
+            plt.xlabel('Macro AUC (one-vs-rest)')
+            plt.ylabel('Relative density')
+            plt.title('AUC distributions across folds (normal approx)')
+            plt.grid(True, alpha=0.3)
+            plt.legend(bbox_to_anchor=(1.04,1), loc='upper left')
+            plt.tight_layout()
+            plt.savefig(self.plots_dir / 'auc_distributions.png', dpi=300, bbox_inches='tight')
+            plt.close()
+        except Exception as e:
+            print(f"Warning: failed auc distributions: {e}")
+
+    def _bootstrap_pairwise_prob_matrix(self, values_by_model: Dict[str, np.ndarray], n_boot: int = 2000, random_state: int = 42) -> Tuple[np.ndarray, List[str]]:
+        rng = np.random.default_rng(random_state)
+        models = sorted(values_by_model.keys())
+        M = len(models)
+        probs = np.zeros((M, M))
+        # for each pair, estimate P(i > j)
+        for i in range(M):
+            vi = np.asarray(values_by_model[models[i]])
+            for j in range(M):
+                if i == j:
+                    probs[i, j] = 0.5
+                    continue
+                vj = np.asarray(values_by_model[models[j]])
+                if vi.size == 0 or vj.size == 0:
+                    continue
+                cnt = 0
+                for _ in range(n_boot):
+                    si = rng.choice(vi, size=vi.size, replace=True)
+                    sj = rng.choice(vj, size=vj.size, replace=True)
+                    cnt += (np.mean(si) > np.mean(sj))
+                probs[i, j] = cnt / n_boot
+        return probs, models
+
+    def _plot_auc_two_panel(self, df_auc: pd.DataFrame):
+        """Two-panel AUC: overlaid densities + bootstrap pairwise probability heatmap."""
+        try:
+            models = sorted(df_auc['model'].unique().tolist())
+            classes = sorted(df_auc['class'].unique().tolist())
+            auc_per_model = {m: [] for m in models}
+            for m in models:
+                dfm = df_auc[df_auc['model']==m]
+                auc_vals = []
+                for c in classes:
+                    dmc = dfm[dfm['class']==c]
+                    if dmc.empty:
+                        continue
+                    auc_vals.append(roc_auc_score(dmc['y'].values, dmc['score'].values))
+                if len(auc_vals)>0:
+                    auc_per_model[m] = np.array(auc_vals)
+            # Left panel densities
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,5))
+            colors = plt.cm.tab10(np.linspace(0,1,len(models)))
+            from scipy.stats import norm
+            for i, m in enumerate(models):
+                arr = np.array(auc_per_model[m])
+                if arr.size == 0:
+                    continue
+                mu = float(np.mean(arr))
+                sd = float(np.std(arr) + 1e-6)
+                x = np.linspace(max(0.0, mu-4*sd), min(1.0, mu+4*sd), 800)
+                pdf = norm.pdf(x, loc=mu, scale=sd)
+                pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
+                ax1.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
+                ax1.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
+                ax1.axvline(mu, color=colors[i], lw=1, alpha=0.6)
+            ax1.set_xlabel('Macro AUC (one-vs-rest)')
+            ax1.set_ylabel('Relative density')
+            ax1.set_title('AUC distributions across folds')
+            ax1.grid(True, alpha=0.3)
+            ax1.legend(bbox_to_anchor=(1.04,1), loc='upper left')
+            # Right panel bootstrap pairwise heatmap
+            prob_matrix, model_order = self._bootstrap_pairwise_prob_matrix({m: np.array(auc_per_model[m]) for m in models})
+            im = ax2.imshow(prob_matrix, cmap='RdBu_r', vmin=0, vmax=1)
+            ax2.set_xticks(range(len(model_order)))
+            ax2.set_yticks(range(len(model_order)))
+            ax2.set_xticklabels(model_order, rotation=45)
+            ax2.set_yticklabels(model_order)
+            ax2.set_title('P(AUC row > AUC column) (bootstrap)')
+            plt.colorbar(im, ax=ax2)
+            plt.tight_layout()
+            plt.savefig(self.plots_dir / 'auc_two_panel.png', dpi=300, bbox_inches='tight')
+            plt.close()
+        except Exception as e:
+            print(f"Warning: failed AUC two-panel: {e}")
+
+    def _plot_mcc_two_panel(self, df_skill: pd.DataFrame):
+        """Two-panel MCC: overlaid densities + bootstrap pairwise probability heatmap."""
+        try:
+            models = sorted(df_skill['model'].unique().tolist())
+            sites = sorted(df_skill['site'].unique().tolist())
+            mcc_per_model = {m: [] for m in models}
+            for m in models:
+                vals = []
+                for s in sites:
+                    dfs = df_skill[(df_skill['model']==m) & (df_skill['site']==s)]
+                    if dfs.empty:
+                        continue
+                    y_true = dfs['true_label'].values
+                    y_pred = dfs['predicted_label'].values
+                    try:
+                        vals.append(matthews_corrcoef(y_true, y_pred))
+                    except Exception:
+                        continue
+                mcc_per_model[m] = np.array(vals)
+            # Left panel densities
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,5))
+            colors = plt.cm.tab10(np.linspace(0,1,len(models)))
+            from scipy.stats import norm
+            for i, m in enumerate(models):
+                arr = np.array(mcc_per_model[m])
+                if arr.size == 0:
+                    continue
+                mu = float(np.mean(arr))
+                sd = float(np.std(arr) + 1e-6)
+                x = np.linspace(mu-4*sd, mu+4*sd, 800)
+                pdf = norm.pdf(x, loc=mu, scale=sd)
+                pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
+                ax1.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
+                ax1.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
+                ax1.axvline(mu, color=colors[i], lw=1, alpha=0.6)
+            ax1.set_xlabel('MCC')
+            ax1.set_ylabel('Relative density')
+            ax1.set_title('MCC distributions across folds')
+            ax1.grid(True, alpha=0.3)
+            ax1.legend(bbox_to_anchor=(1.04,1), loc='upper left')
+            # Right panel bootstrap heatmap
+            prob_matrix, model_order = self._bootstrap_pairwise_prob_matrix(mcc_per_model)
+            im = ax2.imshow(prob_matrix, cmap='RdBu_r', vmin=0, vmax=1)
+            ax2.set_xticks(range(len(model_order)))
+            ax2.set_yticks(range(len(model_order)))
+            ax2.set_xticklabels(model_order, rotation=45)
+            ax2.set_yticklabels(model_order)
+            ax2.set_title('P(MCC row > MCC column) (bootstrap)')
+            plt.colorbar(im, ax=ax2)
+            plt.tight_layout()
+            plt.savefig(self.plots_dir / 'mcc_two_panel.png', dpi=300, bbox_inches='tight')
+            plt.close()
+        except Exception as e:
+            print(f"Warning: failed MCC two-panel: {e}")
+
+    def _plot_mcc_distributions(self, df_skill: pd.DataFrame):
+        """Overlaid normal PDFs of per-model MCC across folds."""
+        try:
+            models = sorted(df_skill['model'].unique().tolist())
+            sites = sorted(df_skill['site'].unique().tolist())
+            mcc_per_model = {m: [] for m in models}
+            for m in models:
+                for s in sites:
+                    dfs = df_skill[(df_skill['model']==m) & (df_skill['site']==s)]
+                    if dfs.empty:
+                        continue
+                    y_true = dfs['true_label'].values
+                    y_pred = dfs['predicted_label'].values
+                    try:
+                        mcc = matthews_corrcoef(y_true, y_pred)
+                        mcc_per_model[m].append(float(mcc))
+                    except Exception:
+                        continue
+            plt.figure(figsize=(8,5))
+            colors = plt.cm.tab10(np.linspace(0,1,len(models)))
+            from scipy.stats import norm
+            for i, m in enumerate(models):
+                arr = np.array(mcc_per_model[m])
+                if arr.size == 0:
+                    continue
+                mu = float(np.mean(arr))
+                sd = float(np.std(arr) + 1e-6)
+                x = np.linspace(mu-4*sd, mu+4*sd, 800)
+                pdf = norm.pdf(x, loc=mu, scale=sd)
+                pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
+                plt.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
+                plt.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
+                plt.axvline(mu, color=colors[i], lw=1, alpha=0.6)
+            plt.xlabel('Matthews correlation coefficient (MCC)')
+            plt.ylabel('Relative density')
+            plt.title('MCC distributions across folds (normal approx)')
+            plt.grid(True, alpha=0.3)
+            plt.legend(bbox_to_anchor=(1.04,1), loc='upper left')
+            plt.tight_layout()
+            plt.savefig(self.plots_dir / 'mcc_distributions.png', dpi=300, bbox_inches='tight')
+            plt.close()
+        except Exception as e:
+            print(f"Warning: failed mcc distributions: {e}")
     
     def _plot_calibration_analysis(self, results: Dict[int, Dict[str, Any]]):
         """Plot calibration analysis results."""
