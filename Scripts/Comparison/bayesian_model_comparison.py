@@ -136,6 +136,11 @@ class BayesianModelComparison:
         
         print(f"Loaded data for {len(set(d.model for d in model_data))} models, {len(model_data)} folds total")
         return model_data
+
+    # ---- helpers ----
+    def _normal_pdf(self, x: np.ndarray, mu: float, sd: float) -> np.ndarray:
+        sd = max(float(sd), 1e-6)
+        return (1.0 / (sd * np.sqrt(2*np.pi))) * np.exp(-0.5 * ((x - mu)/sd)**2)
     
     def _discover_model_dirs(self, run_dir: Path) -> Dict[str, Path]:
         """Find model subdirectories containing run summaries."""
@@ -734,6 +739,9 @@ class BayesianModelComparison:
                 self._plot_mcc_distributions(data_dict['skill'])
                 # Two-panel MCC with bootstrap pairwise probabilities
                 self._plot_mcc_two_panel(data_dict['skill'])
+            # g) One-vs-rest per-class ACC and AUC (AD/PD/CN vs rest)
+            if 'skill' in data_dict and 'auc' in data_dict and not data_dict['skill'].empty and not data_dict['auc'].empty:
+                self._plot_ovr_acc_auc(data_dict['skill'], data_dict['auc'])
         except Exception as e:
             print(f"Warning: Failed to create publication plots: {e}")
     
@@ -1327,6 +1335,58 @@ class BayesianModelComparison:
             plt.close()
         except Exception as e:
             print(f"Warning: failed ensemble weights plot: {e}")
+
+    def _plot_ovr_acc_auc(self, df_skill: pd.DataFrame, df_auc: pd.DataFrame):
+        """Create six plots: for each class (0,1,2), show ACC vs rest and AUC vs rest across models.
+        Saves: ovr_acc_class_{c}.png and ovr_auc_class_{c}.png"""
+        try:
+            models = sorted(df_skill['model'].unique().tolist())
+            classes = sorted(df_auc['class'].unique().tolist())
+            # ACC (one-vs-rest): accuracy of detecting class c vs others
+            for c in classes:
+                acc_values = []
+                for m in models:
+                    dfs = df_skill[df_skill['model']==m]
+                    if dfs.empty:
+                        acc_values.append(np.nan)
+                        continue
+                    y_true = (dfs['true_label'].values == c).astype(int)
+                    y_pred = (dfs['predicted_label'].values == c).astype(int)
+                    acc = accuracy_score(y_true, y_pred)
+                    acc_values.append(acc)
+                plt.figure(figsize=(6,4))
+                sns.barplot(x=models, y=acc_values)
+                plt.ylabel('Accuracy (one-vs-rest)')
+                plt.xlabel('Model')
+                plt.title(f'ACC: Class {c} vs rest')
+                plt.xticks(rotation=20)
+                plt.ylim(0,1)
+                plt.grid(True, axis='y', alpha=0.3)
+                plt.tight_layout()
+                plt.savefig(self.plots_dir / f'ovr_acc_class_{c}.png', dpi=300, bbox_inches='tight')
+                plt.close()
+            # AUC (one-vs-rest): from df_auc
+            for c in classes:
+                auc_values = []
+                for m in models:
+                    dmc = df_auc[(df_auc['model']==m) & (df_auc['class']==c)]
+                    if dmc.empty:
+                        auc_values.append(np.nan)
+                        continue
+                    auc_values.append(roc_auc_score(dmc['y'].values, dmc['score'].values))
+                plt.figure(figsize=(6,4))
+                sns.barplot(x=models, y=auc_values)
+                plt.ylabel('AUC (one-vs-rest)')
+                plt.xlabel('Model')
+                plt.title(f'AUC: Class {c} vs rest')
+                plt.xticks(rotation=20)
+                plt.ylim(0,1)
+                plt.grid(True, axis='y', alpha=0.3)
+                plt.tight_layout()
+                plt.savefig(self.plots_dir / f'ovr_auc_class_{c}.png', dpi=300, bbox_inches='tight')
+                plt.close()
+        except Exception as e:
+            print(f"Warning: failed OVR acc/auc plots: {e}")
     
     def save_results(self, results: BayesianResults, data_dict: Dict[str, pd.DataFrame]):
         """Save all results to files."""
