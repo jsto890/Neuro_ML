@@ -1,4 +1,4 @@
-# scripts/train_pet.py
+# scripts/train_spect.py
 
 import os
 import argparse
@@ -23,26 +23,76 @@ import math
 
 from dataset import SPECTDataset
 from models_spect import Simple3DCNN, get_3d_model
-
-# Optional: MONAI transforms (only if installed)
-try:
-    from monai.transforms import (
-        Compose,
-        RandFlipd,
-        RandRotate90d,
-        RandGaussianNoised,
-        RandAffined,
-        RandZoomd,
-        RandShiftIntensityd,
-    )
-    MONAI_AVAILABLE = True
-except Exception:
-    MONAI_AVAILABLE = False
 from evaluate_model import evaluate_model, calculate_metrics, create_evaluation_plots
 
 # Set style for plots
 plt.style.use('default')
 sns.set_palette("husl")
+
+def get_train_transform(args):
+    """MRI-style light 3D augmentations on tensors [1, D, H, W].
+    Uses MONAI if available; otherwise falls back to intensity-only jitters.
+    """
+    transforms = []
+    augmentation_info = []
+
+    try:
+        from monai.transforms import Compose, RandAffine, RandBiasField, RandGaussianNoise, RandAdjustContrast
+
+        def monai_transform(x: torch.Tensor) -> torch.Tensor:
+            x_m = x.permute(0, 2, 3, 1)
+            t = Compose([
+                RandAffine(prob=0.5, rotate_range=(
+                    math.radians(5.0), math.radians(5.0), math.radians(5.0)
+                ), scale_range=(0.05, 0.05, 0.05), mode="bilinear"),
+                RandBiasField(prob=0.3, coeff_range=(0.0, 0.3)),
+                RandAdjustContrast(prob=0.5, gamma=(0.9, 1.1)),
+                RandGaussianNoise(prob=0.3, mean=0.0, std=0.02),
+            ])
+            x_m = t(x_m)
+            x = x_m.permute(0, 3, 1, 2)
+            return x
+
+        transforms.append(monai_transform)
+        augmentation_info.append("MONAI spatial transforms (affine, bias field, contrast, noise)")
+        print(f"[AUGMENTATION] Using MONAI transforms: RandAffine, RandBiasField, RandAdjustContrast, RandGaussianNoise")
+    except Exception as e:
+        print(f"[AUGMENTATION] MONAI not available ({e}), falling back to basic transforms")
+
+        def intensity_jitter(x: torch.Tensor) -> torch.Tensor:
+            b = float(torch.empty(1).uniform_(-0.05, 0.05))
+            c = float(torch.empty(1).uniform_(0.95, 1.05))
+            x = x * c + b
+            return x
+
+        def gaussian_noise(x: torch.Tensor) -> torch.Tensor:
+            std = 0.02
+            noise = torch.randn_like(x) * std
+            return x + noise
+
+        transforms.extend([intensity_jitter, gaussian_noise])
+        augmentation_info.extend(["Intensity jitter (±5% brightness, ±5% contrast)", "Gaussian noise (σ=0.02)"])
+
+    augmentation_stats = {
+        'applied_count': 0,
+        'total_count': 0,
+        'mean_diff': 0.0,
+        'std_diff': 0.0
+    }
+
+    def apply_all(x: torch.Tensor) -> torch.Tensor:
+        original_x = x.clone()
+        augmentation_stats['total_count'] += 1
+        for t in transforms:
+            x = t(x)
+        diff = torch.abs(x - original_x).mean().item()
+        augmentation_stats['applied_count'] += 1
+        augmentation_stats['mean_diff'] = (augmentation_stats['mean_diff'] * (augmentation_stats['applied_count'] - 1) + diff) / augmentation_stats['applied_count']
+        return x
+
+    apply_all.augmentation_info = augmentation_info
+    apply_all.augmentation_stats = augmentation_stats
+    return apply_all
 
 def compute_summary_stats(values):
     """Compute mean, std, 95% CI, min, max, range for a list of numeric values."""
@@ -1569,41 +1619,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             test_df.to_csv(temp_test_csv, index=False)
             temp_files_this_run.extend([temp_train_csv, temp_val_csv, temp_test_csv])
 
-            # Build optional MONAI transforms for training
-            train_transform = None
-            if MONAI_AVAILABLE and (args.aug_flip or args.aug_rot90 or args.aug_noise or args.aug_rotate_deg > 0 or args.aug_zoom > 0 or args.aug_shift > 0):
-                tfms = []
-                # Apply spatial/intensity transforms on channel-first 3D tensor
-                # We use dict transforms with key 'img' for simple wrapping
-                if args.aug_flip:
-                    tfms.append(RandFlipd(keys=['img'], prob=0.5, spatial_axis=[0]))
-                    tfms.append(RandFlipd(keys=['img'], prob=0.5, spatial_axis=[1]))
-                    tfms.append(RandFlipd(keys=['img'], prob=0.5, spatial_axis=[2]))
-                if args.aug_rot90:
-                    tfms.append(RandRotate90d(keys=['img'], prob=0.5, max_k=3))
-                # Small-angle rotation
-                if args.aug_rotate_deg and args.aug_rotate_deg > 0:
-                    # RandAffined expects radians if using rotate_params, we pass degrees via rotate_range in radians
-                    import math
-                    r = math.radians(float(args.aug_rotate_deg))
-                    tfms.append(RandAffined(keys=['img'], prob=0.5, rotate_range=(r, r, r), mode='bilinear', padding_mode='zeros'))
-                if args.aug_zoom and args.aug_zoom > 0:
-                    m = float(args.aug_zoom)
-                    tfms.append(RandZoomd(keys=['img'], prob=0.5, min_zoom=1.0 - m, max_zoom=1.0 + m, mode='trilinear', align_corners=False))
-                if args.aug_shift and args.aug_shift > 0:
-                    tfms.append(RandShiftIntensityd(keys=['img'], offsets=float(args.aug_shift), prob=0.5))
-                if args.aug_noise:
-                    tfms.append(RandGaussianNoised(keys=['img'], prob=0.25, mean=0.0, std=float(args.aug_noise_std)))
-
-                monai_compose = Compose(tfms) if tfms else None
-
-                # Wrap to accept/return tensors directly
-                def _apply_monai(t):
-                    d = {'img': t}
-                    d = monai_compose(d)
-                    return d['img']
-
-                train_transform = _apply_monai if monai_compose is not None else None
+            # Build optional augmentations using MRI-style light transforms
+            train_transform = get_train_transform(args) if getattr(args, 'enable_augment', False) else None
 
             # Datasets and loaders
             train_dataset = SPECTDataset(csv_path=temp_train_csv, data_root=args.data_root, transform=train_transform)
@@ -2467,14 +2484,9 @@ def main():
     parser.add_argument("--use_temperature_scaling", action='store_true', default=True,
                         help="Enable temperature scaling for multiclass calibration (improves accuracy by 2-5%)")
     
-    # Augmentation arguments
-    parser.add_argument("--aug_flip", action='store_true', default=False, help="Enable random flips (monai)")
-    parser.add_argument("--aug_rot90", action='store_true', default=False, help="Enable random 90-degree rotations (strong)")
-    parser.add_argument("--aug_rotate_deg", type=float, default=0.0, help="Enable small random rotation in degrees (e.g., 5)")
-    parser.add_argument("--aug_zoom", type=float, default=0.0, help="Random zoom magnitude (e.g., 0.05 gives [0.95,1.05])")
-    parser.add_argument("--aug_shift", type=float, default=0.0, help="Random intensity shift magnitude (e.g., 0.05)")
-    parser.add_argument("--aug_noise", action='store_true', default=False, help="Enable random gaussian noise")
-    parser.add_argument("--aug_noise_std", type=float, default=0.02, help="Std for gaussian noise if enabled (default 0.02)")
+    # Augmentation arguments (MRI-style light augmentations)
+    parser.add_argument("--enable_augment", action='store_true', default=False,
+                        help="Enable light 3D augmentations on training data")
 
     # Sampling/balancing arguments
     parser.add_argument("--weighted_sampler", action='store_true', default=True,

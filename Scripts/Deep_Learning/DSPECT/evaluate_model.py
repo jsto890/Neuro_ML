@@ -27,7 +27,7 @@ from sklearn.calibration import calibration_curve
 from scipy.optimize import minimize_scalar
 
 from dataset import SPECTDataset
-from models_spect import Simple3DCNN
+from models_spect import Simple3DCNN, get_3d_model
 
 # Set style for plots
 plt.style.use('default')
@@ -179,39 +179,46 @@ def evaluate_model_with_temperature_scaling(model, test_loader, device, val_load
     
     return np.array(all_predictions), np.array(all_probabilities), np.array(all_labels), temperature_info
 
-def load_model(model_path, num_classes=2, device='cpu'):
-    """Load a trained SPECT Simple3DCNN model from .pth file (robust to classifier layout)."""
-    model = Simple3DCNN(num_classes=num_classes)
-
-    # Load the state dict
+def load_model(model_path, num_classes=2, device='cpu', model_name=None):
+    """Load a trained model with auto-detected architecture (MRI-style)."""
     state_dict = torch.load(model_path, map_location=device)
 
-    # Find first Linear layer index in classifier
-    linear_indices = [i for i, m in enumerate(model.classifier) if isinstance(m, nn.Linear)]
-    if not linear_indices:
-        raise RuntimeError("Simple3DCNN classifier contains no Linear layers")
-    first_linear_idx = linear_indices[0]
-
-    # Determine classifier weight key in state dict
-    candidate_key = f'classifier.{first_linear_idx}.weight'
-    if candidate_key not in state_dict:
-        # Fallback to legacy position 0 if present
+    if model_name is None:
         if 'classifier.0.weight' in state_dict:
-            candidate_key = 'classifier.0.weight'
+            model_name = "Simple3DCNN"
+        elif '_fc.weight' in state_dict:
+            model_name = "EfficientNetB0_3D"
+        elif 'backbone' in state_dict:
+            model_name = "ResNet18_3D"
+        elif 'transformer' in state_dict:
+            model_name = "VisionTransformer3D"
+        elif any('swin' in k for k in state_dict.keys()):
+            model_name = "SwinUNETRClassifier"
         else:
-            # Try to find any classifier.*.weight present
-            cls_keys = [k for k in state_dict.keys() if k.startswith('classifier.') and k.endswith('.weight')]
-            if not cls_keys:
-                raise RuntimeError("Could not find classifier weight tensor in state dict")
-            candidate_key = sorted(cls_keys)[0]
+            model_name = "Simple3DCNN"
 
-    actual_input_size = state_dict[candidate_key].shape[1]
+    print(f"Detected/using model type: {model_name}")
 
-    # Replace the first Linear layer with correct in_features
-    current_out = model.classifier[first_linear_idx].out_features
-    model.classifier[first_linear_idx] = nn.Linear(actual_input_size, current_out)
+    if model_name == "Simple3DCNN":
+        model = Simple3DCNN(num_classes=num_classes)
+        # Determine correct in_features for first Linear
+        classifier_weight_keys = [k for k in state_dict.keys() if k.startswith('classifier.') and k.endswith('.weight')]
+        if classifier_weight_keys:
+            candidate_key = sorted(classifier_weight_keys)[0]
+            actual_input_size = state_dict[candidate_key].shape[1]
+            # Find first Linear index in model.classifier
+            linear_indices = [i for i, m in enumerate(model.classifier) if isinstance(m, nn.Linear)]
+            first_linear_idx = linear_indices[0]
+            current_out = model.classifier[first_linear_idx].out_features
+            model.classifier[first_linear_idx] = nn.Linear(actual_input_size, current_out)
+    else:
+        # Create non-simple variants via factory
+        try:
+            model = get_3d_model(model_name, num_classes=num_classes, in_channels=1)
+        except Exception:
+            print(f"Unknown/unsupported model {model_name} for DSPECT, falling back to Simple3DCNN")
+            model = Simple3DCNN(num_classes=num_classes)
 
-    # Load the state dict
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
@@ -585,12 +592,14 @@ def main():
                         help="Whether to apply temperature scaling for multiclass calibration")
     parser.add_argument("--val_csv", type=str,
                         help="Path to validation labels CSV file for temperature scaling (required if --use_temperature_scaling is True)")
+    parser.add_argument("--model_name", type=str, default=None,
+                        help="Model name (e.g., EfficientNetB0_3D, Simple3DCNN). If not provided, will be auto-detected.")
     
     args = parser.parse_args()
     
     # Load model
     print(f"Loading model from: {args.model_path}")
-    model = load_model(args.model_path, args.num_classes, args.device)
+    model = load_model(args.model_path, args.num_classes, args.device, model_name=args.model_name)
     
     # Create test dataset
     print(f"Loading test data from: {args.test_csv}")
