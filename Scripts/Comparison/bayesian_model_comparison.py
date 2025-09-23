@@ -143,6 +143,43 @@ class BayesianModelComparison:
     def _normal_pdf(self, x: np.ndarray, mu: float, sd: float) -> np.ndarray:
         sd = max(float(sd), 1e-6)
         return (1.0 / (sd * np.sqrt(2*np.pi))) * np.exp(-0.5 * ((x - mu)/sd)**2)
+
+    def _fit_beta_from_samples(self, arr: np.ndarray) -> Tuple[float, float]:
+        """Fit Beta(alpha,beta) by method of moments from samples in (0,1)."""
+        eps = 1e-6
+        arr = np.asarray(arr)
+        arr = np.clip(arr, eps, 1 - eps)
+        m = float(np.mean(arr))
+        v = float(np.var(arr))
+        # Guard against degenerate variance
+        if v <= 0:
+            # Highly concentrated at m; pick large concentration
+            k = 1000.0
+            alpha = max(eps, m * k)
+            beta = max(eps, (1 - m) * k)
+            return alpha, beta
+        # Ensure variance feasible for Beta: v < m(1-m)
+        max_v = m * (1 - m) - eps
+        if v >= max_v and max_v > eps:
+            v = max_v
+        k = (m * (1 - m)) / v - 1.0
+        if k <= 0:
+            # fallback to moderate concentration
+            k = 10.0
+        alpha = max(eps, m * k)
+        beta = max(eps, (1 - m) * k)
+        return alpha, beta
+
+    def _beta_pdf(self, x: np.ndarray, alpha: float, beta: float) -> np.ndarray:
+        eps = 1e-9
+        x = np.clip(x, eps, 1 - eps)
+        a = max(alpha, eps)
+        b = max(beta, eps)
+        # Compute in log-space for stability: pdf = x^(a-1) * (1-x)^(b-1) / B(a,b)
+        from math import lgamma
+        log_B = lgamma(a) + lgamma(b) - lgamma(a + b)
+        log_pdf = (a - 1) * np.log(x) + (b - 1) * np.log(1 - x) - log_B
+        return np.exp(log_pdf)
     
     def _discover_model_dirs(self, run_dir: Path) -> Dict[str, Path]:
         """Find model subdirectories containing run summaries."""
@@ -761,7 +798,7 @@ class BayesianModelComparison:
         fig, axes = plt.subplots(1, 2, figsize=(15, 6))
         ax1, ax2 = axes[0], axes[1]
         
-        # Overlaid normal distributions on a single shared axis for easier comparison
+        # Overlaid Beta distributions (fitted) on a single shared axis for easier comparison
         models = results['models']
         means = results['accuracy_means']
         ci_lower = results['accuracy_ci_lower']
@@ -773,20 +810,22 @@ class BayesianModelComparison:
             x_max = min(1.0, float(np.max(ci_upper) + 0.05))
             x = np.linspace(x_min, x_max, 1000)
             colors = plt.cm.tab10(np.linspace(0, 1, len(models)))
-            from scipy.stats import norm
             for i, model in enumerate(models):
-                mu = float(means[i])
-                sd = float((ci_upper[i] - ci_lower[i]) / (2*1.96))
-                sd = max(sd, 1e-3)
-                pdf = norm.pdf(x, loc=mu, scale=sd)
-                pdf = pdf / np.max(pdf)  # normalize each curve height to 1
-                ax1.plot(x, pdf, color=colors[i], lw=2, label=model)
-                ax1.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
-                # mean marker
-                ax1.axvline(mu, color=colors[i], lw=1, alpha=0.6)
+                # Fit Beta from posterior samples for this model
+                samples = results.get('accuracy_samples', None)
+                if samples is not None and isinstance(samples, np.ndarray) and samples.shape[1] == len(models):
+                    arr = samples[:, i]
+                    alpha, beta = self._fit_beta_from_samples(arr)
+                    pdf = self._beta_pdf(x, alpha, beta)
+                    pdf = pdf / np.max(pdf)
+                    ax1.plot(x, pdf, color=colors[i], lw=2, label=model)
+                    ax1.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
+                    # mean marker
+                    mu = float(np.mean(arr))
+                    ax1.axvline(mu, color=colors[i], lw=1, alpha=0.6)
             ax1.set_xlabel('Accuracy')
             ax1.set_ylabel('Relative density')
-            ax1.set_title('Model accuracy normal distributions')
+            ax1.set_title('Model accuracy Beta distributions (from posterior)')
             ax1.grid(True, alpha=0.3)
             ax1.legend(title='Models', bbox_to_anchor=(1.04, 1), loc='upper left')
         except Exception as e:
@@ -846,29 +885,24 @@ class BayesianModelComparison:
                         auc_per_model[m].append(float(np.mean(auc_vals)))
                 except Exception:
                     continue
-            # Prepare distributions
+            # Prepare distributions (fit Beta per model over fold-wise AUCs)
             plt.figure(figsize=(8,5))
             colors = plt.cm.tab10(np.linspace(0,1,len(models)))
-            from scipy.stats import norm
-            # compute mean/std per model
-            all_means = []
-            all_lowers = []
-            all_uppers = []
             for i, m in enumerate(models):
                 arr = np.array(auc_per_model[m])
                 if arr.size == 0:
                     continue
-                mu = float(np.mean(arr))
-                sd = float(np.std(arr) + 1e-6)
-                x = np.linspace(max(0.0, mu-4*sd), min(1.0, mu+4*sd), 800)
-                pdf = norm.pdf(x, loc=mu, scale=sd)
+                alpha, beta = self._fit_beta_from_samples(arr)
+                # dynamic x-range focus but include tails
+                x = np.linspace(0.0, 1.0, 800)
+                pdf = self._beta_pdf(x, alpha, beta)
                 pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
                 plt.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
                 plt.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
-                plt.axvline(mu, color=colors[i], lw=1, alpha=0.6)
+                plt.axvline(float(np.mean(arr)), color=colors[i], lw=1, alpha=0.6)
             plt.xlabel('Macro AUC (one-vs-rest)')
             plt.ylabel('Relative density')
-            plt.title('AUC distributions across folds (normal approx)')
+            plt.title('AUC distributions across folds (Beta fit)')
             plt.grid(True, alpha=0.3)
             plt.legend(bbox_to_anchor=(1.04,1), loc='upper left')
             plt.tight_layout()
@@ -919,22 +953,20 @@ class BayesianModelComparison:
             # Left panel densities
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,5))
             colors = plt.cm.tab10(np.linspace(0,1,len(models)))
-            from scipy.stats import norm
             for i, m in enumerate(models):
                 arr = np.array(auc_per_model[m])
                 if arr.size == 0:
                     continue
-                mu = float(np.mean(arr))
-                sd = float(np.std(arr) + 1e-6)
-                x = np.linspace(max(0.0, mu-4*sd), min(1.0, mu+4*sd), 800)
-                pdf = norm.pdf(x, loc=mu, scale=sd)
+                alpha, beta = self._fit_beta_from_samples(arr)
+                x = np.linspace(0.0, 1.0, 800)
+                pdf = self._beta_pdf(x, alpha, beta)
                 pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
                 ax1.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
                 ax1.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
-                ax1.axvline(mu, color=colors[i], lw=1, alpha=0.6)
+                ax1.axvline(float(np.mean(arr)), color=colors[i], lw=1, alpha=0.6)
             ax1.set_xlabel('Macro AUC (one-vs-rest)')
             ax1.set_ylabel('Relative density')
-            ax1.set_title('AUC distributions across folds')
+            ax1.set_title('AUC distributions across folds (Beta fit)')
             ax1.grid(True, alpha=0.3)
             ax1.legend(bbox_to_anchor=(1.04,1), loc='upper left')
             # Right panel bootstrap pairwise heatmap
@@ -974,22 +1006,24 @@ class BayesianModelComparison:
             # Left panel densities
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,5))
             colors = plt.cm.tab10(np.linspace(0,1,len(models)))
-            from scipy.stats import norm
             for i, m in enumerate(models):
                 arr = np.array(mcc_per_model[m])
                 if arr.size == 0:
                     continue
-                mu = float(np.mean(arr))
-                sd = float(np.std(arr) + 1e-6)
-                x = np.linspace(mu-4*sd, mu+4*sd, 800)
-                pdf = norm.pdf(x, loc=mu, scale=sd)
+                # Transform MCC (-1,1) to (0,1) via (x+1)/2 to fit Beta
+                arr01 = (arr + 1.0) / 2.0
+                alpha, beta = self._fit_beta_from_samples(arr01)
+                x = np.linspace(0.0, 1.0, 800)
+                pdf = self._beta_pdf(x, alpha, beta)
                 pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
-                ax1.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
-                ax1.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
-                ax1.axvline(mu, color=colors[i], lw=1, alpha=0.6)
+                # map back x to MCC axis
+                x_mcc = x*2.0 - 1.0
+                ax1.plot(x_mcc, pdf, color=colors[i], lw=2, label=f"{m}")
+                ax1.fill_between(x_mcc, 0, pdf, color=colors[i], alpha=0.08)
+                ax1.axvline(float(np.mean(arr)), color=colors[i], lw=1, alpha=0.6)
             ax1.set_xlabel('MCC')
             ax1.set_ylabel('Relative density')
-            ax1.set_title('MCC distributions across folds')
+            ax1.set_title('MCC distributions across folds (Beta fit via transform)')
             ax1.grid(True, alpha=0.3)
             ax1.legend(bbox_to_anchor=(1.04,1), loc='upper left')
             # Right panel bootstrap heatmap
