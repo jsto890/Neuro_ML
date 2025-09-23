@@ -829,6 +829,8 @@ def main():
     parser.add_argument('--sg-noise-std', type=float, default=0.1, help='SmoothGrad noise std (fraction of in-mask intensity std)')
     parser.add_argument('--ig-steps', type=int, default=64, help='Integrated Gradients steps (64=fast, 128=HQ)')
     parser.add_argument('--ig-baseline', type=str, default='zeros', choices=['zeros', 'mean'], help='Integrated Gradients baseline type')
+    # Probability shaping
+    parser.add_argument('--temperature', type=float, default=1.0, help='Softmax temperature for logits before risk adjustment (T<1 sharpens, T>1 flattens)')
 
     args = parser.parse_args()
 
@@ -921,6 +923,29 @@ def main():
             use_amp=bool(args.amp), device_str=device
         )
         pred_idx = int(np.argmax(probs))
+
+    # Optional temperature scaling on logits to sharpen/flatten probabilities
+    try:
+        T = float(args.temperature)
+    except Exception:
+        T = 1.0
+    if T != 1.0:
+        try:
+            if isinstance(logits, torch.Tensor):
+                with torch.no_grad():
+                    probs_t = F.softmax(logits / T, dim=1)
+                probs = probs_t.squeeze(0).cpu().numpy()
+                pred_idx = int(np.argmax(probs))
+            else:
+                # Fallback: power transform on probs
+                p = np.asarray(probs, dtype=np.float32)
+                gamma = 1.0 / max(T, 1e-8)
+                p = np.power(np.maximum(p, 1e-12), gamma)
+                p = p / np.sum(p)
+                probs = p
+                pred_idx = int(np.argmax(probs))
+        except Exception:
+            pass
 
     # Raw prediction snapshot
     pred_name_raw = label_map.get(pred_idx, str(pred_idx))
@@ -1289,6 +1314,7 @@ def main():
         'architecture': args.model_arch,
         'weights': expand_path(args.weights),
         'image': expand_path(args.image),
+        'temperature': float(T),
         'prediction': {
             'label_index': pred_idx,
             'label_name': pred_name,
