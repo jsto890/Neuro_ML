@@ -1319,6 +1319,33 @@ def main():
     print(f"\n✓ Prediction: {pred_name} (conf {confidence:.3f})")
     print(f"✓ JSON report: {json_path}")
 
+    # Probability visualization (bar chart)
+    try:
+        labels = list(prob_dict.keys())
+        values = [prob_dict[k] for k in labels]
+        # Normalize values to sum 1 for display if risk weights modified
+        s = sum(values)
+        disp_vals = [v / s if s > 0 else 0.0 for v in values]
+
+        fig, ax = plt.subplots(figsize=(6, 4))
+        bars = ax.bar(labels, disp_vals, color=['#2ca02c' if l == 'CN' else '#1f77b4' if l == 'AD' else '#d62728' for l in labels])
+        ax.set_ylim(0.0, 1.0)
+        ax.set_ylabel('Probability')
+        ax.set_title(f"{sid} • Prediction: {pred_name} ({confidence:.0%})")
+        for rect, v in zip(bars, disp_vals):
+            ax.annotate(f"{v*100:.0f}%",
+                        xy=(rect.get_x() + rect.get_width() / 2, v),
+                        xytext=(0, 3),
+                        textcoords="offset points",
+                        ha='center', va='bottom', fontsize=9)
+        fig.tight_layout()
+        prob_png = out_dir / f"{sid}_probabilities.png"
+        plt.savefig(str(prob_png), dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f"✓ Probabilities plot: {prob_png}")
+    except Exception as _e:
+        print(f"Warning: failed to save probabilities plot: {_e}")
+
     # Also export a simple text error log if any errors occurred
     if any(len(v) > 0 for v in interpret_errors.values()):
         log_path = out_dir / f"{sid}_interpretability_errors.log"
