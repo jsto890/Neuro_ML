@@ -309,7 +309,7 @@ def calculate_metrics(predictions, probabilities, labels):
         'classification_report': report
     }
 
-def create_evaluation_plots(predictions, probabilities, labels, metrics, output_dir):
+def create_evaluation_plots(predictions, probabilities, labels, metrics, output_dir, model_name="Unknown", image_type="PET"):
     """Create comprehensive evaluation plots."""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -337,7 +337,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         # For multiclass, we need more space for ROC curves
         fig, axes = plt.subplots(3, 3, figsize=(20, 18))
     
-    fig.suptitle('Model Evaluation Results - Disease Classification', fontsize=16, fontweight='bold')
+    fig.suptitle(f'{model_name} Model Evaluation Results - {image_type} Disease Classification', fontsize=16, fontweight='bold')
     
     # 1. ROC Curve
     ax1 = axes[0, 0]
