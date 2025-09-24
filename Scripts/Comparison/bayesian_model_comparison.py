@@ -40,6 +40,8 @@ from sklearn.metrics import (
     confusion_matrix, classification_report, precision_recall_curve, average_precision_score,
     matthews_corrcoef
 )
+from statsmodels.stats.contingency_tables import mcnemar, cochrans_q
+from statsmodels.stats.multitest import multipletests
 
 # Suppress PyMC warnings
 import warnings
@@ -781,6 +783,9 @@ class BayesianModelComparison:
             # g) One-vs-rest per-class ACC and AUC (AD/PD/CN vs rest)
             if 'skill' in data_dict and 'auc' in data_dict and not data_dict['skill'].empty and not data_dict['auc'].empty:
                 self._plot_ovr_acc_auc(data_dict['skill'], data_dict['auc'])
+            # h) Frequentist significance tests and calibration metrics
+            if 'auc' in data_dict and not data_dict['auc'].empty and 'skill' in data_dict and not data_dict['skill'].empty:
+                self._run_frequentist_comparisons(data_dict['auc'], data_dict['skill'])
         except Exception as e:
             print(f"Warning: Failed to create publication plots: {e}")
     
@@ -1371,6 +1376,217 @@ class BayesianModelComparison:
             plt.close()
         except Exception as e:
             print(f"Warning: failed ensemble weights plot: {e}")
+
+    def _run_frequentist_comparisons(self, df_auc: pd.DataFrame, df_skill: pd.DataFrame):
+        """Run DeLong-like bootstrap for AUC, Cochran's Q + McNemar for ACC, and compute Brier/ECE + reliability curves."""
+        try:
+            out_dir = self.results_dir
+            models = sorted(df_skill['model'].unique().tolist())
+            classes = sorted(df_auc['class'].unique().tolist())
+
+            # 1) Accuracy: Cochran's Q (omnibus) + McNemar pairwise
+            # Build per-subject correctness matrix per model
+            # We align by subject_id across models
+            pivot = df_skill.pivot_table(index='subject_id', columns='model', values='correct', aggfunc='first')
+            pivot = pivot[models].dropna()
+            # Cochran's Q test
+            try:
+                q_stat, q_p = cochrans_q(pivot.values)
+            except Exception as e:
+                q_stat, q_p = np.nan, np.nan
+            # Pairwise McNemar
+            mcnemar_p = pd.DataFrame(index=models, columns=models, data=np.nan)
+            for i, a in enumerate(models):
+                for j, b in enumerate(models):
+                    if i >= j:
+                        continue
+                    a_correct = pivot[a].astype(int).values
+                    b_correct = pivot[b].astype(int).values
+                    # 2x2 of disagreements
+                    n01 = int(np.sum((a_correct == 0) & (b_correct == 1)))
+                    n10 = int(np.sum((a_correct == 1) & (b_correct == 0)))
+                    table = np.array([[0, n01],[n10, 0]])
+                    try:
+                        res = mcnemar(table, exact=False, correction=True)
+                        mcnemar_p.loc[a, b] = res.pvalue
+                        mcnemar_p.loc[b, a] = res.pvalue
+                    except Exception:
+                        pass
+            # Adjust p-values (Holm) for upper triangle
+            pvals = mcnemar_p.values[np.triu_indices(len(models), k=1)]
+            mask_valid = ~pd.isna(pvals)
+            adj = np.full_like(pvals, np.nan, dtype=float)
+            if np.any(mask_valid):
+                rej, p_adj, *_ = multipletests(pvals[mask_valid], method='holm')
+                adj[mask_valid] = p_adj
+            # Put back
+            k = 0
+            for i in range(len(models)):
+                for j in range(i+1, len(models)):
+                    if not np.isnan(pvals[k]):
+                        mcnemar_p.iloc[i, j] = adj[k]
+                        mcnemar_p.iloc[j, i] = adj[k]
+                    k += 1
+            # Save
+            pd.DataFrame({'Q_stat':[q_stat], 'Q_pvalue':[q_p]}).to_csv(out_dir / 'cochrans_q.csv', index=False)
+            mcnemar_p.to_csv(out_dir / 'mcnemar_pvalues_holm.csv')
+
+            # 2) AUC: bootstrap paired differences (DeLong alternative) per class and macro, with BH-FDR
+            def bootstrap_auc_diff(df_class: pd.DataFrame, a: str, b: str, B: int = 2000) -> float:
+                rng = np.random.default_rng(self.random_seed)
+                dfa = df_class[df_class['model']==a]
+                dfb = df_class[df_class['model']==b]
+                # align by subject_id
+                merged = dfa.merge(dfb, on=['subject_id'], suffixes=('_a','_b'))
+                y = merged['y_a'].values.astype(int)  # same as y_b
+                sa = merged['score_a'].values
+                sb = merged['score_b'].values
+                # observed diff
+                try:
+                    auc_a = roc_auc_score(y, sa)
+                    auc_b = roc_auc_score(y, sb)
+                except Exception:
+                    return np.nan
+                diff_obs = auc_a - auc_b
+                n = len(y)
+                if n < 10:
+                    return np.nan
+                diffs = np.empty(B)
+                for i in range(B):
+                    idx = rng.integers(0, n, n)
+                    try:
+                        diffs[i] = roc_auc_score(y[idx], sa[idx]) - roc_auc_score(y[idx], sb[idx])
+                    except Exception:
+                        diffs[i] = np.nan
+                diffs = diffs[~np.isnan(diffs)]
+                if diffs.size < 100:
+                    return np.nan
+                # two-sided p-value via percentile
+                p = 2 * min(np.mean(diffs >= diff_obs), np.mean(diffs <= diff_obs))
+                return p
+
+            # per-class p-value matrices
+            auc_p_mats = {}
+            for c in classes:
+                dfc = df_auc[df_auc['class']==c]
+                pmat = pd.DataFrame(index=models, columns=models, data=np.nan)
+                for i, a in enumerate(models):
+                    for j, b in enumerate(models):
+                        if i >= j:
+                            continue
+                        p = bootstrap_auc_diff(dfc, a, b)
+                        pmat.loc[a,b] = p
+                        pmat.loc[b,a] = p
+                # BH-FDR
+                pvals = pmat.values[np.triu_indices(len(models), k=1)]
+                mask_valid = ~pd.isna(pvals)
+                if np.any(mask_valid):
+                    _, p_adj, _, _ = multipletests(pvals[mask_valid], method='fdr_bh')
+                    k = 0
+                    for i in range(len(models)):
+                        for j in range(i+1, len(models)):
+                            if mask_valid[k]:
+                                pmat.iloc[i, j] = p_adj[np.sum(mask_valid[:k+1]) - 1]
+                                pmat.iloc[j, i] = pmat.iloc[i, j]
+                            k += 1
+                auc_p_mats[c] = pmat
+                pmat.to_csv(out_dir / f'delong_boot_pvalues_class_{c}.csv')
+
+            # Macro-AUC: average per subject across classes, then bootstrap
+            macro_p = pd.DataFrame(index=models, columns=models, data=np.nan)
+            # Build per-subject macro scores per model
+            for i, a in enumerate(models):
+                for j, b in enumerate(models):
+                    if i >= j:
+                        continue
+                    p_list = []
+                    for c in classes:
+                        p = bootstrap_auc_diff(df_auc[df_auc['class']==c], a, b)
+                        if not np.isnan(p):
+                            p_list.append(p)
+                    if p_list:
+                        macro_p.loc[a,b] = np.mean(p_list)
+                        macro_p.loc[b,a] = macro_p.loc[a,b]
+            # FDR
+            pvals = macro_p.values[np.triu_indices(len(models), k=1)]
+            mask_valid = ~pd.isna(pvals)
+            if np.any(mask_valid):
+                _, p_adj, _, _ = multipletests(pvals[mask_valid], method='fdr_bh')
+                k = 0
+                for i in range(len(models)):
+                    for j in range(i+1, len(models)):
+                        if mask_valid[k]:
+                            macro_p.iloc[i, j] = p_adj[np.sum(mask_valid[:k+1]) - 1]
+                            macro_p.iloc[j, i] = macro_p.iloc[i, j]
+                        k += 1
+            macro_p.to_csv(out_dir / 'delong_boot_pvalues_macro.csv')
+
+            # 3) Calibration: Brier, ECE, and reliability curves
+            # Build probability arrays per subject per model
+            # We need per-subject predicted probability of true class
+            # Reconstruct from auc df by taking score at each sample for class==true_label
+            # Easier: rebuild from model_data in main flow; here approximate using df_auc
+            calib_summary = []
+            for m in models:
+                # ECE with 15 bins
+                try:
+                    # Aggregate per subject best guess (max prob) and true
+                    dfm = df_auc[df_auc['model']==m]
+                    # For each subject, collect per-class scores and ground truth
+                    grp = dfm.groupby('subject_id')
+                    y_true = []
+                    p_true = []
+                    for sid, g in grp:
+                        # infer true label as class with y==1
+                        true_rows = g[g['y']==1]
+                        if true_rows.empty:
+                            continue
+                        c_true = int(true_rows['class'].iloc[0])
+                        # prob for true class
+                        p = float(g[g['class']==c_true]['score'].iloc[0])
+                        y_true.append(1)
+                        p_true.append(p)
+                    y_true = np.array(y_true)
+                    p_true = np.array(p_true)
+                    # Brier for positive class (one-vs-rest approximation)
+                    brier = float(np.mean((p_true - y_true)**2))
+                    # ECE
+                    bins = np.linspace(0,1,16)
+                    inds = np.digitize(p_true, bins) - 1
+                    ece = 0.0
+                    for b in range(len(bins)-1):
+                        mask = inds == b
+                        if not np.any(mask):
+                            continue
+                        conf = np.mean(p_true[mask])
+                        acc = np.mean(y_true[mask])
+                        ece += (np.sum(mask)/len(p_true)) * abs(acc - conf)
+                    calib_summary.append({'model': m, 'brier': brier, 'ece': float(ece)})
+                    # Reliability curve
+                    plt.figure(figsize=(4,4))
+                    # plot points per bin
+                    xs = []
+                    ys = []
+                    for b in range(len(bins)-1):
+                        mask = inds == b
+                        if not np.any(mask):
+                            continue
+                        xs.append(np.mean(p_true[mask]))
+                        ys.append(np.mean(y_true[mask]))
+                    plt.plot([0,1],[0,1], ls='--', c='gray')
+                    plt.plot(xs, ys, marker='o')
+                    plt.xlabel('Predicted probability')
+                    plt.ylabel('Observed frequency')
+                    plt.title(f'Reliability - {m}')
+                    plt.grid(True, alpha=0.3)
+                    plt.tight_layout()
+                    plt.savefig(self.plots_dir / f'reliability_{m}.png', dpi=300, bbox_inches='tight')
+                    plt.close()
+                except Exception:
+                    calib_summary.append({'model': m, 'brier': np.nan, 'ece': np.nan})
+            pd.DataFrame(calib_summary).to_csv(out_dir / 'calibration_summary.csv', index=False)
+        except Exception as e:
+            print(f"Warning: frequentist comparisons failed: {e}")
 
     def _plot_ovr_acc_auc(self, df_skill: pd.DataFrame, df_auc: pd.DataFrame):
         """Create two combined plots summarizing one-vs-rest ACC and AUC by model and class.
