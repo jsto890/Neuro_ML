@@ -748,21 +748,21 @@ def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title:
     D, H, W = anat.shape
     za, ya, xa = D // 2, H // 2, W // 2
     fig, axs = plt.subplots(1, 3, figsize=(12, 4))
-    axs[0].imshow(anat_n[za].T, cmap='gray', origin='lower')
-    axs[0].imshow(heat[za].T, cmap='hot', alpha=0.4, origin='lower')
+    axs[0].imshow(anat_n[za].T, cmap='gray', origin='lower', interpolation='nearest', resample=False)
+    axs[0].imshow(heat[za].T, cmap='hot', alpha=0.4, origin='lower', interpolation='nearest', resample=False)
     axs[0].set_title('Axial')
     axs[0].axis('off')
-    axs[1].imshow(anat_n[:, ya, :].T, cmap='gray', origin='lower')
-    axs[1].imshow(heat[:, ya, :].T, cmap='hot', alpha=0.4, origin='lower')
+    axs[1].imshow(anat_n[:, ya, :].T, cmap='gray', origin='lower', interpolation='nearest', resample=False)
+    axs[1].imshow(heat[:, ya, :].T, cmap='hot', alpha=0.4, origin='lower', interpolation='nearest', resample=False)
     axs[1].set_title('Coronal')
     axs[1].axis('off')
-    axs[2].imshow(anat_n[:, :, xa].T, cmap='gray', origin='lower')
-    axs[2].imshow(heat[:, :, xa].T, cmap='hot', alpha=0.4, origin='lower')
+    axs[2].imshow(anat_n[:, :, xa].T, cmap='gray', origin='lower', interpolation='nearest', resample=False)
+    axs[2].imshow(heat[:, :, xa].T, cmap='hot', alpha=0.4, origin='lower', interpolation='nearest', resample=False)
     axs[2].set_title('Sagittal')
     axs[2].axis('off')
     fig.suptitle(title)
     fig.tight_layout()
-    plt.savefig(str(out_path), dpi=150, bbox_inches='tight')
+    plt.savefig(str(out_path), dpi=300, bbox_inches='tight')
     plt.close(fig)
 
 
