@@ -2388,6 +2388,7 @@ def create_data_loaders_with_memory_optimization(train_dataset, val_dataset, tes
             batch_size=working_batch_size,
             sampler=sampler,
             shuffle=False,
+            drop_last=True,
             num_workers=args.num_workers,
             pin_memory=True if 'cuda' in args.device else False
         )
@@ -2396,6 +2397,7 @@ def create_data_loaders_with_memory_optimization(train_dataset, val_dataset, tes
             train_dataset,
             batch_size=working_batch_size,
             shuffle=True,
+            drop_last=True,
             num_workers=args.num_workers,
             pin_memory=True if 'cuda' in args.device else False
         )
