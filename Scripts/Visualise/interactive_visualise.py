@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button, RadioButtons, CheckButtons
 import argparse
 
-nii_file = "/Volumes/reseng202500013-ndd-ml/data/interpret/sub-I1624206_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w_brain_zscore_gradcam_class0.nii.gz"
+nii_file = "/Volumes/reseng202500013-ndd-ml/data/preprocessed/PET/PD/sub-I1518677_PPMI_PET_PD/sub-I1518677_PPMI_PET_PD_SUVR_s2_brain_soft4.nii.gz"
 
 def _robust_normalize(arr: np.ndarray, lo_p: float = 2.0, hi_p: float = 98.0) -> np.ndarray:
     arr = arr.astype(np.float32)
@@ -318,7 +318,7 @@ def main():
     parser.add_argument("--step", type=str, choices=['reoriented', 'normalised', 'registered', 'masked', 'finalised', 'postprocessed'], 
                        help="Processing step to browse (SPECT mode)")
     # Overlay mode
-    parser.add_argument("--base", type=str, help="Path to base anatomical NIfTI for overlay mode")
+    parser.add_argument("--base", type=str, help="Path to base anatomical NIfTI (supports base-only or with overlay)")
     parser.add_argument("--overlay", type=str, help="Path to overlay heatmap NIfTI for overlay mode")
     parser.add_argument("--overlay-alpha", type=float, default=0.4, help="Initial overlay alpha (0-1)")
     args = parser.parse_args()
@@ -332,8 +332,8 @@ def main():
             print(f"Overlay file not found: {args.overlay}")
             return
         try:
-            b_img = nib.load(args.base); b_data = b_img.get_fdata().astype(np.float32)
-            o_img = nib.load(args.overlay); o_data = o_img.get_fdata().astype(np.float32)
+            b_img = nib.as_closest_canonical(nib.load(args.base)); b_data = b_img.get_fdata().astype(np.float32)
+            o_img = nib.as_closest_canonical(nib.load(args.overlay)); o_data = o_img.get_fdata().astype(np.float32)
         except Exception as e:
             print(f"Failed to load NIfTI: {e}")
             return
@@ -381,6 +381,22 @@ def main():
         
         title = f"Subject: {sub_id} | Disease Prediction: {predicted_disease}"
         create_overlay_viewer(b_img, b_data, o_data, title=title, init_alpha=float(args.overlay_alpha))
+        return
+
+    # Base-only visualization (no overlay)
+    if args.base and not args.overlay:
+        if not os.path.exists(args.base):
+            print(f"Base file not found: {args.base}")
+            return
+        try:
+            b_img = nib.as_closest_canonical(nib.load(args.base)); b_data = b_img.get_fdata().astype(np.float32)
+        except Exception as e:
+            print(f"Failed to load base NIfTI: {e}")
+            return
+        # Show grayscale base with zero overlay (alpha=0.0)
+        zero_overlay = np.zeros_like(b_data, dtype=np.float32)
+        title = f"Base-only Viewer: {os.path.basename(args.base)}"
+        create_overlay_viewer(b_img, b_data, zero_overlay, title=title, init_alpha=0.0)
         return
 
     if args.file:
