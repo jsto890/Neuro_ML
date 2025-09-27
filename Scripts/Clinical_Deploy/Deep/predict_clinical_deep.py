@@ -71,6 +71,8 @@ def load_repo_modules() -> Tuple[object, object]:
 
 def load_nifti(image_path: str) -> Tuple[np.ndarray, np.ndarray, object]:
     img = nib.load(expand_path(image_path))
+    # Reorient to closest canonical (RAS+) so slicing is axis-aligned for display/overlays
+    img = nib.as_closest_canonical(img)
     data = img.get_fdata().astype(np.float32)
     return data, img.affine, img.header
 
