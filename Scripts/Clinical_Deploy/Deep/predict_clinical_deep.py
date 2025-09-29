@@ -43,8 +43,8 @@ def expand_path(p: str) -> str:
     return os.path.abspath(os.path.expanduser(p))
 
 
-def load_repo_modules() -> Tuple[object, object]:
-    """Dynamically import gradcam and models_smri from the repo by path."""
+def load_repo_modules() -> Tuple[object, object, object]:
+    """Dynamically import gradcam, MRI models, and PET models from the repo by path."""
     import importlib.util
 
     this_dir = Path(__file__).resolve().parent
@@ -52,7 +52,8 @@ def load_repo_modules() -> Tuple[object, object]:
     repo_root = scripts_dir.parent        # .../P4P
 
     gradcam_path = repo_root / 'Scripts' / 'Deep_Learning' / 'MRI' / 'gradcam.py'
-    models_path = repo_root / 'Scripts' / 'Deep_Learning' / 'MRI' / 'models_smri.py'
+    models_mri_path = repo_root / 'Scripts' / 'Deep_Learning' / 'MRI' / 'models_smri.py'
+    models_pet_path = repo_root / 'Scripts' / 'Deep_Learning' / 'PET' / 'models_pet.py'
 
     # gradcam
     spec_g = importlib.util.spec_from_file_location('gradcam3d', str(gradcam_path))
@@ -60,13 +61,19 @@ def load_repo_modules() -> Tuple[object, object]:
     assert spec_g and spec_g.loader
     spec_g.loader.exec_module(gradcam)  # type: ignore
 
-    # models
-    spec_m = importlib.util.spec_from_file_location('models_smri', str(models_path))
+    # MRI models
+    spec_m = importlib.util.spec_from_file_location('models_smri', str(models_mri_path))
     models_smri = importlib.util.module_from_spec(spec_m)
     assert spec_m and spec_m.loader
     spec_m.loader.exec_module(models_smri)  # type: ignore
 
-    return gradcam, models_smri
+    # PET models
+    spec_p = importlib.util.spec_from_file_location('models_pet', str(models_pet_path))
+    models_pet = importlib.util.module_from_spec(spec_p)
+    assert spec_p and spec_p.loader
+    spec_p.loader.exec_module(models_pet)  # type: ignore
+
+    return gradcam, models_smri, models_pet
 
 
 def load_nifti(image_path: str) -> Tuple[np.ndarray, np.ndarray, object]:
@@ -102,7 +109,7 @@ def to_model_tensor(volume: np.ndarray, device: str, resize_dims: Optional[Tuple
 
 
 def load_model(arch: str, num_classes: int, in_channels: int, weights_path: str, device: str):
-    gradcam, models_smri = load_repo_modules()
+    gradcam, models_smri, models_pet = load_repo_modules()
     arch_l = arch.lower()
 
     # Helper to load and clean a checkpoint
@@ -176,7 +183,22 @@ def load_model(arch: str, num_classes: int, in_channels: int, weights_path: str,
         return wrapped, gradcam
 
     elif arch_l in ['resnet18_3d', 'resnet18']:
-        model = models_smri.get_3d_model('resnet18_3d', num_classes=num_classes, in_channels=in_channels)
+        # Prefer PET models if present
+        get_model = getattr(models_pet, 'get_3d_model', None) or getattr(models_smri, 'get_3d_model')
+        model = get_model('resnet18_3d', num_classes=num_classes, in_channels=in_channels)
+        model.to(device)
+        model.eval()
+        if weights_path:
+            clean_sd = _load_clean_sd(weights_path)
+            model.load_state_dict(clean_sd, strict=False)
+        return model, gradcam
+
+    elif arch_l in ['densenet121_3d', 'densenet121']:
+        # PET DenseNet support
+        get_model = getattr(models_pet, 'get_3d_model', None)
+        if get_model is None:
+            raise ValueError('DenseNet121_3D not available (models_pet missing).')
+        model = get_model('densenet121_3d', num_classes=num_classes, in_channels=in_channels)
         model.to(device)
         model.eval()
         if weights_path:
