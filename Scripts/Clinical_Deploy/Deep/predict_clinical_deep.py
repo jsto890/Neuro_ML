@@ -570,13 +570,20 @@ def compute_gradcam_plusplus_simple3d_local(model: nn.Module, smri_tensor: torch
 
 def compute_gradcam_densenet3d_local(model: nn.Module, input_tensor: torch.Tensor, target_class: int, device: str = "cpu") -> np.ndarray:
     """
-    Grad-CAM for MONAI DenseNet121 3D by hooking `model.features`.
+    Grad-CAM for MONAI DenseNet121 3D by hooking the last Conv3d inside `model.features`.
+    This avoids autograd view/in-place issues from hooking the entire Sequential.
     """
     model = model.to(device)
     model.eval()
 
     activations: Optional[torch.Tensor] = None
     gradients: Optional[torch.Tensor] = None
+
+    # Find the last Conv3d within features
+    conv_modules = [m for m in model.features.modules() if isinstance(m, nn.Conv3d)]
+    if not conv_modules:
+        raise RuntimeError("DenseNet.features has no Conv3d layers to hook for Grad-CAM")
+    last_conv = conv_modules[-1]
 
     def fwd_hook(module, inp, out):
         nonlocal activations
@@ -587,8 +594,8 @@ def compute_gradcam_densenet3d_local(model: nn.Module, input_tensor: torch.Tenso
         # Clone to avoid in-place modification issues with autograd
         gradients = grad_output[0].detach().clone()
 
-    h1 = model.features.register_forward_hook(fwd_hook)
-    h2 = model.features.register_full_backward_hook(bwd_hook)
+    h1 = last_conv.register_forward_hook(fwd_hook)
+    h2 = last_conv.register_full_backward_hook(bwd_hook)
 
     x = input_tensor.to(device).requires_grad_(True)
     logits = model(x)
@@ -600,6 +607,7 @@ def compute_gradcam_densenet3d_local(model: nn.Module, input_tensor: torch.Tenso
         h1.remove(); h2.remove()
         raise RuntimeError("Grad-CAM hooks did not capture activations/gradients for DenseNet")
 
+    # Channel weights from gradients
     weights = torch.mean(gradients, dim=(2, 3, 4)).squeeze(0)
     cam = torch.zeros_like(activations[0, 0])
     for i, w in enumerate(weights):
