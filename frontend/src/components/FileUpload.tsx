@@ -1,12 +1,15 @@
 import React, { useCallback, useState } from 'react';
-import { Upload, FileImage, X, Loader2 } from 'lucide-react';
+import { Upload, FileImage, X, Loader2, FolderOpen } from 'lucide-react';
 
 interface FileUploadProps {
   onFileUpload: (files: FileList) => void;
   isAnalyzing: boolean;
+  uploadType: 'dicom' | 'nifti';
+  imageType: 'smri' | 'pet' | 'dat-spect';
+  onBack: () => void;
 }
 
-const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isAnalyzing }) => {
+const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isAnalyzing, uploadType, imageType, onBack }) => {
   const [dragActive, setDragActive] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
 
@@ -20,13 +23,14 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isAnalyzing }) =>
     }
   }, []);
 
-  const isValidFile = (fileName: string): boolean => {
+  const isValidFile = useCallback((fileName: string): boolean => {
     const name = fileName.toLowerCase();
-    return name.endsWith('.nii') || 
-           name.endsWith('.nii.gz') ||
-           name.endsWith('.dcm') ||
-           name.endsWith('.dicom');
-  };
+    if (uploadType === 'dicom') {
+      return name.endsWith('.dcm') || name.endsWith('.dicom');
+    } else {
+      return name.endsWith('.nii') || name.endsWith('.nii.gz');
+    }
+  }, [uploadType]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -37,7 +41,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isAnalyzing }) =>
       const files = Array.from(e.dataTransfer.files).filter(file => isValidFile(file.name));
       setSelectedFiles(files);
     }
-  }, []);
+  }, [isValidFile]);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
@@ -63,29 +67,67 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isAnalyzing }) =>
   };
 
   const getFileType = (fileName: string): string => {
-    const name = fileName.toLowerCase();
-    if (name.includes('spect')) return 'SPECT';
-    if (name.includes('mri')) return 'MRI';
-    if (name.includes('pet')) return 'PET';
-    if (name.endsWith('.dcm') || name.endsWith('.dicom')) return 'DICOM';
-    if (name.endsWith('.nii') || name.endsWith('.nii.gz')) return 'NIFTI';
-    return 'Unknown';
+    if (uploadType === 'dicom') {
+      return 'DICOM';
+    } else {
+      return 'NIFTI';
+    }
+  };
+
+  const getImageTypeDisplay = (): string => {
+    switch (imageType) {
+      case 'smri': return 'sMRI';
+      case 'pet': return 'PET';
+      case 'dat-spect': return 'DAT-SPECT';
+      default: return 'Unknown';
+    }
+  };
+
+  const getUploadTypeDisplay = (): string => {
+    return uploadType === 'dicom' ? 'DICOM Folder' : 'NIFTI File';
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      {/* Header with back button and type info */}
+      <div className="flex items-center justify-between">
+        <button
+          onClick={onBack}
+          className="flex items-center text-gray-600 hover:text-gray-800 hover:bg-gray-100 px-3 py-2 rounded-lg transition-colors"
+        >
+          ← Back to Image Type
+        </button>
+      </div>
+
       <div className="text-center">
-        <h2 className="text-lg font-medium text-gray-900 mb-1">
-          Upload Medical Images
+        <h2 className="text-2xl font-semibold text-gray-900 mb-2">
+          Upload {getImageTypeDisplay()} Images
         </h2>
-        <p className="text-sm text-gray-600">
-          Drag and drop NIFTI or DICOM files or click to browse
+        <p className="text-gray-600 mb-4">
+          {uploadType === 'dicom' 
+            ? 'Select a folder containing DICOM slices or drag and drop DICOM files'
+            : 'Select a NIFTI file or drag and drop it here'
+          }
         </p>
+        
+        {/* Type indicators */}
+        <div className="flex justify-center space-x-4">
+          <div className="flex items-center space-x-2 px-3 py-1 bg-gray-100 rounded-full">
+            <span className="text-sm font-medium text-gray-700">
+              {getUploadTypeDisplay()}
+            </span>
+          </div>
+          <div className="flex items-center space-x-2 px-3 py-1 bg-gray-100 rounded-full">
+            <span className="text-sm font-medium text-gray-700">
+              {getImageTypeDisplay()}
+            </span>
+          </div>
+        </div>
       </div>
 
       {/* Drop Zone */}
       <div
-        className={`relative border-2 border-dashed rounded-lg p-6 transition-colors ${
+        className={`relative border-2 border-dashed rounded-xl p-8 transition-colors ${
           dragActive
             ? 'border-primary-500 bg-primary-50'
             : 'border-gray-300 hover:border-gray-400'
@@ -97,18 +139,31 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isAnalyzing }) =>
       >
         <input
           type="file"
-          multiple
+          multiple={uploadType === 'dicom'}
+          {...(uploadType === 'dicom' && { webkitdirectory: 'true' })}
           onChange={handleFileInput}
           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
         />
         
         <div className="text-center">
-          <Upload className="w-8 h-8 text-gray-400 mx-auto mb-3" />
-          <p className="text-base font-medium text-gray-900 mb-1">
-            {dragActive ? 'Drop files here' : 'Choose files or drag and drop'}
+          {uploadType === 'dicom' ? (
+            <FolderOpen className="w-12 h-12 text-orange-400 mx-auto mb-4" />
+          ) : (
+            <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+          )}
+          <p className="text-lg font-medium text-gray-900 mb-2">
+            {dragActive 
+              ? 'Drop files here' 
+              : uploadType === 'dicom' 
+                ? 'Choose folder or drag and drop DICOM files'
+                : 'Choose file or drag and drop NIFTI file'
+            }
           </p>
-          <p className="text-xs text-gray-500">
-            NIFTI (.nii, .nii.gz) or DICOM (.dcm, .dicom) files up to 100MB each
+          <p className="text-sm text-gray-500">
+            {uploadType === 'dicom' 
+              ? 'DICOM files (.dcm, .dicom) - select folder or individual files'
+              : 'NIFTI files (.nii, .nii.gz) up to 100MB'
+            }
           </p>
         </div>
       </div>
@@ -149,19 +204,22 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isAnalyzing }) =>
         <button
           onClick={handleUpload}
           disabled={selectedFiles.length === 0 || isAnalyzing}
-          className={`px-6 py-2 rounded font-medium transition-colors ${
+          className={`px-8 py-3 rounded-lg font-medium transition-colors ${
             selectedFiles.length === 0 || isAnalyzing
               ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-              : 'bg-primary-600 text-white hover:bg-primary-700'
+              : 'bg-primary-600 text-white hover:bg-primary-700 shadow-lg hover:shadow-xl'
           }`}
         >
           {isAnalyzing ? (
             <div className="flex items-center space-x-2">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              <span>Analyzing...</span>
+              <Loader2 className="w-5 h-5 animate-spin" />
+              <span>Processing {getImageTypeDisplay()} Images...</span>
             </div>
           ) : (
-            `Analyze ${selectedFiles.length} File${selectedFiles.length !== 1 ? 's' : ''}`
+            <div className="flex items-center space-x-2">
+              <span>Upload {selectedFiles.length} {getImageTypeDisplay()} File{selectedFiles.length !== 1 ? 's' : ''}</span>
+              <Upload className="w-4 h-4" />
+            </div>
           )}
         </button>
       </div>

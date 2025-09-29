@@ -3,9 +3,10 @@ import { Brain, Wifi, WifiOff } from 'lucide-react';
 
 interface HeaderProps {
   backendStatus?: 'connected' | 'disconnected' | 'checking';
+  onLogoClick?: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ backendStatus = 'checking' }) => {
+const Header: React.FC<HeaderProps> = ({ backendStatus = 'checking', onLogoClick }) => {
   const getStatusColor = () => {
     switch (backendStatus) {
       case 'connected': return 'text-green-600';
@@ -37,7 +38,10 @@ const Header: React.FC<HeaderProps> = ({ backendStatus = 'checking' }) => {
     <header className="bg-white shadow-sm border-b border-gray-200">
       <div className="container mx-auto px-4 py-3">
         <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
+          <div 
+            className="flex items-center space-x-2 cursor-pointer hover:opacity-80 transition-opacity"
+            onClick={onLogoClick}
+          >
             <div className="flex items-center justify-center w-8 h-8 bg-gradient-to-r from-primary-500 to-medical-500 rounded-md">
               <Brain className="w-4 h-4 text-white" />
             </div>

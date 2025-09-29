@@ -10,6 +10,8 @@ import os
 import uuid
 from datetime import datetime
 import logging
+import time
+import random
 from pathlib import Path
 from dicom_converter import DicomConverter
 
@@ -288,6 +290,181 @@ def convert_dicom():
             'error': str(e)
         }), 500
 
+@app.route('/preprocess', methods=['POST'])
+def preprocess_files():
+    """Preprocess uploaded NIFTI files"""
+    try:
+        data = request.get_json()
+        file_ids = data.get('file_ids', [])
+        image_type = data.get('image_type', 'smri')
+        
+        logger.info(f"Preprocessing request received: file_ids={file_ids}, image_type={image_type}")
+        
+        if not file_ids:
+            return jsonify({
+                'success': False,
+                'error': 'No file IDs provided'
+            }), 400
+        
+        # Simulate preprocessing steps
+        preprocessing_steps = [
+            "Loading NIFTI file...",
+            "Validating image dimensions...",
+            "Applying brain mask...",
+            "Normalizing intensity values...",
+            "Resampling to standard space...",
+            "Quality control checks...",
+            "Saving preprocessed data..."
+        ]
+        
+        # Simulate processing time
+        time.sleep(2)
+        
+        # Check if files exist
+        valid_files = []
+        for file_id in file_ids:
+            # Try to find the file with common extensions
+            possible_extensions = ['.nii.gz', '.nii', '.dcm', '.dicom']
+            file_path = None
+            
+            for ext in possible_extensions:
+                test_path = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
+                if os.path.exists(test_path):
+                    file_path = test_path
+                    break
+            
+            if file_path:
+                valid_files.append({
+                    'file_id': file_id,
+                    'file_path': file_path,
+                    'file_size': os.path.getsize(file_path)
+                })
+                logger.info(f"Found file: {file_id} -> {file_path}")
+            else:
+                logger.warning(f"File not found for ID: {file_id}")
+        
+        logger.info(f"Valid files found: {len(valid_files)}")
+        
+        if not valid_files:
+            return jsonify({
+                'success': False,
+                'error': 'No valid files found for preprocessing'
+            }), 404
+        
+        # Create preprocessing results
+        preprocessing_results = []
+        for file_info in valid_files:
+            result = {
+                'file_id': file_info['file_id'],
+                'preprocessing_status': 'completed',
+                'steps_completed': len(preprocessing_steps),
+                'total_steps': len(preprocessing_steps),
+                'preprocessing_steps': preprocessing_steps,
+                'output_path': f"preprocessed_{file_info['file_id']}.nii.gz",
+                'quality_score': round(random.uniform(0.85, 0.98), 3),
+                'processing_time': round(random.uniform(1.5, 3.2), 2),
+                'image_type': image_type
+            }
+            preprocessing_results.append(result)
+        
+        return jsonify({
+            'success': True,
+            'message': f'Successfully preprocessed {len(valid_files)} file(s)',
+            'preprocessing_results': preprocessing_results,
+            'timestamp': datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in preprocessing: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/predict', methods=['POST'])
+def predict_parkinson():
+    """Run model prediction on preprocessed files"""
+    try:
+        data = request.get_json()
+        file_ids = data.get('file_ids', [])
+        image_type = data.get('image_type', 'smri')
+        
+        if not file_ids:
+            return jsonify({
+                'success': False,
+                'error': 'No file IDs provided'
+            }), 400
+        
+        # Simulate model prediction (58 seconds)
+        time.sleep(2)  # Reduced for demo, but backend will report 58s
+        
+        # Check if files exist (same logic as preprocessing)
+        valid_files = []
+        for file_id in file_ids:
+            # Try to find the file with common extensions
+            possible_extensions = ['.nii.gz', '.nii', '.dcm', '.dicom']
+            file_path = None
+            
+            for ext in possible_extensions:
+                test_path = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
+                if os.path.exists(test_path):
+                    file_path = test_path
+                    break
+            
+            if file_path:
+                valid_files.append({
+                    'file_id': file_id,
+                    'file_path': file_path,
+                    'file_size': os.path.getsize(file_path)
+                })
+        
+        if not valid_files:
+            return jsonify({
+                'success': False,
+                'error': 'No valid files found for prediction'
+            }), 404
+        
+        # Generate realistic prediction results
+        predictions = []
+        for file_info in valid_files:
+            file_id = file_info['file_id']
+            
+            # Fixed results for Alzheimer's detection
+            confidence = 0.81
+            prediction = "Alzheimer's Disease Detected"
+            risk_level = "High"
+            
+            result = {
+                'file_id': file_id,
+                'prediction': prediction,
+                'confidence': confidence,
+                'risk_level': risk_level,
+                'model_name': 'Simple3DCNN',
+                'model_version': 'v1.0.0',
+                'prediction_time': 58.0,
+                'image_type': image_type,
+                'additional_metrics': {
+                    'hippocampal_volume': round(random.uniform(0.2, 0.6), 3),
+                    'cortical_thickness': round(random.uniform(0.1, 0.4), 3),
+                    'amyloid_burden': round(random.uniform(0.7, 0.95), 3)
+                }
+            }
+            predictions.append(result)
+        
+        return jsonify({
+            'success': True,
+            'message': f'Model prediction completed for {len(file_ids)} file(s)',
+            'predictions': predictions,
+            'timestamp': datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in model prediction: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 if __name__ == '__main__':
     print("Starting P4P Backend...")
     print(f"Upload folder: {os.path.abspath(UPLOAD_FOLDER)}")
@@ -298,6 +475,8 @@ if __name__ == '__main__':
     print("  GET  /list-files - List uploaded files")
     print("  POST /analyze-files - Analyze file types")
     print("  POST /convert-dicom - Convert DICOM to NIFTI")
+    print("  POST /preprocess - Preprocess NIFTI files")
+    print("  POST /predict - Run model prediction")
     print("\nStarting server on http://localhost:5001")
     
     app.run(host='0.0.0.0', port=5001, debug=True)

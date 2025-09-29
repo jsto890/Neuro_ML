@@ -105,4 +105,40 @@ export class ApiService {
     }
     return response.json();
   }
+
+  static async preprocessFiles(fileIds: string[], imageType: string) {
+    const response = await fetch(`${API_BASE_URL}/preprocess`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ 
+        file_ids: fileIds, 
+        image_type: imageType 
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to preprocess files');
+    }
+    return response.json();
+  }
+
+  static async predictParkinson(fileIds: string[], imageType: string) {
+    const response = await fetch(`${API_BASE_URL}/predict`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ 
+        file_ids: fileIds, 
+        image_type: imageType 
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to run model prediction');
+    }
+    return response.json();
+  }
 }
