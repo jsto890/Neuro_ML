@@ -1047,32 +1047,31 @@ def main():
     confidence_raw = float(np.max(probs))
     prob_dict_raw = {label_map.get(i, str(i)): float(p) for i, p in enumerate(probs)}
 
-    # Risk-aware adjustment
-    adjusted_probs = probs.copy()
+    # Decide label using RAW probabilities (apply CN threshold on raw probs only)
     applied_risk = None
-    if args.risk_weights and len(args.risk_weights) == int(args.num_classes):
-        rw = np.asarray(args.risk_weights, dtype=np.float32)
-        adjusted_probs = adjusted_probs * rw
-        applied_risk = rw.tolist()
-    # CN thresholding (assumes class 0 = CN by default mapping)
-    final_idx = int(np.argmax(adjusted_probs))
+    pred_idx_raw = int(np.argmax(probs))
+    final_idx = pred_idx_raw
     if args.cn_min_prob is not None and final_idx == 0:
-        if float(adjusted_probs[0]) < float(args.cn_min_prob):
-            # pick best non-CN class
-            non_cn_idx = int(np.argmax(adjusted_probs[1:]) + 1)
+        if float(probs[0]) < float(args.cn_min_prob):
+            # pick best non-CN class based on raw probabilities
+            non_cn_idx = int(np.argmax(probs[1:]) + 1)
             final_idx = non_cn_idx
 
     pred_idx = final_idx
     pred_name = label_map.get(pred_idx, str(pred_idx))
-    # Normalize adjusted scores for reporting so percentages remain within [0,1]
-    adj_sum = float(np.sum(adjusted_probs))
-    if adj_sum > 0:
-        adjusted_probs_norm = adjusted_probs / adj_sum
+    # For reporting, scale ONLY the chosen class probability, then renormalize to sum=1
+    reported_probs = probs.copy()
+    if args.risk_weights and len(args.risk_weights) == int(args.num_classes):
+        rw = np.asarray(args.risk_weights, dtype=np.float32)
+        reported_probs[pred_idx] = reported_probs[pred_idx] * float(rw[pred_idx])
+        applied_risk = rw.tolist()
+    rep_sum = float(np.sum(reported_probs))
+    if rep_sum > 0:
+        reported_probs = reported_probs / rep_sum
     else:
-        # Fallback to original probabilities if something degenerate occurs
-        adjusted_probs_norm = probs
-    confidence = float(adjusted_probs_norm[pred_idx])
-    prob_dict = {label_map.get(i, str(i)): float(adjusted_probs_norm[i]) for i in range(len(adjusted_probs_norm))}
+        reported_probs = probs
+    confidence = float(reported_probs[pred_idx])
+    prob_dict = {label_map.get(i, str(i)): float(reported_probs[i]) for i in range(len(reported_probs))}
 
     # Prepare output directory
     out_dir = Path(expand_path(args.output_dir))
