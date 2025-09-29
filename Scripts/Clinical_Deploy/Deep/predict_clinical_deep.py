@@ -453,7 +453,8 @@ def compute_gradcam_simple3d_local(model: nn.Module, smri_tensor: torch.Tensor, 
 
     def bwd_hook(module, grad_input, grad_output):
         nonlocal gradients
-        gradients = grad_output[0].detach()
+        # Clone to avoid in-place modification issues with autograd
+        gradients = grad_output[0].detach().clone()
 
     h1 = last_conv.register_forward_hook(fwd_hook)
     h2 = last_conv.register_full_backward_hook(bwd_hook)
@@ -503,7 +504,8 @@ def compute_gradcam_plusplus_simple3d_local(model: nn.Module, smri_tensor: torch
 
     def bwd_hook(module, grad_input, grad_output):
         nonlocal gradients, grad_squared, grad_cubed
-        grad = grad_output[0].detach()
+        # Clone to avoid in-place modification issues
+        grad = grad_output[0].detach().clone()
         gradients = grad
         grad_squared = grad ** 2
         grad_cubed = grad ** 3
@@ -582,7 +584,8 @@ def compute_gradcam_densenet3d_local(model: nn.Module, input_tensor: torch.Tenso
 
     def bwd_hook(module, grad_input, grad_output):
         nonlocal gradients
-        gradients = grad_output[0].detach()
+        # Clone to avoid in-place modification issues with autograd
+        gradients = grad_output[0].detach().clone()
 
     h1 = model.features.register_forward_hook(fwd_hook)
     h2 = model.features.register_full_backward_hook(bwd_hook)
