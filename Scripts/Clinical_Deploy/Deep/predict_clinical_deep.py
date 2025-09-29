@@ -382,6 +382,9 @@ def compute_gradcam_volume(gradcam_module, model, input_tensor: torch.Tensor, ta
             # Fallback to module implementation
             cam = gradcam_module.compute_gradcam_simple3d(model, input_tensor, target_class, device=device)
             return robust_normalize_map(cam)
+    elif arch_l in ['densenet121_3d', 'densenet121']:
+        cam = compute_gradcam_densenet3d_local(model, input_tensor, target_class, device)
+        return robust_normalize_map(cam)
     else:
         raise ValueError(f"Grad-CAM not implemented for architecture: {arch}")
     # Unreachable
@@ -409,6 +412,10 @@ def compute_gradcam_plusplus_volume(gradcam_module, model, input_tensor: torch.T
                 # Final fallback to module implementation
                 cam = gradcam_module.compute_gradcam_simple3d(model, input_tensor, target_class, device=device)
                 return robust_normalize_map(cam)
+    elif arch_l in ['densenet121_3d', 'densenet121']:
+        # Fallback to vanilla Grad-CAM for DenseNet
+        cam = compute_gradcam_densenet3d_local(model, input_tensor, target_class, device)
+        return robust_normalize_map(cam)
     else:
         raise ValueError(f"Grad-CAM++ not implemented for architecture: {arch}")
 
@@ -557,6 +564,49 @@ def compute_gradcam_plusplus_simple3d_local(model: nn.Module, smri_tensor: torch
 
     h1.remove(); h2.remove()
     return cam_np.astype(np.float32)
+
+
+def compute_gradcam_densenet3d_local(model: nn.Module, input_tensor: torch.Tensor, target_class: int, device: str = "cpu") -> np.ndarray:
+    """
+    Grad-CAM for MONAI DenseNet121 3D by hooking `model.features`.
+    """
+    model = model.to(device)
+    model.eval()
+
+    activations: Optional[torch.Tensor] = None
+    gradients: Optional[torch.Tensor] = None
+
+    def fwd_hook(module, inp, out):
+        nonlocal activations
+        activations = out.detach()
+
+    def bwd_hook(module, grad_input, grad_output):
+        nonlocal gradients
+        gradients = grad_output[0].detach()
+
+    h1 = model.features.register_forward_hook(fwd_hook)
+    h2 = model.features.register_full_backward_hook(bwd_hook)
+
+    x = input_tensor.to(device).requires_grad_(True)
+    logits = model(x)
+    score = logits[0, int(target_class)]
+    model.zero_grad()
+    score.backward(retain_graph=False)
+
+    if activations is None or gradients is None:
+        h1.remove(); h2.remove()
+        raise RuntimeError("Grad-CAM hooks did not capture activations/gradients for DenseNet")
+
+    weights = torch.mean(gradients, dim=(2, 3, 4)).squeeze(0)
+    cam = torch.zeros_like(activations[0, 0])
+    for i, w in enumerate(weights):
+        cam += w * activations[0, i]
+    cam = F.relu(cam).unsqueeze(0).unsqueeze(0)
+    target_size = x.shape[-3:]
+    cam_upsampled = F.interpolate(cam, size=target_size, mode='trilinear', align_corners=False)
+    cam_np = cam_upsampled.squeeze().cpu().numpy().astype(np.float32)
+    h1.remove(); h2.remove()
+    return cam_np
 
 
 def compute_saliency_volume(model, input_tensor: torch.Tensor, target_class: int) -> np.ndarray:
