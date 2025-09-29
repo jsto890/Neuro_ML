@@ -288,8 +288,10 @@ def ants_apply_transforms(input_img: Path, reference_img: Path, output_img: Path
         "--reference-image", str(reference_img),
         "--output", str(output_img),
         "--interpolation", "Linear",
-        "--transform", f"[{affine_mat},0]",
+        # IMPORTANT: antsApplyTransforms expects transforms in the order they should be applied,
+        # which for ANTs outputs is typically: warp THEN affine.
         "--transform", str(warp_field),
+        "--transform", f"[{affine_mat},0]",
     ]
     run_cmd(cmd, check=True, capture_output=False)
 
