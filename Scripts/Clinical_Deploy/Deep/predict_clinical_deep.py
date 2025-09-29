@@ -813,17 +813,27 @@ def save_nifti(volume: np.ndarray, affine: np.ndarray, header, out_path: Path):
     nib.save(img, str(out_path))
 
 
-def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title: str = "", mask: Optional[np.ndarray] = None):
+def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title: str = "", mask: Optional[np.ndarray] = None, brightness: float = 1.5, gamma: float = 0.9):
     """
     Save quick axial/coronal/sagittal overlays for visual sanity check.
     """
     anat = anat.astype(np.float32)
     # Robust normalize anat and heat for visibility
-    a_lo, a_hi = np.percentile(anat, 2.0), np.percentile(anat, 98.0)
+    # If a brain mask is provided, compute percentiles within the mask to avoid dark background bias
+    if mask is not None and np.any(mask > 0):
+        anat_vals = anat[mask > 0]
+        a_lo, a_hi = np.percentile(anat_vals, 2.0), np.percentile(anat_vals, 98.0)
+    else:
+        a_lo, a_hi = np.percentile(anat, 2.0), np.percentile(anat, 98.0)
     if a_hi - a_lo < 1e-6:
         anat_n = anat
     else:
         anat_n = np.clip((anat - a_lo) / (a_hi - a_lo), 0.0, 1.0)
+    # Apply gentle gamma correction and brightness scaling to make the anatomy more visible
+    if gamma is not None and gamma > 0:
+        anat_n = np.clip(anat_n ** gamma, 0.0, 1.0)
+    if brightness is not None and brightness != 1.0:
+        anat_n = np.clip(anat_n * brightness, 0.0, 1.0)
     if mask is not None and np.any(mask > 0):
         sel = heat[mask > 0]
         h_lo, h_hi = np.percentile(sel, 90.0), np.percentile(sel, 99.5)
@@ -1054,9 +1064,15 @@ def main():
 
     pred_idx = final_idx
     pred_name = label_map.get(pred_idx, str(pred_idx))
-    # For confidence, report the adjusted winning score (not renormalized)
-    confidence = float(adjusted_probs[pred_idx])
-    prob_dict = {label_map.get(i, str(i)): float(adjusted_probs[i]) for i in range(len(adjusted_probs))}
+    # Normalize adjusted scores for reporting so percentages remain within [0,1]
+    adj_sum = float(np.sum(adjusted_probs))
+    if adj_sum > 0:
+        adjusted_probs_norm = adjusted_probs / adj_sum
+    else:
+        # Fallback to original probabilities if something degenerate occurs
+        adjusted_probs_norm = probs
+    confidence = float(adjusted_probs_norm[pred_idx])
+    prob_dict = {label_map.get(i, str(i)): float(adjusted_probs_norm[i]) for i in range(len(adjusted_probs_norm))}
 
     # Prepare output directory
     out_dir = Path(expand_path(args.output_dir))
