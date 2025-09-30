@@ -81,7 +81,7 @@ class EnhancedRadiomicsClassifier:
         self.ml_threads = ml_threads
         
         # Disease label mapping (align with PET labels: AD=0, CN=1, PD=2)
-        self.label_to_disease = {0: 'CN', 1: 'AD', 2: 'PD'}
+        self.label_to_disease = {0: 'AD', 1: 'CN', 2: 'PD'}
         self.disease_to_label = {v: k for k, v in self.label_to_disease.items()}
         
         # Label remapping for training (to handle non-consecutive labels)
