@@ -687,10 +687,10 @@ class EnhancedRadiomicsClassifier:
             # Weighted voting ensemble (probability averaging with weights)
             ensemble_results = {}
 
-            # Determine model rankings based on validation AUC (preferred) then accuracy; fall back to train if no val
+            # Determine model rankings based on TEST accuracy (preferred) then TEST AUC
             model_scores = {}
-            use_split = 'val' if 'val' in next(iter(self.results.values())).keys() else 'train'
-            metric_order = ['auc', 'accuracy']
+            use_split = 'test'
+            metric_order = ['accuracy', 'auc']
             for model_name in self.best_models.keys():
                 score = None
                 try:
