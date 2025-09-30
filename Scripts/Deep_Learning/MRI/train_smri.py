@@ -1195,12 +1195,25 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         print(f"[DEBUG] optimal_threshold: {optimal_threshold}")
         
         # Calculate additional metrics using optimal threshold (binary) or argmax (multiclass)
-        if optimal_threshold is not None and probs.shape[1] == 2:
-            # Binary classification with threshold optimization
-            optimal_preds = (probs >= optimal_threshold).astype(int)
+        # Handle both 1D (binary positive-class probabilities) and 2D (multiclass) probabilities
+        if optimal_threshold is not None:
+            if getattr(probs, 'ndim', 1) == 1:
+                # Binary classification: probs is 1D positive-class probabilities
+                optimal_preds = (probs >= optimal_threshold).astype(int)
+            elif probs.ndim == 2 and probs.shape[1] == 2:
+                # Binary classification but probs provided as Nx2 matrix
+                optimal_preds = (probs[:, 1] >= optimal_threshold).astype(int)
+            else:
+                # Multiclass: use argmax
+                optimal_preds = np.argmax(probs, axis=1)
         else:
-            # Multiclass or no threshold: use argmax
-            optimal_preds = np.argmax(probs, axis=1)
+            # No optimized threshold available
+            if getattr(probs, 'ndim', 1) == 1:
+                # Binary default threshold
+                optimal_preds = (probs >= 0.5).astype(int)
+            else:
+                # Multiclass default
+                optimal_preds = np.argmax(probs, axis=1)
         
         precision, recall, f1, support = precision_recall_fscore_support(val_labels, optimal_preds, average=None, zero_division=0)
         cm = confusion_matrix(val_labels, optimal_preds)
