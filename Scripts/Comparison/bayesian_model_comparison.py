@@ -186,6 +186,25 @@ class BayesianModelComparison:
         log_B = lgamma(a) + lgamma(b) - lgamma(a + b)
         log_pdf = (a - 1) * np.log(x) + (b - 1) * np.log(1 - x) - log_B
         return np.exp(log_pdf)
+
+    def _beta_mode(self, alpha: float, beta: float) -> float:
+        a, b = float(alpha), float(beta)
+        if a > 1 and b > 1:
+            return (a - 1.0) / (a + b - 2.0)
+        # Boundary modes
+        if a <= 1 and b > 1:
+            return 0.0
+        if a > 1 and b <= 1:
+            return 1.0
+        # a<=1 and b<=1 (U-shaped), pick mean as a fallback
+        return a / (a + b)
+
+    def _beta_sd(self, alpha: float, beta: float) -> float:
+        a, b = float(alpha), float(beta)
+        denom = (a + b) ** 2 * (a + b + 1.0)
+        if denom <= 0:
+            return 0.0
+        return float(np.sqrt((a * b) / denom))
     
     def _discover_model_dirs(self, run_dir: Path) -> Dict[str, Path]:
         """Find model subdirectories containing run summaries."""
@@ -430,13 +449,15 @@ class BayesianModelComparison:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 idata = pm.sample(
-                    2500,
-                    tune=4000,
+                    3000,
+                    tune=6000,
                     target_accept=0.999,
+                    init="jitter+adapt_diag_grad",
                     random_seed=self.random_seed,
                     return_inferencedata=True,
                     progressbar=True,
                     cores=4,
+                    idata_kwargs={"log_likelihood": True},
                 )
                 idata.extend(pm.sample_posterior_predictive(idata, random_seed=self.random_seed))
         
@@ -529,23 +550,27 @@ class BayesianModelComparison:
             warnings.simplefilter("ignore")
             # Use include_sample=True to include log likelihood; bump target_accept to reduce divergences
             idata = bm.fit(
-                target_accept=0.995,
+                target_accept=0.999,
                 random_seed=self.random_seed,
-                draws=2000,
-                tune=4000,
+                draws=3000,
+                tune=6000,
                 chains=4,
                 cores=4,
                 include_sample=True,
                 idata_kwargs={"log_likelihood": True},
             )
         
-        # PSIS-LOO 
+        # PSIS-LOO with stabilizing kwargs to avoid overflow
         try:
-            # Try to compute LOO with the inference data
-            loo = az.loo(idata)
+            loo = az.loo(idata, pointwise=True)
             print("✅ LOO computation successful!")
         except Exception as e:
-            print(f"Info: Skipping LOO/WAIC (log likelihood unavailable for this model): {e}")
+            print(f"Info: LOO failed: {e}; retrying with scale='deviance'")
+            try:
+                loo = az.loo(idata, scale='deviance', pointwise=True)
+                print("✅ LOO (deviance scale) computation successful!")
+            except Exception as e2:
+                print(f"Info: Skipping LOO: {e2}")
             loo = None
         
         # Extract fixed effects (model coefficients)
@@ -900,10 +925,10 @@ class BayesianModelComparison:
                     # mean marker
                     mu = float(np.mean(arr))
                     ax1.axvline(mu, color=colors[i], lw=1, alpha=0.6)
-            ax1.set_xlabel('Accuracy')
+        ax1.set_xlabel('Accuracy')
             ax1.set_ylabel('Relative density')
             ax1.set_title('Hierarchical accuracy — Beta posterior densities')
-            ax1.grid(True, alpha=0.3)
+        ax1.grid(True, alpha=0.3)
             ax1.legend(title='Models', bbox_to_anchor=(1.04, 1), loc='upper left')
         except Exception as e:
             print(f"Warning: failed to draw overlaid normal densities: {e}")
@@ -963,6 +988,25 @@ class BayesianModelComparison:
                 except Exception:
                     continue
             # Prepare distributions (fit Beta per model over fold-wise AUCs)
+            # Determine x-limits to include tails of the most extreme models (mode ± 3*sd)
+            modes = []
+            sds = []
+            for m in models:
+                arr = np.array(auc_per_model[m])
+                if arr.size:
+                    a, b = self._fit_beta_from_samples(arr)
+                    modes.append(self._beta_mode(a, b))
+                    sds.append(self._beta_sd(a, b))
+            if not modes:
+                return
+            mu_min = float(np.min(modes) - 3 * np.max(sds))
+            mu_max = float(np.max(modes) + 3 * np.max(sds))
+            x_min = max(0.0, mu_min)
+            x_max = min(1.0, mu_max)
+            if x_max - x_min < 0.05:
+                pad = 0.025
+                x_min = max(0.0, x_min - pad)
+                x_max = min(1.0, x_max + pad)
             plt.figure(figsize=(8,5))
             colors = plt.cm.tab10(np.linspace(0,1,len(models)))
             for i, m in enumerate(models):
@@ -970,18 +1014,20 @@ class BayesianModelComparison:
                 if arr.size == 0:
                     continue
                 alpha, beta = self._fit_beta_from_samples(arr)
-                # dynamic x-range focus but include tails
-                x = np.linspace(0.0, 1.0, 800)
+                x = np.linspace(x_min, x_max, 800)
                 pdf = self._beta_pdf(x, alpha, beta)
                 pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
                 plt.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
                 plt.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
-                plt.axvline(float(np.mean(arr)), color=colors[i], lw=1, alpha=0.6)
+                # vertical line at Beta mode (visual center)
+                mode = self._beta_mode(alpha, beta)
+                plt.axvline(mode, color=colors[i], lw=1, alpha=0.6)
             plt.xlabel('Macro AUC (one-vs-rest)')
             plt.ylabel('Relative density')
             plt.title('AUC distributions across folds — Beta fit')
             plt.grid(True, alpha=0.3)
             plt.legend(bbox_to_anchor=(1.04,1), loc='upper left')
+            plt.xlim(x_min, x_max)
             plt.tight_layout()
             plt.savefig(self.plots_dir / 'auc_distributions.png', dpi=300, bbox_inches='tight')
             plt.close()
@@ -1022,7 +1068,9 @@ class BayesianModelComparison:
                 pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
                 plt.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
                 plt.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
-                plt.axvline(float(np.mean(arr)), color=colors[i], lw=1, alpha=0.6)
+                # use Beta mode (visual center of density)
+                a, b = self._fit_beta_from_samples(arr)
+                plt.axvline(self._beta_mode(a, b), color=colors[i], lw=1, alpha=0.6)
             plt.xlabel('Accuracy')
             plt.ylabel('Relative density')
             plt.title('Accuracy distributions across folds — Beta fit')
@@ -1131,6 +1179,25 @@ class BayesianModelComparison:
                 if len(auc_vals)>0:
                     auc_per_model[m] = np.array(auc_vals)
             # Left panel densities
+            # dynamic x-limits using mode ± 3*sd of most extreme models
+            modes = []
+            sds = []
+            for m in models:
+                arr = np.array(auc_per_model[m])
+                if arr.size:
+                    a, b = self._fit_beta_from_samples(arr)
+                    modes.append(self._beta_mode(a, b))
+                    sds.append(self._beta_sd(a, b))
+            if not modes:
+                return
+            mu_min = float(np.min(modes) - 3 * np.max(sds))
+            mu_max = float(np.max(modes) + 3 * np.max(sds))
+            x_min = max(0.0, mu_min)
+            x_max = min(1.0, mu_max)
+            if x_max - x_min < 0.05:
+                pad = 0.025
+                x_min = max(0.0, x_min - pad)
+                x_max = min(1.0, x_max + pad)
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,5))
             colors = plt.cm.tab10(np.linspace(0,1,len(models)))
             for i, m in enumerate(models):
@@ -1138,17 +1205,18 @@ class BayesianModelComparison:
                 if arr.size == 0:
                     continue
                 alpha, beta = self._fit_beta_from_samples(arr)
-                x = np.linspace(0.0, 1.0, 800)
+                x = np.linspace(x_min, x_max, 800)
                 pdf = self._beta_pdf(x, alpha, beta)
                 pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
                 ax1.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
                 ax1.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
-                ax1.axvline(float(np.mean(arr)), color=colors[i], lw=1, alpha=0.6)
+                ax1.axvline(self._beta_mode(alpha, beta), color=colors[i], lw=1, alpha=0.6)
             ax1.set_xlabel('Macro AUC (one-vs-rest)')
             ax1.set_ylabel('Relative density')
             ax1.set_title('AUC distributions across folds — Beta fit')
             ax1.grid(True, alpha=0.3)
             ax1.legend(bbox_to_anchor=(1.04,1), loc='upper left')
+            ax1.set_xlim(x_min, x_max)
             # Right panel bootstrap pairwise heatmap
             prob_matrix, model_order = self._bootstrap_pairwise_prob_matrix({m: np.array(auc_per_model[m]) for m in models})
             im = ax2.imshow(prob_matrix, cmap='RdBu_r', vmin=0, vmax=1)
