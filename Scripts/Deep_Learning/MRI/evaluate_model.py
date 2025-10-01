@@ -16,9 +16,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import (
     roc_auc_score, accuracy_score, precision_score, recall_score, f1_score,
-    confusion_matrix, classification_report, roc_curve, precision_recall_curve,
+    confusion_matrix, classification_report, precision_recall_curve,
     matthews_corrcoef, auc, average_precision_score
 )
+from sklearn.metrics import roc_curve as sk_roc_curve
 from torch.utils.data import DataLoader
 import json
 from pathlib import Path
@@ -388,7 +389,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
             pos_probs = probabilities[:, 1]
         except Exception:
             pos_probs = probabilities
-        fpr, tpr, _ = roc_curve(labels, pos_probs)
+        fpr, tpr, _ = sk_roc_curve(labels, pos_probs)
         ax1.plot(fpr, tpr, color='blue', lw=2, label=f'ROC Curve (AUC = {metrics["auc"]:.3f})')
         ax1.plot([0, 1], [0, 1], color='red', lw=1, linestyle='--', alpha=0.8)
         ax1.set_xlabel('False Positive Rate')
@@ -403,7 +404,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         for i in range(n_classes):
             # One-vs-rest: class i vs all others
             y_true_binary = (labels == i).astype(int)
-            fpr, tpr, _ = roc_curve(y_true_binary, probabilities[:, i])
+            fpr, tpr, _ = sk_roc_curve(y_true_binary, probabilities[:, i])
             roc_auc = auc(fpr, tpr)
             
             ax1.plot(fpr, tpr, color=colors[i % len(colors)], lw=2, 
