@@ -925,10 +925,10 @@ class BayesianModelComparison:
                     # mean marker
                     mu = float(np.mean(arr))
                     ax1.axvline(mu, color=colors[i], lw=1, alpha=0.6)
-        ax1.set_xlabel('Accuracy')
+            ax1.set_xlabel('Accuracy')
             ax1.set_ylabel('Relative density')
             ax1.set_title('Hierarchical accuracy — Beta posterior densities')
-        ax1.grid(True, alpha=0.3)
+            ax1.grid(True, alpha=0.3)
             ax1.legend(title='Models', bbox_to_anchor=(1.04, 1), loc='upper left')
         except Exception as e:
             print(f"Warning: failed to draw overlaid normal densities: {e}")
