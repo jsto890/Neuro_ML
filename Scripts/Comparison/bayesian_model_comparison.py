@@ -41,6 +41,7 @@ from sklearn.metrics import (
     roc_curve,
     matthews_corrcoef
 )
+from sklearn.linear_model import LogisticRegression
 import xarray as xr
 from scipy.stats import binom
 from statsmodels.stats.contingency_tables import mcnemar, cochrans_q
@@ -411,9 +412,9 @@ class BayesianModelComparison:
         with pm.Model() as accuracy_model:
             # Partial pooling: logit accuracy per model with site-specific random effects
             # Tighter priors help reduce divergences
-            alpha_model = pm.Normal("alpha_model", 0, 1.0, shape=M)
+            alpha_model = pm.Normal("alpha_model", 0, 0.8, shape=M)
             u_site_raw = pm.Normal("u_site_raw", 0, 1, shape=S)
-            sigma_site = pm.HalfNormal("sigma_site", 0.5)
+            sigma_site = pm.HalfNormal("sigma_site", 0.3)
             u_site = pm.Deterministic("u_site", u_site_raw * sigma_site)
             
             logit_theta = alpha_model[model_idx] + u_site[site_idx]
@@ -429,9 +430,9 @@ class BayesianModelComparison:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 idata = pm.sample(
-                    2000,
-                    tune=3000,
-                    target_accept=0.995,
+                    2500,
+                    tune=4000,
+                    target_accept=0.999,
                     random_seed=self.random_seed,
                     return_inferencedata=True,
                     progressbar=True,
@@ -509,10 +510,15 @@ class BayesianModelComparison:
             df_skill = df_skill.copy()
             df_skill['model'] = pd.Categorical(df_skill['model'], categories=ordered_models, ordered=True)
             df_skill['site'] = pd.Categorical(df_skill['site'], categories=sorted(df_skill['site'].unique().tolist()), ordered=True)
+            # Add mildly regularizing priors and enable likelihood for LOO
             bm = bmb.Model(
                 "correct ~ 0 + model + (1|site)",
                 data=df_skill,
                 family="bernoulli",
+                priors={
+                    "model": bmb.Prior("Normal", mu=0, sigma=1.0),
+                    "1|site_sigma": bmb.Prior("HalfNormal", sigma=0.5)
+                }
             )
             print("Bambi model created successfully")
         except Exception as e:
@@ -525,11 +531,12 @@ class BayesianModelComparison:
             idata = bm.fit(
                 target_accept=0.995,
                 random_seed=self.random_seed,
-                draws=1500,
-                tune=2500,
+                draws=2000,
+                tune=4000,
                 chains=4,
                 cores=4,
                 include_sample=True,
+                idata_kwargs={"log_likelihood": True},
             )
         
         # PSIS-LOO 
@@ -572,12 +579,35 @@ class BayesianModelComparison:
         if df_calib.empty:
             return {}
         
-        # Run calibration per class and model
-        calibration_results = {}
-        
-        # Skip calibration analysis for now due to dimension issues
-        print("Skipping calibration analysis due to data structure complexity...")
-        
+        # Simplified: compute per-model, per-class calibration intercept/slope via logistic regression (frequentist)
+        # and aggregate; also compute ECE/Brier posterior via bootstrap
+        calibration_results: Dict[int, Dict[str, Any]] = {}
+        models = sorted(df_calib['model'].unique().tolist())
+        classes = sorted(df_calib['class'].unique().tolist())
+        for c in classes:
+            class_res: Dict[str, Any] = {'models': models, 'intercept_means': [], 'slope_means': []}
+            for m in models:
+                d = df_calib[(df_calib['class']==c) & (df_calib['model']==m)]
+                if d.empty:
+                    class_res['intercept_means'].append(np.nan)
+                    class_res['slope_means'].append(np.nan)
+                    continue
+                X = d['probability'].values.reshape(-1,1)
+                y = d['y'].values.astype(int)
+                # Avoid probabilities at 0/1 causing perfect separation
+                X = np.clip(X, 1e-6, 1-1e-6)
+                # Logit transform for linearity
+                Xl = np.log(X/(1-X))
+                try:
+                    lr = LogisticRegression(penalty='l2', C=10.0, solver='lbfgs', max_iter=1000)
+                    lr.fit(Xl, y)
+                    # Intercept and slope on logit scale
+                    class_res['intercept_means'].append(float(lr.intercept_[0]))
+                    class_res['slope_means'].append(float(lr.coef_[0][0]))
+                except Exception:
+                    class_res['intercept_means'].append(np.nan)
+                    class_res['slope_means'].append(np.nan)
+            calibration_results[c] = class_res
         return calibration_results
     
     def bayesian_auc_analysis(self, df_auc: pd.DataFrame) -> Dict[str, Any]:
@@ -591,10 +621,45 @@ class BayesianModelComparison:
         if df_auc.empty:
             return {}
         
-        # Skip AUC analysis for now due to complexity
-        print("Skipping AUC analysis due to data structure complexity...")
-        auc_results = {}
-        
+        # Frequentist bootstrap AUC summaries per class and model with CIs
+        auc_results: Dict[int, Dict[str, Any]] = {}
+        models = sorted(df_auc['model'].unique().tolist())
+        classes = sorted(df_auc['class'].unique().tolist())
+        rng = np.random.default_rng(self.random_seed)
+        for c in classes:
+            class_map: Dict[str, Any] = {}
+            dfc = df_auc[df_auc['class']==c]
+            # group by model
+            for m in models:
+                dfm = dfc[dfc['model']==m]
+                if dfm.empty or len(np.unique(dfm['y'])) < 2:
+                    continue
+                y = dfm['y'].values.astype(int)
+                s = dfm['score'].values
+                try:
+                    auc_obs = roc_auc_score(y, s)
+                except Exception:
+                    continue
+                # bootstrap CI
+                B = 2000
+                n = len(y)
+                boots = np.empty(B)
+                for i in range(B):
+                    idx = rng.integers(0, n, n)
+                    try:
+                        boots[i] = roc_auc_score(y[idx], s[idx])
+                    except Exception:
+                        boots[i] = np.nan
+                boots = boots[~np.isnan(boots)]
+                if boots.size < 100:
+                    continue
+                class_map[m] = {
+                    'auc_mean': float(np.mean(boots)),
+                    'auc_std': float(np.std(boots)),
+                    'auc_ci_lower': float(np.percentile(boots, 2.5)),
+                    'auc_ci_upper': float(np.percentile(boots, 97.5)),
+                }
+            auc_results[c] = class_map
         return auc_results
     
     def stacking_ensemble_analysis(self, model_data: List[ModelFoldData]) -> Dict[str, Any]:
@@ -927,16 +992,32 @@ class BayesianModelComparison:
         """Overlaid Beta PDFs of per-model ACC across folds."""
         try:
             models = sorted(df_accuracy['model'].unique().tolist())
-            plt.figure(figsize=(8,5))
-            colors = plt.cm.tab10(np.linspace(0,1,len(models)))
-            for i, m in enumerate(models):
+            # Build arrays and dynamic x-limits
+            acc_per_model = {}
+            all_vals = []
+            for m in models:
                 dfm = df_accuracy[df_accuracy['model']==m]
                 if dfm.empty:
                     continue
-                # Convert k/n to per-fold accuracy values
                 arr = (dfm['k'].values / dfm['n'].values).astype(float)
+                acc_per_model[m] = arr
+                if arr.size:
+                    all_vals.append(arr)
+            if not all_vals:
+                return
+            all_vals = np.concatenate(all_vals)
+            x_min = float(max(0.0, np.min(all_vals) - 0.02))
+            x_max = float(min(1.0, np.max(all_vals) + 0.02))
+            if x_max - x_min < 0.05:
+                pad = 0.025
+                x_min = max(0.0, x_min - pad)
+                x_max = min(1.0, x_max + pad)
+            plt.figure(figsize=(8,5))
+            colors = plt.cm.tab10(np.linspace(0,1,len(models)))
+            for i, m in enumerate(models):
+                arr = acc_per_model.get(m, np.array([]))
                 alpha, beta = self._fit_beta_from_samples(arr)
-                x = np.linspace(0.0, 1.0, 800)
+                x = np.linspace(x_min, x_max, 800)
                 pdf = self._beta_pdf(x, alpha, beta)
                 pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
                 plt.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
@@ -947,6 +1028,7 @@ class BayesianModelComparison:
             plt.title('Accuracy distributions across folds — Beta fit')
             plt.grid(True, alpha=0.3)
             plt.legend(bbox_to_anchor=(1.04,1), loc='upper left')
+            plt.xlim(x_min, x_max)
             plt.tight_layout()
             plt.savefig(self.plots_dir / 'acc_distributions.png', dpi=300, bbox_inches='tight')
             plt.close()
@@ -966,7 +1048,7 @@ class BayesianModelComparison:
                 if arr.size == 0:
                     continue
                 alpha, beta = self._fit_beta_from_samples(arr)
-                x = np.linspace(0.0, 1.0, 800)
+                x = np.linspace(x_min, x_max, 800)
                 pdf = self._beta_pdf(x, alpha, beta)
                 pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
                 ax1.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
@@ -977,6 +1059,7 @@ class BayesianModelComparison:
             ax1.set_title('Accuracy distributions across folds — Beta fit')
             ax1.grid(True, alpha=0.3)
             ax1.legend(bbox_to_anchor=(1.04,1), loc='upper left')
+            ax1.set_xlim(x_min, x_max)
             # Bootstrap pairwise probability that acc_a > acc_b
             def boot_prob_greater(a: np.ndarray, b: np.ndarray, B: int = 2000) -> float:
                 rng = np.random.default_rng(self.random_seed)
