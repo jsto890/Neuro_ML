@@ -38,8 +38,11 @@ import bambi as bmb
 from sklearn.metrics import (
     roc_auc_score, accuracy_score, precision_score, recall_score, f1_score,
     confusion_matrix, classification_report, precision_recall_curve, average_precision_score,
+    roc_curve,
     matthews_corrcoef
 )
+import xarray as xr
+from scipy.stats import binom
 from statsmodels.stats.contingency_tables import mcnemar, cochrans_q
 from statsmodels.stats.multitest import multipletests
 
@@ -786,6 +789,10 @@ class BayesianModelComparison:
             # h) Frequentist significance tests and calibration metrics
             if 'auc' in data_dict and not data_dict['auc'].empty and 'skill' in data_dict and not data_dict['skill'].empty:
                 self._run_frequentist_comparisons(data_dict['auc'], data_dict['skill'])
+            # i) Separate ACC distribution and two-panel comparisons (like AUC/MCC)
+            if 'accuracy' in data_dict and not data_dict['accuracy'].empty:
+                self._plot_acc_distributions(data_dict['accuracy'])
+                self._plot_acc_two_panel(data_dict['accuracy'])
         except Exception as e:
             print(f"Warning: Failed to create publication plots: {e}")
     
@@ -830,7 +837,7 @@ class BayesianModelComparison:
                     ax1.axvline(mu, color=colors[i], lw=1, alpha=0.6)
             ax1.set_xlabel('Accuracy')
             ax1.set_ylabel('Relative density')
-            ax1.set_title('Model accuracy Beta distributions (from posterior)')
+            ax1.set_title('Hierarchical accuracy — Beta posterior densities')
             ax1.grid(True, alpha=0.3)
             ax1.legend(title='Models', bbox_to_anchor=(1.04, 1), loc='upper left')
         except Exception as e:
@@ -907,7 +914,7 @@ class BayesianModelComparison:
                 plt.axvline(float(np.mean(arr)), color=colors[i], lw=1, alpha=0.6)
             plt.xlabel('Macro AUC (one-vs-rest)')
             plt.ylabel('Relative density')
-            plt.title('AUC distributions across folds (Beta fit)')
+            plt.title('AUC distributions across folds — Beta fit')
             plt.grid(True, alpha=0.3)
             plt.legend(bbox_to_anchor=(1.04,1), loc='upper left')
             plt.tight_layout()
@@ -915,6 +922,91 @@ class BayesianModelComparison:
             plt.close()
         except Exception as e:
             print(f"Warning: failed auc distributions: {e}")
+
+    def _plot_acc_distributions(self, df_accuracy: pd.DataFrame):
+        """Overlaid Beta PDFs of per-model ACC across folds."""
+        try:
+            models = sorted(df_accuracy['model'].unique().tolist())
+            plt.figure(figsize=(8,5))
+            colors = plt.cm.tab10(np.linspace(0,1,len(models)))
+            for i, m in enumerate(models):
+                dfm = df_accuracy[df_accuracy['model']==m]
+                if dfm.empty:
+                    continue
+                # Convert k/n to per-fold accuracy values
+                arr = (dfm['k'].values / dfm['n'].values).astype(float)
+                alpha, beta = self._fit_beta_from_samples(arr)
+                x = np.linspace(0.0, 1.0, 800)
+                pdf = self._beta_pdf(x, alpha, beta)
+                pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
+                plt.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
+                plt.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
+                plt.axvline(float(np.mean(arr)), color=colors[i], lw=1, alpha=0.6)
+            plt.xlabel('Accuracy')
+            plt.ylabel('Relative density')
+            plt.title('Accuracy distributions across folds — Beta fit')
+            plt.grid(True, alpha=0.3)
+            plt.legend(bbox_to_anchor=(1.04,1), loc='upper left')
+            plt.tight_layout()
+            plt.savefig(self.plots_dir / 'acc_distributions.png', dpi=300, bbox_inches='tight')
+            plt.close()
+        except Exception as e:
+            print(f"Warning: failed acc distributions: {e}")
+
+    def _plot_acc_two_panel(self, df_accuracy: pd.DataFrame):
+        """Two-panel ACC: overlaid Beta densities + bootstrap pairwise probability heatmap for ACC."""
+        try:
+            models = sorted(df_accuracy['model'].unique().tolist())
+            # Build per-fold accuracies per model
+            acc_per_model = {m: (df_accuracy[df_accuracy['model']==m]['k'].values / df_accuracy[df_accuracy['model']==m]['n'].values).astype(float) for m in models}
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,5))
+            colors = plt.cm.tab10(np.linspace(0,1,len(models)))
+            for i, m in enumerate(models):
+                arr = np.array(acc_per_model[m])
+                if arr.size == 0:
+                    continue
+                alpha, beta = self._fit_beta_from_samples(arr)
+                x = np.linspace(0.0, 1.0, 800)
+                pdf = self._beta_pdf(x, alpha, beta)
+                pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
+                ax1.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
+                ax1.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
+                ax1.axvline(float(np.mean(arr)), color=colors[i], lw=1, alpha=0.6)
+            ax1.set_xlabel('Accuracy')
+            ax1.set_ylabel('Relative density')
+            ax1.set_title('Accuracy distributions across folds — Beta fit')
+            ax1.grid(True, alpha=0.3)
+            ax1.legend(bbox_to_anchor=(1.04,1), loc='upper left')
+            # Bootstrap pairwise probability that acc_a > acc_b
+            def boot_prob_greater(a: np.ndarray, b: np.ndarray, B: int = 2000) -> float:
+                rng = np.random.default_rng(self.random_seed)
+                if a.size == 0 or b.size == 0:
+                    return np.nan
+                diffs = np.empty(B)
+                for i in range(B):
+                    sa = rng.choice(a, size=a.size, replace=True)
+                    sb = rng.choice(b, size=b.size, replace=True)
+                    diffs[i] = np.mean(sa) - np.mean(sb)
+                return float(np.mean(diffs > 0))
+            prob_matrix = np.zeros((len(models), len(models)))
+            for i, mi in enumerate(models):
+                for j, mj in enumerate(models):
+                    if i == j:
+                        prob_matrix[i, j] = 0.5
+                    else:
+                        prob_matrix[i, j] = boot_prob_greater(acc_per_model[mi], acc_per_model[mj])
+            im = ax2.imshow(prob_matrix, cmap='RdBu_r', vmin=0, vmax=1)
+            ax2.set_xticks(range(len(models)))
+            ax2.set_yticks(range(len(models)))
+            ax2.set_xticklabels(models, rotation=45)
+            ax2.set_yticklabels(models)
+            ax2.set_title('P(ACC row > ACC column) (bootstrap)')
+            plt.colorbar(im, ax=ax2)
+            plt.tight_layout()
+            plt.savefig(self.plots_dir / 'acc_two_panel.png', dpi=300, bbox_inches='tight')
+            plt.close()
+        except Exception as e:
+            print(f"Warning: failed acc two-panel: {e}")
 
     def _bootstrap_pairwise_prob_matrix(self, values_by_model: Dict[str, np.ndarray], n_boot: int = 2000, random_state: int = 42) -> Tuple[np.ndarray, List[str]]:
         rng = np.random.default_rng(random_state)
@@ -971,7 +1063,7 @@ class BayesianModelComparison:
                 ax1.axvline(float(np.mean(arr)), color=colors[i], lw=1, alpha=0.6)
             ax1.set_xlabel('Macro AUC (one-vs-rest)')
             ax1.set_ylabel('Relative density')
-            ax1.set_title('AUC distributions across folds (Beta fit)')
+            ax1.set_title('AUC distributions across folds — Beta fit')
             ax1.grid(True, alpha=0.3)
             ax1.legend(bbox_to_anchor=(1.04,1), loc='upper left')
             # Right panel bootstrap pairwise heatmap
@@ -1028,7 +1120,7 @@ class BayesianModelComparison:
                 ax1.axvline(float(np.mean(arr)), color=colors[i], lw=1, alpha=0.6)
             ax1.set_xlabel('MCC')
             ax1.set_ylabel('Relative density')
-            ax1.set_title('MCC distributions across folds (Beta fit via transform)')
+            ax1.set_title('MCC distributions across folds — Beta fit via transform')
             ax1.grid(True, alpha=0.3)
             ax1.legend(bbox_to_anchor=(1.04,1), loc='upper left')
             # Right panel bootstrap heatmap
@@ -1245,20 +1337,23 @@ class BayesianModelComparison:
                 ax1 = plt.subplot(1,2,1)
                 # PR subplot
                 ax2 = plt.subplot(1,2,2)
+                have_any = False
                 for model in models:
                     dfm = df_auc[(df_auc['model']==model) & (df_auc['class']==cls)]
                     if dfm.empty:
                         continue
                     y = dfm['y'].values
                     s = dfm['score'].values
+                    if len(np.unique(y)) < 2:
+                        continue
                     # ROC
                     try:
                         auc_val = roc_auc_score(y, s)
-                        fpr = np.linspace(0,1,101)
-                        # approximate ROC curve using thresholds (fallback: skip detailed curve)
-                        # Using sklearn to compute ROC points would need roc_curve import; we'll rely on AUC only for now
-                        ax1.plot([0,1],[0,1], color='gray', ls='--', lw=0.5) if model==models[0] else None
-                        ax1.plot([],[], label=f"{model} AUC={auc_val:.3f}")
+                        fpr, tpr, _ = roc_curve(y, s)
+                        if not have_any:
+                            ax1.plot([0,1],[0,1], color='gray', ls='--', lw=0.8)
+                        ax1.plot(fpr, tpr, lw=1.5, label=f"{model} AUC={auc_val:.3f}")
+                        have_any = True
                     except Exception:
                         pass
                     # PR
@@ -1268,12 +1363,13 @@ class BayesianModelComparison:
                         ax2.plot(recall, precision, lw=1.5, label=f"{model} AP={ap:.3f}")
                     except Exception:
                         pass
-                ax1.set_title(f'ROC (Class {cls})')
+                title_cls = self.class_labels[cls] if cls < len(self.class_labels) else f"Class {cls}"
+                ax1.set_title(f'ROC curve — {title_cls}')
                 ax1.set_xlabel('FPR')
                 ax1.set_ylabel('TPR')
                 ax1.legend()
                 ax1.grid(True, alpha=0.3)
-                ax2.set_title(f'PR (Class {cls})')
+                ax2.set_title(f'Precision–Recall — {title_cls}')
                 ax2.set_xlabel('Recall')
                 ax2.set_ylabel('Precision')
                 ax2.legend()
@@ -1405,9 +1501,14 @@ class BayesianModelComparison:
                     # 2x2 of disagreements
                     n01 = int(np.sum((a_correct == 0) & (b_correct == 1)))
                     n10 = int(np.sum((a_correct == 1) & (b_correct == 0)))
-                    table = np.array([[0, n01],[n10, 0]])
+                    # If no discordant pairs, p-value is 1.0; avoid divide-by-zero
+                    if (n01 + n10) == 0:
+                        mcnemar_p.loc[a, b] = 1.0
+                        mcnemar_p.loc[b, a] = 1.0
+                        continue
+                    table = np.array([[0, n01],[n10, 0]], dtype=int)
                     try:
-                        res = mcnemar(table, exact=False, correction=True)
+                        res = mcnemar(table, exact=True)
                         mcnemar_p.loc[a, b] = res.pvalue
                         mcnemar_p.loc[b, a] = res.pvalue
                     except Exception:
@@ -1629,7 +1730,14 @@ class BayesianModelComparison:
             plt.xlabel('Model')
             plt.title('One-vs-rest ACC by model (mean bar, range whiskers, class markers)')
             plt.xticks(rotation=20)
-            plt.ylim(0,1)
+            # Dynamic y-limits with small margins
+            ymin = max(0.0, float(np.nanmin(mins) - 0.02))
+            ymax = min(1.0, float(np.nanmax(maxs) + 0.02))
+            if ymax - ymin < 0.05:
+                pad = 0.025
+                ymin = max(0.0, ymin - pad)
+                ymax = min(1.0, ymax + pad)
+            plt.ylim(ymin, ymax)
             plt.grid(True, axis='y', alpha=0.3)
             plt.legend(title='Class', bbox_to_anchor=(1.04,1), loc='upper left')
             plt.tight_layout()
@@ -1660,7 +1768,13 @@ class BayesianModelComparison:
             plt.xlabel('Model')
             plt.title('One-vs-rest AUC by model (mean bar, range whiskers, class markers)')
             plt.xticks(rotation=20)
-            plt.ylim(0,1)
+            ymin = max(0.0, float(np.nanmin(mins) - 0.02))
+            ymax = min(1.0, float(np.nanmax(maxs) + 0.02))
+            if ymax - ymin < 0.05:
+                pad = 0.025
+                ymin = max(0.0, ymin - pad)
+                ymax = min(1.0, ymax + pad)
+            plt.ylim(ymin, ymax)
             plt.grid(True, axis='y', alpha=0.3)
             plt.legend(title='Class', bbox_to_anchor=(1.04,1), loc='upper left')
             plt.tight_layout()
