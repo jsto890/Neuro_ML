@@ -942,10 +942,10 @@ class BayesianModelComparison:
                 ax1.axvline(self._beta_mode(a, b), color=colors[i], lw=1, alpha=0.6)
             ax1.set_xlim(x_min, x_max)
         
-            ax1.set_xlabel('Accuracy')
+        ax1.set_xlabel('Accuracy')
             ax1.set_ylabel('Relative density')
             ax1.set_title('Hierarchical accuracy — Beta posterior densities')
-            ax1.grid(True, alpha=0.3)
+        ax1.grid(True, alpha=0.3)
             ax1.legend(title='Models', bbox_to_anchor=(1.04, 1), loc='upper left')
         except Exception as e:
                 print(f"Warning: failed to draw overlaid normal densities: {e}")
@@ -1005,27 +1005,30 @@ class BayesianModelComparison:
                 except Exception:
                     continue
             # Prepare distributions (fit Beta per model over fold-wise AUCs)
-            # Determine x-limits to include tails of the most extreme models (mode ± 3*sd)
+            # Determine x-limits to include tails of the most extreme models (mode ± 5*sd)
             modes = []
             sds = []
+            mean_aucs = []
             for m in models:
                 arr = np.array(auc_per_model[m])
                 if arr.size:
                     a, b = self._fit_beta_from_samples(arr)
                     modes.append(self._beta_mode(a, b))
                     sds.append(self._beta_sd(a, b))
+                    mean_aucs.append(float(np.mean(arr)))
             if not modes:
                 return
-            mu_min = float(np.min(modes) - 4 * np.max(sds))
-            mu_max = float(np.max(modes) + 4 * np.max(sds))
+            mu_min = float(np.min(modes) - 5 * np.max(sds))
+            mu_max = float(np.max(modes) + 5 * np.max(sds))
             x_min = max(0.0, mu_min)
             x_max = min(1.0, mu_max)
-            if x_max - x_min < 0.05:
-                pad = 0.025
+            if x_max - x_min < 0.1:
+                pad = 0.05
                 x_min = max(0.0, x_min - pad)
                 x_max = min(1.0, x_max + pad)
-            plt.figure(figsize=(8,5))
+            plt.figure(figsize=(10,5))
             colors = plt.cm.tab10(np.linspace(0,1,len(models)))
+            idx = 0
             for i, m in enumerate(models):
                 arr = np.array(auc_per_model[m])
                 if arr.size == 0:
@@ -1034,11 +1037,13 @@ class BayesianModelComparison:
                 x = np.linspace(x_min, x_max, 800)
                 pdf = self._beta_pdf(x, alpha, beta)
                 pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
-                plt.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
+                auc_val = mean_aucs[idx]
+                plt.plot(x, pdf, color=colors[i], lw=2, label=f"{m} (AUC={auc_val:.3f})")
                 plt.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
                 # vertical line at Beta mode (visual center)
                 mode = self._beta_mode(alpha, beta)
                 plt.axvline(mode, color=colors[i], lw=1, alpha=0.6)
+                idx += 1
             plt.xlabel('Macro AUC (one-vs-rest)')
             plt.ylabel('Relative density')
             plt.title('AUC distributions across folds — Beta fit')
@@ -1055,39 +1060,56 @@ class BayesianModelComparison:
         """Overlaid Beta PDFs of per-model ACC across folds."""
         try:
             models = sorted(df_accuracy['model'].unique().tolist())
-            # Build arrays and dynamic x-limits
+            # Build arrays per model
             acc_per_model = {}
-            all_vals = []
             for m in models:
                 dfm = df_accuracy[df_accuracy['model']==m]
                 if dfm.empty:
                     continue
                 arr = (dfm['k'].values / dfm['n'].values).astype(float)
                 acc_per_model[m] = arr
-                if arr.size:
-                    all_vals.append(arr)
-            if not all_vals:
+            if not acc_per_model:
                 return
-            all_vals = np.concatenate(all_vals)
-            x_min = float(max(0.0, np.min(all_vals) - 0.02))
-            x_max = float(min(1.0, np.max(all_vals) + 0.02))
-            if x_max - x_min < 0.05:
-                pad = 0.025
+            # Compute Beta modes and sds per model
+            modes = []
+            sds = []
+            mean_accs = []
+            for m in models:
+                arr = acc_per_model.get(m, np.array([]))
+                if arr.size == 0:
+                    continue
+                a, b = self._fit_beta_from_samples(arr)
+                modes.append(self._beta_mode(a, b))
+                sds.append(self._beta_sd(a, b))
+                mean_accs.append(float(np.mean(arr)))
+            if not modes:
+                return
+            # x-limits: mode ± 4*sd with lengthening factor
+            mu_min = float(np.min(modes) - 5 * np.max(sds))
+            mu_max = float(np.max(modes) + 5 * np.max(sds))
+            x_min = max(0.0, mu_min)
+            x_max = min(1.0, mu_max)
+            if x_max - x_min < 0.1:
+                pad = 0.05
                 x_min = max(0.0, x_min - pad)
                 x_max = min(1.0, x_max + pad)
-            plt.figure(figsize=(8,5))
+            plt.figure(figsize=(10,5))
             colors = plt.cm.tab10(np.linspace(0,1,len(models)))
+            idx = 0
             for i, m in enumerate(models):
                 arr = acc_per_model.get(m, np.array([]))
+                if arr.size == 0:
+                    continue
                 alpha, beta = self._fit_beta_from_samples(arr)
                 x = np.linspace(x_min, x_max, 800)
                 pdf = self._beta_pdf(x, alpha, beta)
                 pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
-                plt.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
+                acc_val = mean_accs[idx]
+                plt.plot(x, pdf, color=colors[i], lw=2, label=f"{m} (ACC={acc_val:.3f})")
                 plt.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
-                # use Beta mode (visual center of density)
-                a, b = self._fit_beta_from_samples(arr)
-                plt.axvline(self._beta_mode(a, b), color=colors[i], lw=1, alpha=0.6)
+                # mode marker
+                plt.axvline(self._beta_mode(alpha, beta), color=colors[i], lw=1, alpha=0.6)
+                idx += 1
             plt.xlabel('Accuracy')
             plt.ylabel('Relative density')
             plt.title('Accuracy distributions across folds — Beta fit')
@@ -1196,27 +1218,30 @@ class BayesianModelComparison:
                 if len(auc_vals)>0:
                     auc_per_model[m] = np.array(auc_vals)
             # Left panel densities
-            # dynamic x-limits using mode ± 3*sd of most extreme models
+            # dynamic x-limits using mode ± 5*sd of most extreme models
             modes = []
             sds = []
+            mean_aucs_two = []
             for m in models:
                 arr = np.array(auc_per_model[m])
                 if arr.size:
                     a, b = self._fit_beta_from_samples(arr)
                     modes.append(self._beta_mode(a, b))
                     sds.append(self._beta_sd(a, b))
+                    mean_aucs_two.append(float(np.mean(arr)))
             if not modes:
                 return
-            mu_min = float(np.min(modes) - 4 * np.max(sds))
-            mu_max = float(np.max(modes) + 4 * np.max(sds))
+            mu_min = float(np.min(modes) - 5 * np.max(sds))
+            mu_max = float(np.max(modes) + 5 * np.max(sds))
             x_min = max(0.0, mu_min)
             x_max = min(1.0, mu_max)
-            if x_max - x_min < 0.05:
-                pad = 0.025
+            if x_max - x_min < 0.1:
+                pad = 0.05
                 x_min = max(0.0, x_min - pad)
                 x_max = min(1.0, x_max + pad)
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,5))
             colors = plt.cm.tab10(np.linspace(0,1,len(models)))
+            idx = 0
             for i, m in enumerate(models):
                 arr = np.array(auc_per_model[m])
                 if arr.size == 0:
@@ -1225,9 +1250,11 @@ class BayesianModelComparison:
                 x = np.linspace(x_min, x_max, 800)
                 pdf = self._beta_pdf(x, alpha, beta)
                 pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
-                ax1.plot(x, pdf, color=colors[i], lw=2, label=f"{m}")
+                auc_val = mean_aucs_two[idx]
+                ax1.plot(x, pdf, color=colors[i], lw=2, label=f"{m} (AUC={auc_val:.3f})")
                 ax1.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
                 ax1.axvline(self._beta_mode(alpha, beta), color=colors[i], lw=1, alpha=0.6)
+                idx += 1
             ax1.set_xlabel('Macro AUC (one-vs-rest)')
             ax1.set_ylabel('Relative density')
             ax1.set_title('AUC distributions across folds — Beta fit')
@@ -1269,8 +1296,31 @@ class BayesianModelComparison:
                         continue
                 mcc_per_model[m] = np.array(vals)
             # Left panel densities
+            # Compute modes/sds globally to determine x-range
+            modes_01 = []
+            sds_01 = []
+            mean_mccs = []
+            for m in models:
+                arr = np.array(mcc_per_model[m])
+                if arr.size:
+                    arr01 = (arr + 1.0) / 2.0
+                    a, b = self._fit_beta_from_samples(arr01)
+                    modes_01.append(self._beta_mode(a, b))
+                    sds_01.append(self._beta_sd(a, b))
+                    mean_mccs.append(float(np.mean(arr)))
+            if not modes_01:
+                return
+            mu_min = float(np.min(modes_01) - 5 * np.max(sds_01))
+            mu_max = float(np.max(modes_01) + 5 * np.max(sds_01))
+            x01_min = max(0.0, mu_min)
+            x01_max = min(1.0, mu_max)
+            if x01_max - x01_min < 0.1:
+                pad = 0.05
+                x01_min = max(0.0, x01_min - pad)
+                x01_max = min(1.0, x01_max + pad)
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,5))
             colors = plt.cm.tab10(np.linspace(0,1,len(models)))
+            idx = 0
             for i, m in enumerate(models):
                 arr = np.array(mcc_per_model[m])
                 if arr.size == 0:
@@ -1278,23 +1328,16 @@ class BayesianModelComparison:
                 # Transform MCC (-1,1) to (0,1) via (x+1)/2 to fit Beta
                 arr01 = (arr + 1.0) / 2.0
                 alpha, beta = self._fit_beta_from_samples(arr01)
-                # dynamic MCC x-range using mode ± 4*sd then map back to [-1,1]
-                mode01 = self._beta_mode(alpha, beta)
-                sd01 = self._beta_sd(alpha, beta)
-                x01_min = max(0.0, mode01 - 4*sd01)
-                x01_max = min(1.0, mode01 + 4*sd01)
-                if x01_max - x01_min < 0.05:
-                    pad = 0.025
-                    x01_min = max(0.0, x01_min - pad)
-                    x01_max = min(1.0, x01_max + pad)
                 x01 = np.linspace(x01_min, x01_max, 800)
-                pdf = self._beta_pdf(x, alpha, beta)
+                pdf = self._beta_pdf(x01, alpha, beta)
                 pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
                 # map back x to MCC axis
                 x_mcc = x01*2.0 - 1.0
-                ax1.plot(x_mcc, pdf, color=colors[i], lw=2, label=f"{m}")
+                mcc_val = mean_mccs[idx]
+                ax1.plot(x_mcc, pdf, color=colors[i], lw=2, label=f"{m} (MCC={mcc_val:.3f})")
                 ax1.fill_between(x_mcc, 0, pdf, color=colors[i], alpha=0.08)
-                ax1.axvline(float(np.mean(arr)), color=colors[i], lw=1, alpha=0.6)
+                ax1.axvline(self._beta_mode(alpha, beta)*2.0 - 1.0, color=colors[i], lw=1, alpha=0.6)
+                idx += 1
             ax1.set_xlabel('MCC')
             ax1.set_ylabel('Relative density')
             ax1.set_title('MCC distributions across folds — Beta fit via transform')
