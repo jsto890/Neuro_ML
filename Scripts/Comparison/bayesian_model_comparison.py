@@ -907,28 +907,43 @@ class BayesianModelComparison:
         ci_upper = results['accuracy_ci_upper']
         print(f"Plotting {len(models)} models with means: {means}")
         try:
-            # Build x-range from CI envelope, clipped to [0,1]
-            x_min = max(0.0, float(np.min(ci_lower) - 0.05))
-            x_max = min(1.0, float(np.max(ci_upper) + 0.05))
+            samples = results.get('accuracy_samples', None)
+            if samples is None or not isinstance(samples, np.ndarray) or samples.shape[1] != len(models):
+                raise ValueError('accuracy_samples not available for Beta fit')
+            # Compute Beta modes and sds per model from posterior samples
+            modes = []
+            sds = []
+            ab_list = []
+            for i in range(len(models)):
+                arr = samples[:, i]
+                a, b = self._fit_beta_from_samples(arr)
+                ab_list.append((a, b))
+                modes.append(self._beta_mode(a, b))
+                sds.append(self._beta_sd(a, b))
+            # x-range: include tails of extreme models
+            mu_min = float(np.min(modes) - 4 * np.max(sds))
+            mu_max = float(np.max(modes) + 4 * np.max(sds))
+            x_min = max(0.0, mu_min)
+            x_max = min(1.0, mu_max)
+            if x_max - x_min < 0.05:
+                pad = 0.025
+                x_min = max(0.0, x_min - pad)
+                x_max = min(1.0, x_max + pad)
             x = np.linspace(x_min, x_max, 1000)
             colors = plt.cm.tab10(np.linspace(0, 1, len(models)))
             for i, model in enumerate(models):
-                # Fit Beta from posterior samples for this model
-                samples = results.get('accuracy_samples', None)
-                if samples is not None and isinstance(samples, np.ndarray) and samples.shape[1] == len(models):
-                    arr = samples[:, i]
-                    alpha, beta = self._fit_beta_from_samples(arr)
-                    pdf = self._beta_pdf(x, alpha, beta)
-                    pdf = pdf / np.max(pdf)
-                    ax1.plot(x, pdf, color=colors[i], lw=2, label=model)
-                    ax1.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
-                    # mean marker
-                    mu = float(np.mean(arr))
-                    ax1.axvline(mu, color=colors[i], lw=1, alpha=0.6)
-            ax1.set_xlabel('Accuracy')
+                a, b = ab_list[i]
+                pdf = self._beta_pdf(x, a, b)
+                pdf = pdf / np.max(pdf)
+                ax1.plot(x, pdf, color=colors[i], lw=2, label=model)
+                ax1.fill_between(x, 0, pdf, color=colors[i], alpha=0.08)
+                # mode marker (center of density)
+                ax1.axvline(self._beta_mode(a, b), color=colors[i], lw=1, alpha=0.6)
+            ax1.set_xlim(x_min, x_max)
+        ax1.set_xlabel('Accuracy')
             ax1.set_ylabel('Relative density')
             ax1.set_title('Hierarchical accuracy — Beta posterior densities')
-            ax1.grid(True, alpha=0.3)
+        ax1.grid(True, alpha=0.3)
             ax1.legend(title='Models', bbox_to_anchor=(1.04, 1), loc='upper left')
         except Exception as e:
             print(f"Warning: failed to draw overlaid normal densities: {e}")
@@ -999,8 +1014,8 @@ class BayesianModelComparison:
                     sds.append(self._beta_sd(a, b))
             if not modes:
                 return
-            mu_min = float(np.min(modes) - 3 * np.max(sds))
-            mu_max = float(np.max(modes) + 3 * np.max(sds))
+            mu_min = float(np.min(modes) - 4 * np.max(sds))
+            mu_max = float(np.max(modes) + 4 * np.max(sds))
             x_min = max(0.0, mu_min)
             x_max = min(1.0, mu_max)
             if x_max - x_min < 0.05:
@@ -1190,8 +1205,8 @@ class BayesianModelComparison:
                     sds.append(self._beta_sd(a, b))
             if not modes:
                 return
-            mu_min = float(np.min(modes) - 3 * np.max(sds))
-            mu_max = float(np.max(modes) + 3 * np.max(sds))
+            mu_min = float(np.min(modes) - 4 * np.max(sds))
+            mu_max = float(np.max(modes) + 4 * np.max(sds))
             x_min = max(0.0, mu_min)
             x_max = min(1.0, mu_max)
             if x_max - x_min < 0.05:
@@ -1261,11 +1276,20 @@ class BayesianModelComparison:
                 # Transform MCC (-1,1) to (0,1) via (x+1)/2 to fit Beta
                 arr01 = (arr + 1.0) / 2.0
                 alpha, beta = self._fit_beta_from_samples(arr01)
-                x = np.linspace(0.0, 1.0, 800)
+                # dynamic MCC x-range using mode ± 4*sd then map back to [-1,1]
+                mode01 = self._beta_mode(alpha, beta)
+                sd01 = self._beta_sd(alpha, beta)
+                x01_min = max(0.0, mode01 - 4*sd01)
+                x01_max = min(1.0, mode01 + 4*sd01)
+                if x01_max - x01_min < 0.05:
+                    pad = 0.025
+                    x01_min = max(0.0, x01_min - pad)
+                    x01_max = min(1.0, x01_max + pad)
+                x01 = np.linspace(x01_min, x01_max, 800)
                 pdf = self._beta_pdf(x, alpha, beta)
                 pdf = pdf / (np.max(pdf) if np.max(pdf)>0 else 1.0)
                 # map back x to MCC axis
-                x_mcc = x*2.0 - 1.0
+                x_mcc = x01*2.0 - 1.0
                 ax1.plot(x_mcc, pdf, color=colors[i], lw=2, label=f"{m}")
                 ax1.fill_between(x_mcc, 0, pdf, color=colors[i], alpha=0.08)
                 ax1.axvline(float(np.mean(arr)), color=colors[i], lw=1, alpha=0.6)
