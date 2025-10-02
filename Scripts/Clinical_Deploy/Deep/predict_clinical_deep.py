@@ -43,8 +43,8 @@ def expand_path(p: str) -> str:
     return os.path.abspath(os.path.expanduser(p))
 
 
-def load_repo_modules() -> Tuple[object, object]:
-    """Dynamically import gradcam and models_smri from the repo by path."""
+def load_repo_modules() -> Tuple[object, object, object]:
+    """Dynamically import gradcam, MRI models, and PET models from the repo by path."""
     import importlib.util
 
     this_dir = Path(__file__).resolve().parent
@@ -52,7 +52,8 @@ def load_repo_modules() -> Tuple[object, object]:
     repo_root = scripts_dir.parent        # .../P4P
 
     gradcam_path = repo_root / 'Scripts' / 'Deep_Learning' / 'MRI' / 'gradcam.py'
-    models_path = repo_root / 'Scripts' / 'Deep_Learning' / 'MRI' / 'models_smri.py'
+    models_mri_path = repo_root / 'Scripts' / 'Deep_Learning' / 'MRI' / 'models_smri.py'
+    models_pet_path = repo_root / 'Scripts' / 'Deep_Learning' / 'PET' / 'models_pet.py'
 
     # gradcam
     spec_g = importlib.util.spec_from_file_location('gradcam3d', str(gradcam_path))
@@ -60,17 +61,25 @@ def load_repo_modules() -> Tuple[object, object]:
     assert spec_g and spec_g.loader
     spec_g.loader.exec_module(gradcam)  # type: ignore
 
-    # models
-    spec_m = importlib.util.spec_from_file_location('models_smri', str(models_path))
+    # MRI models
+    spec_m = importlib.util.spec_from_file_location('models_smri', str(models_mri_path))
     models_smri = importlib.util.module_from_spec(spec_m)
     assert spec_m and spec_m.loader
     spec_m.loader.exec_module(models_smri)  # type: ignore
 
-    return gradcam, models_smri
+    # PET models
+    spec_p = importlib.util.spec_from_file_location('models_pet', str(models_pet_path))
+    models_pet = importlib.util.module_from_spec(spec_p)
+    assert spec_p and spec_p.loader
+    spec_p.loader.exec_module(models_pet)  # type: ignore
+
+    return gradcam, models_smri, models_pet
 
 
 def load_nifti(image_path: str) -> Tuple[np.ndarray, np.ndarray, object]:
     img = nib.load(expand_path(image_path))
+    # Reorient to closest canonical (RAS+) so slicing is axis-aligned for display/overlays
+    img = nib.as_closest_canonical(img)
     data = img.get_fdata().astype(np.float32)
     return data, img.affine, img.header
 
@@ -100,7 +109,7 @@ def to_model_tensor(volume: np.ndarray, device: str, resize_dims: Optional[Tuple
 
 
 def load_model(arch: str, num_classes: int, in_channels: int, weights_path: str, device: str):
-    gradcam, models_smri = load_repo_modules()
+    gradcam, models_smri, models_pet = load_repo_modules()
     arch_l = arch.lower()
 
     # Helper to load and clean a checkpoint
@@ -174,7 +183,22 @@ def load_model(arch: str, num_classes: int, in_channels: int, weights_path: str,
         return wrapped, gradcam
 
     elif arch_l in ['resnet18_3d', 'resnet18']:
-        model = models_smri.get_3d_model('resnet18_3d', num_classes=num_classes, in_channels=in_channels)
+        # Prefer PET models if present
+        get_model = getattr(models_pet, 'get_3d_model', None) or getattr(models_smri, 'get_3d_model')
+        model = get_model('resnet18_3d', num_classes=num_classes, in_channels=in_channels)
+        model.to(device)
+        model.eval()
+        if weights_path:
+            clean_sd = _load_clean_sd(weights_path)
+            model.load_state_dict(clean_sd, strict=False)
+        return model, gradcam
+
+    elif arch_l in ['densenet121_3d', 'densenet121']:
+        # PET DenseNet support
+        get_model = getattr(models_pet, 'get_3d_model', None)
+        if get_model is None:
+            raise ValueError('DenseNet121_3D not available (models_pet missing).')
+        model = get_model('densenet121_3d', num_classes=num_classes, in_channels=in_channels)
         model.to(device)
         model.eval()
         if weights_path:
@@ -358,6 +382,9 @@ def compute_gradcam_volume(gradcam_module, model, input_tensor: torch.Tensor, ta
             # Fallback to module implementation
             cam = gradcam_module.compute_gradcam_simple3d(model, input_tensor, target_class, device=device)
             return robust_normalize_map(cam)
+    elif arch_l in ['densenet121_3d', 'densenet121']:
+        cam = compute_gradcam_densenet3d_local(model, input_tensor, target_class, device)
+        return robust_normalize_map(cam)
     else:
         raise ValueError(f"Grad-CAM not implemented for architecture: {arch}")
     # Unreachable
@@ -385,6 +412,10 @@ def compute_gradcam_plusplus_volume(gradcam_module, model, input_tensor: torch.T
                 # Final fallback to module implementation
                 cam = gradcam_module.compute_gradcam_simple3d(model, input_tensor, target_class, device=device)
                 return robust_normalize_map(cam)
+    elif arch_l in ['densenet121_3d', 'densenet121']:
+        # Fallback to vanilla Grad-CAM for DenseNet
+        cam = compute_gradcam_densenet3d_local(model, input_tensor, target_class, device)
+        return robust_normalize_map(cam)
     else:
         raise ValueError(f"Grad-CAM++ not implemented for architecture: {arch}")
 
@@ -422,7 +453,8 @@ def compute_gradcam_simple3d_local(model: nn.Module, smri_tensor: torch.Tensor, 
 
     def bwd_hook(module, grad_input, grad_output):
         nonlocal gradients
-        gradients = grad_output[0].detach()
+        # Clone to avoid in-place modification issues with autograd
+        gradients = grad_output[0].detach().clone()
 
     h1 = last_conv.register_forward_hook(fwd_hook)
     h2 = last_conv.register_full_backward_hook(bwd_hook)
@@ -472,7 +504,8 @@ def compute_gradcam_plusplus_simple3d_local(model: nn.Module, smri_tensor: torch
 
     def bwd_hook(module, grad_input, grad_output):
         nonlocal gradients, grad_squared, grad_cubed
-        grad = grad_output[0].detach()
+        # Clone to avoid in-place modification issues
+        grad = grad_output[0].detach().clone()
         gradients = grad
         grad_squared = grad ** 2
         grad_cubed = grad ** 3
@@ -533,6 +566,58 @@ def compute_gradcam_plusplus_simple3d_local(model: nn.Module, smri_tensor: torch
 
     h1.remove(); h2.remove()
     return cam_np.astype(np.float32)
+
+
+def compute_gradcam_densenet3d_local(model: nn.Module, input_tensor: torch.Tensor, target_class: int, device: str = "cpu") -> np.ndarray:
+    """
+    Grad-CAM for MONAI DenseNet121 3D by hooking the last Conv3d inside `model.features`.
+    This avoids autograd view/in-place issues from hooking the entire Sequential.
+    """
+    model = model.to(device)
+    model.eval()
+
+    activations: Optional[torch.Tensor] = None
+    gradients: Optional[torch.Tensor] = None
+
+    # Find the last Conv3d within features
+    conv_modules = [m for m in model.features.modules() if isinstance(m, nn.Conv3d)]
+    if not conv_modules:
+        raise RuntimeError("DenseNet.features has no Conv3d layers to hook for Grad-CAM")
+    last_conv = conv_modules[-1]
+
+    def fwd_hook(module, inp, out):
+        nonlocal activations
+        activations = out.detach()
+
+    def bwd_hook(module, grad_input, grad_output):
+        nonlocal gradients
+        # Clone to avoid in-place modification issues with autograd
+        gradients = grad_output[0].detach().clone()
+
+    h1 = last_conv.register_forward_hook(fwd_hook)
+    h2 = last_conv.register_full_backward_hook(bwd_hook)
+
+    x = input_tensor.to(device).requires_grad_(True)
+    logits = model(x)
+    score = logits[0, int(target_class)]
+    model.zero_grad()
+    score.backward(retain_graph=False)
+
+    if activations is None or gradients is None:
+        h1.remove(); h2.remove()
+        raise RuntimeError("Grad-CAM hooks did not capture activations/gradients for DenseNet")
+
+    # Channel weights from gradients
+    weights = torch.mean(gradients, dim=(2, 3, 4)).squeeze(0)
+    cam = torch.zeros_like(activations[0, 0])
+    for i, w in enumerate(weights):
+        cam += w * activations[0, i]
+    cam = F.relu(cam).unsqueeze(0).unsqueeze(0)
+    target_size = x.shape[-3:]
+    cam_upsampled = F.interpolate(cam, size=target_size, mode='trilinear', align_corners=False)
+    cam_np = cam_upsampled.squeeze().cpu().numpy().astype(np.float32)
+    h1.remove(); h2.remove()
+    return cam_np
 
 
 def compute_saliency_volume(model, input_tensor: torch.Tensor, target_class: int) -> np.ndarray:
@@ -728,17 +813,13 @@ def save_nifti(volume: np.ndarray, affine: np.ndarray, header, out_path: Path):
     nib.save(img, str(out_path))
 
 
-def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title: str = "", mask: Optional[np.ndarray] = None):
+def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title: str = "", mask: Optional[np.ndarray] = None, brightness: float = 1.0, gamma: float = 1.0):
     """
     Save quick axial/coronal/sagittal overlays for visual sanity check.
     """
     anat = anat.astype(np.float32)
-    # Robust normalize anat and heat for visibility
-    a_lo, a_hi = np.percentile(anat, 2.0), np.percentile(anat, 98.0)
-    if a_hi - a_lo < 1e-6:
-        anat_n = anat
-    else:
-        anat_n = np.clip((anat - a_lo) / (a_hi - a_lo), 0.0, 1.0)
+    # Do NOT alter the anatomical image for overlay; use original values
+    anat_n = anat
     if mask is not None and np.any(mask > 0):
         sel = heat[mask > 0]
         h_lo, h_hi = np.percentile(sel, 90.0), np.percentile(sel, 99.5)
@@ -748,21 +829,21 @@ def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title:
     D, H, W = anat.shape
     za, ya, xa = D // 2, H // 2, W // 2
     fig, axs = plt.subplots(1, 3, figsize=(12, 4))
-    axs[0].imshow(anat_n[za].T, cmap='gray', origin='lower')
-    axs[0].imshow(heat[za].T, cmap='hot', alpha=0.4, origin='lower')
+    axs[0].imshow(anat_n[za].T, cmap='gray', origin='lower', interpolation='nearest', resample=False)
+    axs[0].imshow(heat[za].T, cmap='hot', alpha=0.4, origin='lower', interpolation='nearest', resample=False)
     axs[0].set_title('Axial')
     axs[0].axis('off')
-    axs[1].imshow(anat_n[:, ya, :].T, cmap='gray', origin='lower')
-    axs[1].imshow(heat[:, ya, :].T, cmap='hot', alpha=0.4, origin='lower')
+    axs[1].imshow(anat_n[:, ya, :].T, cmap='gray', origin='lower', interpolation='nearest', resample=False)
+    axs[1].imshow(heat[:, ya, :].T, cmap='hot', alpha=0.4, origin='lower', interpolation='nearest', resample=False)
     axs[1].set_title('Coronal')
     axs[1].axis('off')
-    axs[2].imshow(anat_n[:, :, xa].T, cmap='gray', origin='lower')
-    axs[2].imshow(heat[:, :, xa].T, cmap='hot', alpha=0.4, origin='lower')
+    axs[2].imshow(anat_n[:, :, xa].T, cmap='gray', origin='lower', interpolation='nearest', resample=False)
+    axs[2].imshow(heat[:, :, xa].T, cmap='hot', alpha=0.4, origin='lower', interpolation='nearest', resample=False)
     axs[2].set_title('Sagittal')
     axs[2].axis('off')
     fig.suptitle(title)
     fig.tight_layout()
-    plt.savefig(str(out_path), dpi=150, bbox_inches='tight')
+    plt.savefig(str(out_path), dpi=300, bbox_inches='tight')
     plt.close(fig)
 
 
@@ -829,6 +910,8 @@ def main():
     parser.add_argument('--sg-noise-std', type=float, default=0.1, help='SmoothGrad noise std (fraction of in-mask intensity std)')
     parser.add_argument('--ig-steps', type=int, default=64, help='Integrated Gradients steps (64=fast, 128=HQ)')
     parser.add_argument('--ig-baseline', type=str, default='zeros', choices=['zeros', 'mean'], help='Integrated Gradients baseline type')
+    # Probability shaping
+    parser.add_argument('--temperature', type=float, default=1.0, help='Softmax temperature for logits before risk adjustment (T<1 sharpens, T>1 flattens)')
 
     args = parser.parse_args()
 
@@ -922,31 +1005,59 @@ def main():
         )
         pred_idx = int(np.argmax(probs))
 
+    # Optional temperature scaling on logits to sharpen/flatten probabilities
+    try:
+        T = float(args.temperature)
+    except Exception:
+        T = 1.0
+    if T != 1.0:
+        try:
+            if isinstance(logits, torch.Tensor):
+                with torch.no_grad():
+                    probs_t = F.softmax(logits / T, dim=1)
+                probs = probs_t.squeeze(0).cpu().numpy()
+                pred_idx = int(np.argmax(probs))
+            else:
+                # Fallback: power transform on probs
+                p = np.asarray(probs, dtype=np.float32)
+                gamma = 1.0 / max(T, 1e-8)
+                p = np.power(np.maximum(p, 1e-12), gamma)
+                p = p / np.sum(p)
+                probs = p
+                pred_idx = int(np.argmax(probs))
+        except Exception:
+            pass
+
     # Raw prediction snapshot
     pred_name_raw = label_map.get(pred_idx, str(pred_idx))
     confidence_raw = float(np.max(probs))
     prob_dict_raw = {label_map.get(i, str(i)): float(p) for i, p in enumerate(probs)}
 
-    # Risk-aware adjustment
-    adjusted_probs = probs.copy()
+    # Decide label using RAW probabilities (apply CN threshold on raw probs only)
     applied_risk = None
-    if args.risk_weights and len(args.risk_weights) == int(args.num_classes):
-        rw = np.asarray(args.risk_weights, dtype=np.float32)
-        adjusted_probs = adjusted_probs * rw
-        applied_risk = rw.tolist()
-    # CN thresholding (assumes class 0 = CN by default mapping)
-    final_idx = int(np.argmax(adjusted_probs))
+    pred_idx_raw = int(np.argmax(probs))
+    final_idx = pred_idx_raw
     if args.cn_min_prob is not None and final_idx == 0:
-        if float(adjusted_probs[0]) < float(args.cn_min_prob):
-            # pick best non-CN class
-            non_cn_idx = int(np.argmax(adjusted_probs[1:]) + 1)
+        if float(probs[0]) < float(args.cn_min_prob):
+            # pick best non-CN class based on raw probabilities
+            non_cn_idx = int(np.argmax(probs[1:]) + 1)
             final_idx = non_cn_idx
 
     pred_idx = final_idx
     pred_name = label_map.get(pred_idx, str(pred_idx))
-    # For confidence, report the adjusted winning score (not renormalized)
-    confidence = float(adjusted_probs[pred_idx])
-    prob_dict = {label_map.get(i, str(i)): float(adjusted_probs[i]) for i in range(len(adjusted_probs))}
+    # For reporting, scale ONLY the chosen class probability, then renormalize to sum=1
+    reported_probs = probs.copy()
+    if args.risk_weights and len(args.risk_weights) == int(args.num_classes):
+        rw = np.asarray(args.risk_weights, dtype=np.float32)
+        reported_probs[pred_idx] = reported_probs[pred_idx] * float(rw[pred_idx])
+        applied_risk = rw.tolist()
+    rep_sum = float(np.sum(reported_probs))
+    if rep_sum > 0:
+        reported_probs = reported_probs / rep_sum
+    else:
+        reported_probs = probs
+    confidence = float(reported_probs[pred_idx])
+    prob_dict = {label_map.get(i, str(i)): float(reported_probs[i]) for i in range(len(reported_probs))}
 
     # Prepare output directory
     out_dir = Path(expand_path(args.output_dir))
@@ -1289,6 +1400,7 @@ def main():
         'architecture': args.model_arch,
         'weights': expand_path(args.weights),
         'image': expand_path(args.image),
+        'temperature': float(T),
         'prediction': {
             'label_index': pred_idx,
             'label_name': pred_name,
@@ -1318,6 +1430,33 @@ def main():
         json.dump(report, f, indent=2)
     print(f"\n✓ Prediction: {pred_name} (conf {confidence:.3f})")
     print(f"✓ JSON report: {json_path}")
+
+    # Probability visualization (bar chart)
+    try:
+        labels = list(prob_dict.keys())
+        values = [prob_dict[k] for k in labels]
+        # Normalize values to sum 1 for display if risk weights modified
+        s = sum(values)
+        disp_vals = [v / s if s > 0 else 0.0 for v in values]
+
+        fig, ax = plt.subplots(figsize=(6, 4))
+        bars = ax.bar(labels, disp_vals, color=['#2ca02c' if l == 'CN' else '#1f77b4' if l == 'AD' else '#d62728' for l in labels])
+        ax.set_ylim(0.0, 1.0)
+        ax.set_ylabel('Probability')
+        ax.set_title(f"{sid} • Prediction: {pred_name} ({confidence:.0%})")
+        for rect, v in zip(bars, disp_vals):
+            ax.annotate(f"{v*100:.0f}%",
+                        xy=(rect.get_x() + rect.get_width() / 2, v),
+                        xytext=(0, 3),
+                        textcoords="offset points",
+                        ha='center', va='bottom', fontsize=9)
+        fig.tight_layout()
+        prob_png = out_dir / f"{sid}_probabilities.png"
+        plt.savefig(str(prob_png), dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f"✓ Probabilities plot: {prob_png}")
+    except Exception as _e:
+        print(f"Warning: failed to save probabilities plot: {_e}")
 
     # Also export a simple text error log if any errors occurred
     if any(len(v) > 0 for v in interpret_errors.values()):

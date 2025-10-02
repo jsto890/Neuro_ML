@@ -1195,12 +1195,25 @@ def train_sMRI_model(model, train_loader, val_loader, epochs, device, checkpoint
         print(f"[DEBUG] optimal_threshold: {optimal_threshold}")
         
         # Calculate additional metrics using optimal threshold (binary) or argmax (multiclass)
-        if optimal_threshold is not None and probs.shape[1] == 2:
-            # Binary classification with threshold optimization
-            optimal_preds = (probs >= optimal_threshold).astype(int)
+        # Handle both 1D (binary positive-class probabilities) and 2D (multiclass) probabilities
+        if optimal_threshold is not None:
+            if getattr(probs, 'ndim', 1) == 1:
+                # Binary classification: probs is 1D positive-class probabilities
+                optimal_preds = (probs >= optimal_threshold).astype(int)
+            elif probs.ndim == 2 and probs.shape[1] == 2:
+                # Binary classification but probs provided as Nx2 matrix
+                optimal_preds = (probs[:, 1] >= optimal_threshold).astype(int)
+            else:
+                # Multiclass: use argmax
+                optimal_preds = np.argmax(probs, axis=1)
         else:
-            # Multiclass or no threshold: use argmax
-            optimal_preds = np.argmax(probs, axis=1)
+            # No optimized threshold available
+            if getattr(probs, 'ndim', 1) == 1:
+                # Binary default threshold
+                optimal_preds = (probs >= 0.5).astype(int)
+            else:
+                # Multiclass default
+                optimal_preds = np.argmax(probs, axis=1)
         
         precision, recall, f1, support = precision_recall_fscore_support(val_labels, optimal_preds, average=None, zero_division=0)
         cm = confusion_matrix(val_labels, optimal_preds)
@@ -2279,23 +2292,23 @@ def auto_reduce_batch_size(model, initial_batch_size, min_batch_size, device, ar
         int: Working batch size
     """
     print(f"[MEMORY] Testing batch size {initial_batch_size}...")
-    
-    for batch_size in range(initial_batch_size, min_batch_size - 1, -4):
+
+    # Try stepwise reduction (by 1) to find the largest feasible batch size
+    for batch_size in range(initial_batch_size, min_batch_size - 1, -1):
         try:
             # Create a dummy batch to test memory
-            dummy_input = torch.randn(batch_size, 1, 96, 112, 96).to(device)
+            # Match the model's expected processed input size (96, 128, 96)
+            dummy_input = torch.randn(batch_size, 1, 96, 128, 96, device=device)
             
             # Ensure model is on the same device as input
             if next(model.parameters()).device != dummy_input.device:
                 print(f"[MEMORY] Moving model to {device} for testing...")
                 model = model.to(device)
             
-            # Test forward pass
-            with torch.no_grad():
-                _ = model(dummy_input)
-            
-            # Test backward pass with a dummy loss
-            dummy_loss = torch.tensor(0.0, requires_grad=True, device=device)
+            # Forward + backward with a lightweight synthetic loss to allocate activations
+            logits = model(dummy_input)
+            # Use sum of logits as a scalar loss to ensure gradients flow
+            dummy_loss = logits.sum()
             dummy_loss.backward()
             
             print(f"[MEMORY] ✅ Batch size {batch_size} works! Using this for training.")

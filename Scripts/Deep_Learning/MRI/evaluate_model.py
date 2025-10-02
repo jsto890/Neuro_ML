@@ -16,9 +16,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import (
     roc_auc_score, accuracy_score, precision_score, recall_score, f1_score,
-    confusion_matrix, classification_report, roc_curve, precision_recall_curve,
-    matthews_corrcoef
+    confusion_matrix, classification_report, precision_recall_curve,
+    matthews_corrcoef, auc, average_precision_score
 )
+from sklearn.metrics import roc_curve as sk_roc_curve
 from torch.utils.data import DataLoader
 import json
 from pathlib import Path
@@ -179,22 +180,65 @@ def evaluate_model_with_temperature_scaling(model, test_loader, device, val_load
     
     return np.array(all_predictions), np.array(all_probabilities), np.array(all_labels), temperature_info
 
-def load_model(model_path, num_classes=2, device='cpu'):
+def load_model(model_path, num_classes=2, device='cpu', model_name=None):
     """Load a trained model from .pth file."""
-    model = Simple3DCNN(num_classes=num_classes)
+    from models_smri import get_3d_model
     
-    # Load the state dict
+    # Load the state dict first to determine model architecture
     state_dict = torch.load(model_path, map_location=device)
     
-    # Extract the actual input size from the saved classifier weight
-    classifier_weight = state_dict['classifier.0.weight']
-    actual_input_size = classifier_weight.shape[1]
+    # Try to infer model type from state dict keys
+    if model_name is None:
+        if 'classifier.0.weight' in state_dict:
+            model_name = "Simple3DCNN"
+        elif '_fc.weight' in state_dict:
+            model_name = "EfficientNetB0_3D"
+        elif 'backbone' in state_dict:
+            model_name = "ResNet18_3D"  # or ResNet50_3D, DenseNet121_3D
+        elif 'transformer' in state_dict:
+            model_name = "VisionTransformer3D"
+        elif 'swin' in str(state_dict.keys()):
+            model_name = "SwinUNETRClassifier"
+        else:
+            # Default fallback
+            model_name = "Simple3DCNN"
     
-    # Update the classifier with the correct input size
-    model.classifier[0] = nn.Linear(actual_input_size, 256)
-    model._initialized = True
+    print(f"Detected/using model type: {model_name}")
     
-    # Now load the state dict
+    # Create the appropriate model
+    if model_name == "Simple3DCNN":
+        model = Simple3DCNN(num_classes=num_classes)
+        
+        # Extract the actual input size from the saved classifier weight
+        classifier_weight = state_dict['classifier.0.weight']
+        actual_input_size = classifier_weight.shape[1]
+        
+        # Update the classifier with the correct input size
+        model.classifier[0] = nn.Linear(actual_input_size, 256)
+        model._initialized = True
+        
+    elif model_name == "EfficientNetB0_3D":
+        # For EfficientNet, create model and let it handle the architecture
+        model = get_3d_model("EfficientNetB0_3D", num_classes=num_classes, in_channels=1)
+        
+    elif model_name in ["ResNet18_3D", "ResNet50_3D", "DenseNet121_3D"]:
+        # For ResNet/DenseNet models
+        model = get_3d_model(model_name, num_classes=num_classes, in_channels=1)
+        
+    elif model_name in ["VisionTransformer3D", "SwinUNETRClassifier", "FullSwinUNETRClassifier"]:
+        # For transformer models
+        model = get_3d_model(model_name, num_classes=num_classes, in_channels=1)
+        
+    else:
+        # Fallback to Simple3DCNN
+        print(f"Unknown model {model_name}, falling back to Simple3DCNN")
+        model = Simple3DCNN(num_classes=num_classes)
+        classifier_weight = state_dict['classifier.0.weight']
+        actual_input_size = classifier_weight.shape[1]
+        model.classifier[0] = nn.Linear(actual_input_size, 256)
+        model._initialized = True
+    
+    # Load the state dict
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
@@ -340,8 +384,12 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     # 1. ROC Curve
     ax1 = axes[0, 0]
     if n_classes == 2:
-        # Binary classification
-        fpr, tpr, _ = roc_curve(labels, probabilities[:, 1])
+        # Binary classification (support Nx2 or 1D positive-class probabilities)
+        try:
+            pos_probs = probabilities[:, 1]
+        except Exception:
+            pos_probs = probabilities
+        fpr, tpr, _ = sk_roc_curve(labels, pos_probs)
         ax1.plot(fpr, tpr, color='blue', lw=2, label=f'ROC Curve (AUC = {metrics["auc"]:.3f})')
         ax1.plot([0, 1], [0, 1], color='red', lw=1, linestyle='--', alpha=0.8)
         ax1.set_xlabel('False Positive Rate')
@@ -351,13 +399,12 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         ax1.grid(True, alpha=0.3)
     else:
         # Multiclass: One-vs-Rest ROC curves
-        from sklearn.metrics import roc_curve, auc
         colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown']
         
         for i in range(n_classes):
             # One-vs-rest: class i vs all others
             y_true_binary = (labels == i).astype(int)
-            fpr, tpr, _ = roc_curve(y_true_binary, probabilities[:, i])
+            fpr, tpr, _ = sk_roc_curve(y_true_binary, probabilities[:, i])
             roc_auc = auc(fpr, tpr)
             
             ax1.plot(fpr, tpr, color=colors[i % len(colors)], lw=2, 
@@ -373,8 +420,12 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     # 2. Precision-Recall Curve
     ax2 = axes[0, 1]
     if n_classes == 2:
-        # Binary classification
-        precision_curve, recall_curve, _ = precision_recall_curve(labels, probabilities[:, 1])
+        # Binary classification (support Nx2 or 1D positive-class probabilities)
+        try:
+            pos_probs = probabilities[:, 1]
+        except Exception:
+            pos_probs = probabilities
+        precision_curve, recall_curve, _ = precision_recall_curve(labels, pos_probs)
         ax2.plot(recall_curve, precision_curve, color='green', lw=2)
         ax2.set_xlabel('Recall')
         ax2.set_ylabel('Precision')
@@ -382,7 +433,6 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         ax2.grid(True, alpha=0.3)
     else:
         # Multiclass: One-vs-Rest Precision-Recall curves
-        from sklearn.metrics import precision_recall_curve, average_precision_score
         
         for i in range(n_classes):
             y_true_binary = (labels == i).astype(int)
@@ -670,12 +720,14 @@ def main():
                         help="Whether to apply temperature scaling for multiclass calibration")
     parser.add_argument("--val_csv", type=str,
                         help="Path to validation labels CSV file for temperature scaling (required if --use_temperature_scaling is True)")
+    parser.add_argument("--model_name", type=str, default=None,
+                        help="Model name (e.g., EfficientNetB0_3D, Simple3DCNN). If not provided, will be auto-detected.")
     
     args = parser.parse_args()
     
     # Load model
     print(f"Loading model from: {args.model_path}")
-    model = load_model(args.model_path, args.num_classes, args.device)
+    model = load_model(args.model_path, args.num_classes, args.device, args.model_name)
     
     # Create test dataset
     print(f"Loading test data from: {args.test_csv}")
@@ -711,12 +763,21 @@ def main():
     print("Calculating metrics...")
     metrics = calculate_metrics(predictions, probabilities, labels)
     
+    # Save predictions and probabilities for later regeneration (same as training script)
+    print("Saving predictions and probabilities...")
+    np.save(os.path.join(args.output_dir, 'predictions.npy'), predictions)
+    np.save(os.path.join(args.output_dir, 'probabilities.npy'), probabilities)
+    np.save(os.path.join(args.output_dir, 'labels.npy'), labels)
+    
     # Create plots
     print("Generating evaluation plots...")
     create_evaluation_plots(predictions, probabilities, labels, metrics, args.output_dir, 
                            model_name=args.model_name, image_type="sMRI")
     
     print(f"\n✅ Evaluation completed! Results saved to: {args.output_dir}")
+    print(f"   - NPY files: predictions.npy, probabilities.npy, labels.npy")
+    print(f"   - Evaluation plots: model_evaluation_analysis.png")
+    print(f"   - Metrics: evaluation_metrics.json")
 
 if __name__ == "__main__":
     main() 

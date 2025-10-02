@@ -27,7 +27,7 @@ from sklearn.calibration import calibration_curve
 from scipy.optimize import minimize_scalar
 
 from dataset import PETDataset
-from models_pet import Simple3DCNN
+from models_pet import Simple3DCNN, get_3d_model
 
 # Set style for plots
 plt.style.use('default')
@@ -179,22 +179,46 @@ def evaluate_model_with_temperature_scaling(model, test_loader, device, val_load
     
     return np.array(all_predictions), np.array(all_probabilities), np.array(all_labels), temperature_info
 
-def load_model(model_path, num_classes=2, device='cpu'):
-    """Load a trained model from .pth file."""
-    model = Simple3DCNN(num_classes=num_classes)
-    
-    # Load the state dict
+def load_model(model_path, num_classes=2, device='cpu', model_name=None):
+    """Load a trained model from .pth file with auto-detection of architecture (MRI-style)."""
+    # Load the state dict first to determine model architecture
     state_dict = torch.load(model_path, map_location=device)
-    
-    # Extract the actual input size from the saved classifier weight
-    classifier_weight = state_dict['classifier.0.weight']
-    actual_input_size = classifier_weight.shape[1]
-    
-    # Update the classifier with the correct input size
-    model.classifier[0] = nn.Linear(actual_input_size, 256)
-    model._initialized = True
-    
-    # Now load the state dict
+
+    # Try to infer model type from state dict keys if not provided
+    if model_name is None:
+        if 'classifier.0.weight' in state_dict:
+            model_name = "Simple3DCNN"
+        elif '_fc.weight' in state_dict:
+            model_name = "EfficientNetB0_3D"
+        elif 'backbone' in state_dict:
+            model_name = "ResNet18_3D"  # or ResNet50_3D, DenseNet121_3D
+        elif 'transformer' in state_dict:
+            model_name = "VisionTransformer3D"
+        elif any('swin' in k for k in state_dict.keys()):
+            model_name = "SwinUNETRClassifier"
+        else:
+            model_name = "Simple3DCNN"
+
+    print(f"Detected/using model type: {model_name}")
+
+    # Create appropriate model
+    if model_name == "Simple3DCNN":
+        model = Simple3DCNN(num_classes=num_classes)
+        classifier_weight = state_dict['classifier.0.weight']
+        actual_input_size = classifier_weight.shape[1]
+        model.classifier[0] = nn.Linear(actual_input_size, 256)
+        model._initialized = True
+    elif model_name in ["EfficientNetB0_3D", "ResNet18_3D", "ResNet50_3D", "DenseNet121_3D", "VisionTransformer3D", "SwinUNETRClassifier", "FullSwinUNETRClassifier"]:
+        model = get_3d_model(model_name, num_classes=num_classes, in_channels=1)
+    else:
+        print(f"Unknown model {model_name}, falling back to Simple3DCNN")
+        model = Simple3DCNN(num_classes=num_classes)
+        classifier_weight = state_dict['classifier.0.weight']
+        actual_input_size = classifier_weight.shape[1]
+        model.classifier[0] = nn.Linear(actual_input_size, 256)
+        model._initialized = True
+
+    # Load weights
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
@@ -285,7 +309,7 @@ def calculate_metrics(predictions, probabilities, labels):
         'classification_report': report
     }
 
-def create_evaluation_plots(predictions, probabilities, labels, metrics, output_dir):
+def create_evaluation_plots(predictions, probabilities, labels, metrics, output_dir, model_name="Unknown", image_type="PET"):
     """Create comprehensive evaluation plots."""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -313,7 +337,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         # For multiclass, we need more space for ROC curves
         fig, axes = plt.subplots(3, 3, figsize=(20, 18))
     
-    fig.suptitle('Model Evaluation Results - Disease Classification', fontsize=16, fontweight='bold')
+    fig.suptitle(f'{model_name} Model Evaluation Results - {image_type} Disease Classification', fontsize=16, fontweight='bold')
     
     # 1. ROC Curve
     ax1 = axes[0, 0]
@@ -568,12 +592,14 @@ def main():
                         help="Whether to apply temperature scaling for multiclass calibration")
     parser.add_argument("--val_csv", type=str,
                         help="Path to validation labels CSV file for temperature scaling (required if --use_temperature_scaling is True)")
+    parser.add_argument("--model_name", type=str, default=None,
+                        help="Model name (e.g., EfficientNetB0_3D, Simple3DCNN). If not provided, will be auto-detected.")
     
     args = parser.parse_args()
     
     # Load model
     print(f"Loading model from: {args.model_path}")
-    model = load_model(args.model_path, args.num_classes, args.device)
+    model = load_model(args.model_path, args.num_classes, args.device, args.model_name)
     
     # Create test dataset
     print(f"Loading test data from: {args.test_csv}")

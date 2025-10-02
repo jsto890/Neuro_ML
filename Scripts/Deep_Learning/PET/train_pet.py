@@ -29,6 +29,82 @@ from evaluate_model import evaluate_model, calculate_metrics, create_evaluation_
 plt.style.use('default')
 sns.set_palette("husl")
 
+def get_train_transform(args):
+    """Return a callable that applies light 3D augmentations on tensors [1, D, H, W].
+    Uses MONAI when available for spatial ops; otherwise falls back to intensity-only jitters.
+    """
+    transforms = []
+    augmentation_info = []
+
+    # Try MONAI for spatial transforms
+    try:
+        from monai.transforms import Compose, RandAffine, RandBiasField, RandGaussianNoise, RandAdjustContrast
+
+        def monai_transform(x: torch.Tensor) -> torch.Tensor:
+            # x: [1, D, H, W] -> MONAI expects [C, H, W, D]
+            x_m = x.permute(0, 2, 3, 1)
+            t = Compose([
+                RandAffine(prob=0.5, rotate_range=(
+                    math.radians(5.0), math.radians(5.0), math.radians(5.0)
+                ), scale_range=(0.05, 0.05, 0.05), mode="bilinear"),
+                RandBiasField(prob=0.3, coeff_range=(0.0, 0.3)),
+                RandAdjustContrast(prob=0.5, gamma=(0.9, 1.1)),
+                RandGaussianNoise(prob=0.3, mean=0.0, std=0.02),
+            ])
+            x_m = t(x_m)
+            x = x_m.permute(0, 3, 1, 2)
+            return x
+
+        transforms.append(monai_transform)
+        augmentation_info.append("MONAI spatial transforms (affine, bias field, contrast, noise)")
+        print(f"[AUGMENTATION] Using MONAI transforms: RandAffine, RandBiasField, RandAdjustContrast, RandGaussianNoise")
+    except Exception as e:
+        print(f"[AUGMENTATION] MONAI not available ({e}), falling back to basic transforms")
+        # Fall back to simple intensity-only transforms
+        def intensity_jitter(x: torch.Tensor) -> torch.Tensor:
+            # Brightness and contrast jitter (small)
+            b = float(torch.empty(1).uniform_(-0.05, 0.05))
+            c = float(torch.empty(1).uniform_(0.95, 1.05))
+            x = x * c + b
+            return x
+
+        def gaussian_noise(x: torch.Tensor) -> torch.Tensor:
+            std = 0.02
+            noise = torch.randn_like(x) * std
+            return x + noise
+
+        transforms.extend([intensity_jitter, gaussian_noise])
+        augmentation_info.extend(["Intensity jitter (±5% brightness, ±5% contrast)", "Gaussian noise (σ=0.02)"])
+        print(f"[AUGMENTATION] Using basic transforms: intensity jitter, Gaussian noise")
+
+    # Track augmentation statistics
+    augmentation_stats = {
+        'applied_count': 0,
+        'total_count': 0,
+        'mean_diff': 0.0,
+        'std_diff': 0.0
+    }
+
+    def apply_all(x: torch.Tensor) -> torch.Tensor:
+        original_x = x.clone()
+        augmentation_stats['total_count'] += 1
+        
+        for t in transforms:
+            x = t(x)
+        
+        # Track augmentation effect
+        diff = torch.abs(x - original_x).mean().item()
+        augmentation_stats['applied_count'] += 1
+        augmentation_stats['mean_diff'] = (augmentation_stats['mean_diff'] * (augmentation_stats['applied_count'] - 1) + diff) / augmentation_stats['applied_count']
+        
+        return x
+
+    # Attach info for debugging
+    apply_all.augmentation_info = augmentation_info
+    apply_all.augmentation_stats = augmentation_stats
+    
+    return apply_all
+
 def compute_summary_stats(values):
     """Compute mean, std, 95% CI, min, max, range for a list of numeric values."""
     arr = np.array(values, dtype=float)
@@ -1544,7 +1620,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             temp_files_this_run.extend([temp_train_csv, temp_val_csv, temp_test_csv])
 
             # Datasets and loaders
-            train_dataset = PETDataset(csv_path=temp_train_csv, data_root=args.data_root)
+            train_transform = get_train_transform(args) if getattr(args, 'enable_augment', False) else None
+            train_dataset = PETDataset(csv_path=temp_train_csv, data_root=args.data_root, transform=train_transform)
             val_dataset = PETDataset(csv_path=temp_val_csv, data_root=args.data_root)
             test_dataset = PETDataset(csv_path=temp_test_csv, data_root=args.data_root)
             
@@ -2311,6 +2388,7 @@ def create_data_loaders_with_memory_optimization(train_dataset, val_dataset, tes
             batch_size=working_batch_size,
             sampler=sampler,
             shuffle=False,
+            drop_last=True,
             num_workers=args.num_workers,
             pin_memory=True if 'cuda' in args.device else False
         )
@@ -2319,6 +2397,7 @@ def create_data_loaders_with_memory_optimization(train_dataset, val_dataset, tes
             train_dataset,
             batch_size=working_batch_size,
             shuffle=True,
+            drop_last=True,
             num_workers=args.num_workers,
             pin_memory=True if 'cuda' in args.device else False
         )
@@ -2405,6 +2484,8 @@ def main():
                         help="Use cosine learning rate schedule for Vision Transformer models")
     parser.add_argument("--label_smoothing", type=float, default=0.1,
                         help="Label smoothing factor (0.1 recommended for ViT)")
+    parser.add_argument("--enable_augment", action='store_true', default=False,
+                        help="Enable light 3D augmentations on training data")
     parser.add_argument("--vit_optimizer", type=str, default="adamw", choices=["adamw", "adam"],
                         help="Optimizer for Vision Transformer models")
     parser.add_argument("--vit_weight_decay", type=float, default=0.05,

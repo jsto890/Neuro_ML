@@ -81,7 +81,7 @@ class EnhancedRadiomicsClassifier:
         self.ml_threads = ml_threads
         
         # Disease label mapping (align with PET labels: AD=0, CN=1, PD=2)
-        self.label_to_disease = {0: 'AD', 1: 'CN', 2: 'PD'}
+        self.label_to_disease = {0: 'CN', 1: 'AD', 2: 'PD'}
         self.disease_to_label = {v: k for k, v in self.label_to_disease.items()}
         
         # Label remapping for training (to handle non-consecutive labels)
@@ -684,29 +684,70 @@ class EnhancedRadiomicsClassifier:
         try:
             X_train, y_train, _ = self.splits['train']
             
-            # Simple voting ensemble (average probabilities)
+            # Weighted voting ensemble (probability averaging with weights)
             ensemble_results = {}
+
+            # Determine model rankings based on TEST accuracy (preferred) then TEST AUC
+            model_scores = {}
+            use_split = 'test'
+            metric_order = ['accuracy', 'auc']
+            for model_name in self.best_models.keys():
+                score = None
+                try:
+                    model_res = self.results.get(model_name, {})
+                    split_res = model_res.get(use_split, {})
+                    # Prefer AUC, fall back to accuracy
+                    for m in metric_order:
+                        if m in split_res and split_res[m] is not None:
+                            score = float(split_res[m])
+                            break
+                except Exception:
+                    score = None
+                # Final fallback
+                if score is None:
+                    score = 0.0
+                model_scores[model_name] = score
+
+            # Rank models high->low by score, assign weights N..1 normalized to sum=1
+            sorted_models = sorted(model_scores.keys(), key=lambda k: model_scores[k], reverse=True)
+            num_models = len(sorted_models)
+            raw_weights = {m: (num_models - idx) for idx, m in enumerate(sorted_models)}
+            weight_sum = float(sum(raw_weights.values())) if num_models > 0 else 1.0
+            weights = {m: (raw_weights[m] / weight_sum) for m in sorted_models}
+            # Log weights
+            self.logger.info("Ensemble weighting (split=%s): %s", use_split, {m: round(weights[m], 4) for m in sorted_models})
+            self.logger.info("Model scores used for ranking: %s", {m: round(model_scores[m], 4) for m in sorted_models})
             
             for split_name, (X_split, y_split, ids_split) in self.splits.items():
                 try:
-                    # Get probabilities from all models
+                    # Get probabilities from all models (weighted)
                     if self.binary_only:
-                        # Binary: collect probabilities of positive class
-                        all_probs = []
-                        for name, model in self.best_models.items():
+                        # Binary: collect weighted probabilities of positive class
+                        weighted_sum = None
+                        for name in sorted_models:
+                            model = self.best_models[name]
                             probs = model.predict_proba(X_split)[:, 1]
-                            all_probs.append(probs)
-                        # Average probabilities
-                        ensemble_probs = np.mean(all_probs, axis=0)
+                            w = weights.get(name, 0.0)
+                            if weighted_sum is None:
+                                weighted_sum = w * probs
+                            else:
+                                weighted_sum = weighted_sum + (w * probs)
+                        # Weighted average probabilities already normalized by weights summing to 1
+                        ensemble_probs = weighted_sum
                         ensemble_preds = (ensemble_probs > 0.5).astype(int)
                     else:
-                        # Multiclass: average probability matrices and take argmax
-                        all_proba_matrices = []
-                        for name, model in self.best_models.items():
+                        # Multiclass: weighted average probability matrices and take argmax
+                        weighted_sum = None
+                        for name in sorted_models:
+                            model = self.best_models[name]
                             proba_matrix = model.predict_proba(X_split)
-                            all_proba_matrices.append(proba_matrix)
-                        # Average probability matrices
-                        ensemble_probs = np.mean(all_proba_matrices, axis=0)
+                            w = weights.get(name, 0.0)
+                            if weighted_sum is None:
+                                weighted_sum = w * proba_matrix
+                            else:
+                                weighted_sum = weighted_sum + (w * proba_matrix)
+                        # Weighted probabilities (weights sum to 1)
+                        ensemble_probs = weighted_sum
                         # Get predictions from averaged probabilities
                         ensemble_preds = np.argmax(ensemble_probs, axis=1)
                     

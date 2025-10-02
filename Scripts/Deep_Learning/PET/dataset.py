@@ -22,7 +22,7 @@ class PETDataset(Dataset):
       - Fallback naming:  sub-{ID}_{SITE}_PET_{DISEASE}_SUVR.nii.gz (for backward compatibility)
     """
 
-    def __init__(self, csv_path: str, data_root: str, target_shape: tuple[int, int, int] = (96, 112, 96)):
+    def __init__(self, csv_path: str, data_root: str, target_shape: tuple[int, int, int] = (96, 112, 96), transform=None):
         """
         Args:
             csv_path  (str): path to CSV; expects columns 'subject_id' and 'label',
@@ -31,6 +31,7 @@ class PETDataset(Dataset):
                              The script will automatically search for files in ADNI/CN, ADNI/PD, ADNI/AD, PPMI/CN, PPMI/PD, PPMI/AD directories.
                              File naming is dynamic: sub-{ID}_{SITE}_PET_{DISEASE}_SUVR_s2_brain_soft4.nii.gz
                              Fallback naming: sub-{ID}_{SITE}_PET_{DISEASE}_SUVR.nii.gz (for backward compatibility)
+            transform (callable|None): optional transform applied to the image tensor [1, D, H, W]
         """
         # Read CSV normally
         df = pd.read_csv(csv_path)
@@ -54,6 +55,7 @@ class PETDataset(Dataset):
         self.labels = df['label'].tolist()
         self.data_root = data_root
         self.target_shape = target_shape
+        self.transform = transform
 
     @staticmethod
     def _pad_or_crop_center(volume: np.ndarray, target_shape: tuple[int, int, int]) -> np.ndarray:
@@ -197,5 +199,9 @@ class PETDataset(Dataset):
 
         # Convert to a torch.FloatTensor with shape [1, D, H, W]
         pet = torch.from_numpy(data.astype(np.float32)).unsqueeze(0)
+
+        # Optional transform (e.g., MONAI Compose or custom callable) applied on-the-fly
+        if self.transform is not None:
+            pet = self.transform(pet)
 
         return pet, label
