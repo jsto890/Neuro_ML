@@ -2292,23 +2292,23 @@ def auto_reduce_batch_size(model, initial_batch_size, min_batch_size, device, ar
         int: Working batch size
     """
     print(f"[MEMORY] Testing batch size {initial_batch_size}...")
-    
-    for batch_size in range(initial_batch_size, min_batch_size - 1, -4):
+
+    # Try stepwise reduction (by 1) to find the largest feasible batch size
+    for batch_size in range(initial_batch_size, min_batch_size - 1, -1):
         try:
             # Create a dummy batch to test memory
-            dummy_input = torch.randn(batch_size, 1, 96, 112, 96).to(device)
+            # Match the model's expected processed input size (96, 128, 96)
+            dummy_input = torch.randn(batch_size, 1, 96, 128, 96, device=device)
             
             # Ensure model is on the same device as input
             if next(model.parameters()).device != dummy_input.device:
                 print(f"[MEMORY] Moving model to {device} for testing...")
                 model = model.to(device)
             
-            # Test forward pass
-            with torch.no_grad():
-                _ = model(dummy_input)
-            
-            # Test backward pass with a dummy loss
-            dummy_loss = torch.tensor(0.0, requires_grad=True, device=device)
+            # Forward + backward with a lightweight synthetic loss to allocate activations
+            logits = model(dummy_input)
+            # Use sum of logits as a scalar loss to ensure gradients flow
+            dummy_loss = logits.sum()
             dummy_loss.backward()
             
             print(f"[MEMORY] ✅ Batch size {batch_size} works! Using this for training.")
