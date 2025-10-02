@@ -431,9 +431,9 @@ class BayesianModelComparison:
         with pm.Model() as accuracy_model:
             # Partial pooling: logit accuracy per model with site-specific random effects
             # Tighter priors help reduce divergences
-            alpha_model = pm.Normal("alpha_model", 0, 0.8, shape=M)
+            alpha_model = pm.Normal("alpha_model", 0, 0.5, shape=M)
             u_site_raw = pm.Normal("u_site_raw", 0, 1, shape=S)
-            sigma_site = pm.HalfNormal("sigma_site", 0.3)
+            sigma_site = pm.HalfNormal("sigma_site", 0.2)
             u_site = pm.Deterministic("u_site", u_site_raw * sigma_site)
             
             logit_theta = alpha_model[model_idx] + u_site[site_idx]
@@ -449,14 +449,15 @@ class BayesianModelComparison:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 idata = pm.sample(
-                    3000,
-                    tune=6000,
-                    target_accept=0.999,
+                    2000,
+                    tune=5000,
+                    target_accept=0.9995,
                     init="jitter+adapt_diag_grad",
                     random_seed=self.random_seed,
                     return_inferencedata=True,
                     progressbar=True,
-                    cores=4,
+                    chains=6,
+                    cores=6,
                     idata_kwargs={"log_likelihood": True},
                 )
                 idata.extend(pm.sample_posterior_predictive(idata, random_seed=self.random_seed))
@@ -940,10 +941,10 @@ class BayesianModelComparison:
                 # mode marker (center of density)
                 ax1.axvline(self._beta_mode(a, b), color=colors[i], lw=1, alpha=0.6)
             ax1.set_xlim(x_min, x_max)
-            ax1.set_xlabel('Accuracy')
+        ax1.set_xlabel('Accuracy')
             ax1.set_ylabel('Relative density')
             ax1.set_title('Hierarchical accuracy — Beta posterior densities')
-            ax1.grid(True, alpha=0.3)
+        ax1.grid(True, alpha=0.3)
             ax1.legend(title='Models', bbox_to_anchor=(1.04, 1), loc='upper left')
         except Exception as e:
             print(f"Warning: failed to draw overlaid normal densities: {e}")
