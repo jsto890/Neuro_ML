@@ -1153,14 +1153,13 @@ class BayesianModelComparison:
                 # mode marker (center of density)
                 ax1.axvline(self._beta_mode(a, b), color=colors[i], lw=1, alpha=0.6)
             ax1.set_xlim(x_min, x_max)
-        
-        ax1.set_xlabel('Accuracy')
+            ax1.set_xlabel('Accuracy')
             ax1.set_ylabel('Relative density')
             ax1.set_title('Hierarchical accuracy — Beta posterior densities')
-        ax1.grid(True, alpha=0.3)
+            ax1.grid(True, alpha=0.3)
             ax1.legend(title='Models', bbox_to_anchor=(1.04, 1), loc='upper left')
         except Exception as e:
-                print(f"Warning: failed to draw overlaid normal densities: {e}")
+            print(f"Warning: failed to draw overlaid normal densities: {e}")
         
         # Model comparison probabilities
         if 'model_comparisons' in results:
