@@ -641,7 +641,7 @@ class BayesianModelComparison:
                 idata = pm.sample(
                     2000,
                     tune=5000,
-                    target_accept=0.9995,
+                    target_accept=0.9997,
                     init="jitter+adapt_diag_grad",
                     random_seed=self.random_seed,
                     return_inferencedata=True,
@@ -653,7 +653,22 @@ class BayesianModelComparison:
                 idata.extend(pm.sample_posterior_predictive(idata, random_seed=self.random_seed))
         
         # Extract results
-        acc_samples = idata.posterior["acc_model"].values.reshape(-1, M)
+        # Prefer model-level accuracies aggregated over sites from theta; fallback to acc_model
+        try:
+            if 'theta' in idata.posterior:
+                theta_vals = idata.posterior['theta'].values  # (chain, draw, N)
+                theta_flat = theta_vals.reshape(-1, theta_vals.shape[-1])
+                acc_samples = np.zeros((theta_flat.shape[0], M), dtype=float)
+                for m in range(M):
+                    mask = (model_idx == m)
+                    if np.any(mask):
+                        acc_samples[:, m] = np.mean(theta_flat[:, mask], axis=1)
+                    else:
+                        acc_samples[:, m] = 0.0
+            else:
+                acc_samples = idata.posterior["acc_model"].values.reshape(-1, M)
+        except Exception:
+            acc_samples = idata.posterior["acc_model"].values.reshape(-1, M)
         
         results = {
             'idata': idata,
@@ -741,7 +756,7 @@ class BayesianModelComparison:
             warnings.simplefilter("ignore")
             # Use include_sample=True to include log likelihood; bump target_accept to reduce divergences
             idata = bm.fit(
-                target_accept=0.999,
+                target_accept=0.9995,
                 random_seed=self.random_seed,
                 draws=3000,
                 tune=6000,
@@ -1341,6 +1356,27 @@ class BayesianModelComparison:
             acc_per_model = {m: (df_accuracy[df_accuracy['model']==m]['k'].values / df_accuracy[df_accuracy['model']==m]['n'].values).astype(float) for m in models}
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,5))
             colors = plt.cm.tab10(np.linspace(0,1,len(models)))
+            # Dynamic x-limits based on fitted Beta per model
+            modes = []
+            sds = []
+            for m in models:
+                arr = np.array(acc_per_model[m])
+                if arr.size == 0:
+                    continue
+                a, b = self._fit_beta_from_samples(arr)
+                modes.append(self._beta_mode(a, b))
+                sds.append(self._beta_sd(a, b))
+            if modes:
+                mu_min = float(np.min(modes) - 5 * np.max(sds))
+                mu_max = float(np.max(modes) + 5 * np.max(sds))
+                x_min = max(0.0, mu_min)
+                x_max = min(1.0, mu_max)
+                if x_max - x_min < 0.1:
+                    pad = 0.05
+                    x_min = max(0.0, x_min - pad)
+                    x_max = min(1.0, x_max + pad)
+            else:
+                x_min, x_max = 0.0, 1.0
             for i, m in enumerate(models):
                 arr = np.array(acc_per_model[m])
                 if arr.size == 0:
