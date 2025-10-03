@@ -28,6 +28,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from matplotlib.gridspec import GridSpec
+import matplotlib.patches as mpatches
 
 # Bayesian analysis libraries
 import pymc as pm
@@ -205,6 +207,194 @@ class BayesianModelComparison:
         if denom <= 0:
             return 0.0
         return float(np.sqrt((a * b) / denom))
+
+    def _prepare_metric_values(self, data_dict: Dict[str, pd.DataFrame], metric: str) -> Dict[str, np.ndarray]:
+        """Prepare per-fold metric values by model for box-and-whisker plotting.
+
+        Returns a dict mapping model -> np.ndarray of per-fold values.
+        """
+        values_by_model: Dict[str, np.ndarray] = {}
+        try:
+            if metric == 'acc':
+                df_accuracy = data_dict.get('accuracy', pd.DataFrame())
+                if df_accuracy.empty:
+                    return {}
+                for m, g in df_accuracy.groupby('model'):
+                    vals = (g['k'].values.astype(float) / np.maximum(g['n'].values.astype(float), 1.0))
+                    vals = vals[~np.isnan(vals)]
+                    if vals.size:
+                        values_by_model[m] = vals
+            elif metric == 'auc':
+                df_auc = data_dict.get('auc', pd.DataFrame())
+                if df_auc.empty:
+                    return {}
+                models = sorted(df_auc['model'].unique().tolist())
+                sites = sorted(df_auc['site'].unique().tolist()) if 'site' in df_auc.columns else []
+                for m in models:
+                    vals = []
+                    if sites:
+                        for s in sites:
+                            dms = df_auc[(df_auc['model'] == m) & (df_auc['site'] == s)]
+                            if dms.empty:
+                                continue
+                            # Compute macro one-vs-rest AUC across classes present at this site
+                            classes = sorted(dms['class'].unique().tolist())
+                            aucs = []
+                            for c in classes:
+                                dmsc = dms[dms['class'] == c]
+                                y = dmsc['y'].values.astype(int)
+                                s_scores = dmsc['score'].values
+                                if len(np.unique(y)) < 2:
+                                    continue
+                                try:
+                                    aucs.append(roc_auc_score(y, s_scores))
+                                except Exception:
+                                    continue
+                            if len(aucs) > 0:
+                                vals.append(float(np.mean(aucs)))
+                    else:
+                        # Fallback: macro AUC on pooled rows per model
+                        dm = df_auc[df_auc['model'] == m]
+                        classes = sorted(dm['class'].unique().tolist())
+                        aucs = []
+                        for c in classes:
+                            dmc = dm[dm['class'] == c]
+                            y = dmc['y'].values.astype(int)
+                            s_scores = dmc['score'].values
+                            if len(np.unique(y)) < 2:
+                                continue
+                            try:
+                                aucs.append(roc_auc_score(y, s_scores))
+                            except Exception:
+                                continue
+                        if len(aucs) > 0:
+                            vals.append(float(np.mean(aucs)))
+                    vals_np = np.array(vals, dtype=float)
+                    vals_np = vals_np[~np.isnan(vals_np)]
+                    if vals_np.size:
+                        values_by_model[m] = vals_np
+            elif metric == 'mcc':
+                df_skill = data_dict.get('skill', pd.DataFrame())
+                if df_skill.empty:
+                    return {}
+                models = sorted(df_skill['model'].unique().tolist())
+                sites = sorted(df_skill['site'].unique().tolist()) if 'site' in df_skill.columns else []
+                for m in models:
+                    vals = []
+                    if sites:
+                        for s in sites:
+                            dms = df_skill[(df_skill['model'] == m) & (df_skill['site'] == s)]
+                            if dms.empty:
+                                continue
+                            y_true = dms['true_label'].values
+                            y_pred = dms['predicted_label'].values
+                            try:
+                                vals.append(float(matthews_corrcoef(y_true, y_pred)))
+                            except Exception:
+                                continue
+                    vals_np = np.array(vals, dtype=float)
+                    vals_np = vals_np[~np.isnan(vals_np)]
+                    if vals_np.size:
+                        values_by_model[m] = vals_np
+        except Exception:
+            return {}
+        return values_by_model
+
+    def _plot_box_whisker_with_left_density(self,
+                                            values_by_model: Dict[str, np.ndarray],
+                                            y_min: float,
+                                            y_max: float,
+                                            y_label: str,
+                                            out_filename: str) -> None:
+        """Create a box-and-whisker plot with per-fold dots and a left-side
+        horizontal normal density overlay for each model.
+        """
+        # Filter out empty entries and sort models for consistent ordering
+        non_empty = {m: v for m, v in values_by_model.items() if isinstance(v, np.ndarray) and v.size > 0}
+        if not non_empty:
+            return
+        models = sorted(non_empty.keys())
+        data_arrays = [np.asarray(non_empty[m], dtype=float) for m in models]
+        means = [float(np.mean(a)) for a in data_arrays]
+        stds = [float(np.std(a)) for a in data_arrays]
+
+        # Colors
+        colors = plt.cm.tab10(np.linspace(0, 1, len(models)))
+
+        # Figure with left density panel and right boxplot panel sharing Y
+        fig = plt.figure(figsize=(12, 6))
+        gs = GridSpec(1, 2, width_ratios=[1.2, 4.5], wspace=0.05)
+        ax_left = fig.add_subplot(gs[0, 0])
+        ax_main = fig.add_subplot(gs[0, 1], sharey=ax_left)
+
+        # Left: horizontal normal densities aligned to the metric value axis
+        y_grid = np.linspace(y_min, y_max, 800)
+        # Compute global max density for normalisation to [0,1] on x for visual balance
+        dens_list = []
+        for mu, sd in zip(means, stds):
+            sd_eff = float(sd) if float(sd) > 1e-6 else 1e-6
+            dens = self._normal_pdf(y_grid, mu, sd_eff)
+            dens_list.append(dens)
+        global_max = np.max([d.max() for d in dens_list]) if dens_list else 1.0
+        if global_max <= 0:
+            global_max = 1.0
+        for i, (m, dens) in enumerate(zip(models, dens_list)):
+            x_d = dens / global_max
+            ax_left.plot(x_d, y_grid, color=colors[i], lw=2, alpha=0.9, label=m)
+            ax_left.fill_betweenx(y_grid, 0, x_d, color=colors[i], alpha=0.10)
+        ax_left.set_xlim(0, 1.05)
+        ax_left.set_ylim(y_min, y_max)
+        ax_left.set_xticks([])
+        ax_left.set_xlabel('')
+        ax_left.grid(True, axis='y', alpha=0.15)
+        for spine in ['top', 'right', 'bottom']:
+            ax_left.spines[spine].set_visible(False)
+
+        # Right: box-and-whisker with per-fold dots and mean markers
+        positions = np.arange(1, len(models) + 1)
+        bp = ax_main.boxplot(
+            data_arrays,
+            positions=positions,
+            widths=0.6,
+            vert=True,
+            whis=(0, 100),  # min/max whiskers
+            patch_artist=True,
+            showfliers=True,
+            manage_ticks=False,
+        )
+        # Style boxes, whiskers, caps
+        for i, patch in enumerate(bp['boxes']):
+            patch.set_facecolor(colors[i])
+            patch.set_alpha(0.40)
+            patch.set_edgecolor('black')
+        for i, (w1, w2) in enumerate(zip(bp['whiskers'][0::2], bp['whiskers'][1::2])):
+            w1.set_color(colors[i]); w2.set_color(colors[i])
+        for i, (c1, c2) in enumerate(zip(bp['caps'][0::2], bp['caps'][1::2])):
+            c1.set_color(colors[i]); c2.set_color(colors[i])
+        # Mean markers
+        ax_main.scatter(positions, means, marker='D', s=46, color='black', zorder=3, label='Mean')
+        # Per-fold dots with small jitter
+        rng = np.random.default_rng(self.random_seed)
+        for i, arr in enumerate(data_arrays):
+            jitter = rng.normal(0.0, 0.06, size=arr.size)
+            ax_main.scatter(np.full(arr.shape, positions[i]) + jitter, arr,
+                            s=26, color=colors[i], edgecolors='black', linewidths=0.3, alpha=0.9, zorder=2)
+        ax_main.set_xlim(0.5, len(models) + 0.5)
+        ax_main.set_ylim(y_min, y_max)
+        ax_main.set_xticks(positions)
+        ax_main.set_xticklabels(models, rotation=20)
+        ax_main.set_ylabel(y_label)
+        ax_main.grid(True, axis='y', alpha=0.3)
+
+        # Legend on the right with model name, colour, mean and std
+        handles = [mpatches.Patch(facecolor=colors[i], edgecolor='black', alpha=0.7,
+                                  label=f"{models[i]} — μ={means[i]:.3f}, σ={stds[i]:.3f}")
+                   for i in range(len(models))]
+        ax_main.legend(handles=handles, title='Models', bbox_to_anchor=(1.02, 1), loc='upper left')
+
+        plt.tight_layout()
+        plt.savefig(self.plots_dir / out_filename, dpi=300, bbox_inches='tight')
+        plt.close()
     
     def _discover_model_dirs(self, run_dir: Path) -> Dict[str, Path]:
         """Find model subdirectories containing run summaries."""
@@ -884,6 +1074,28 @@ class BayesianModelComparison:
             if 'accuracy' in data_dict and not data_dict['accuracy'].empty:
                 self._plot_acc_distributions(data_dict['accuracy'])
                 self._plot_acc_two_panel(data_dict['accuracy'])
+            # j) New box-and-whisker plots with left normal density overlays
+            try:
+                values_acc = self._prepare_metric_values(data_dict, 'acc')
+                if values_acc:
+                    self._plot_box_whisker_with_left_density(values_acc, 0.0, 1.0, 'Accuracy', 'box_acc.png')
+            except Exception as e:
+                print(f"Warning: failed ACC box plot: {e}")
+            try:
+                values_auc = self._prepare_metric_values(data_dict, 'auc')
+                if values_auc:
+                    self._plot_box_whisker_with_left_density(values_auc, 0.0, 1.0, 'AUC', 'box_auc.png')
+            except Exception as e:
+                print(f"Warning: failed AUC box plot: {e}")
+            try:
+                values_mcc = self._prepare_metric_values(data_dict, 'mcc')
+                if values_mcc:
+                    # Clamp y-axis to [-1,1] then cap to 1 as requested; show full range but we keep plots comparable
+                    y_min = max(-1.0, -1.0)
+                    y_max = 1.0
+                    self._plot_box_whisker_with_left_density(values_mcc, y_min, y_max, 'MCC', 'box_mcc.png')
+            except Exception as e:
+                print(f"Warning: failed MCC box plot: {e}")
         except Exception as e:
             print(f"Warning: Failed to create publication plots: {e}")
     
