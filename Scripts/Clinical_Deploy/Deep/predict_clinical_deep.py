@@ -923,6 +923,8 @@ def main():
     parser.add_argument('--focus-input', action='store_true', help='Run prediction and interpretability on a cropped, eroded brain ROI to suppress edge/rim artifacts')
     parser.add_argument('--focus-erode-mm', type=float, default=2.0, help='Mask erosion in mm used to define the focused ROI (before padding)')
     parser.add_argument('--focus-pad-mm', type=float, default=2.0, help='Extra mm of padding added around the ROI after erosion when cropping the input')
+    # Grad-CAM++ edge suppression (does not affect vanilla Grad-CAM)
+    parser.add_argument('--gcpp-edge-taper-mm', type=float, default=3.0, help='If >0, multiply Grad-CAM++ by an interior distance ramp of this thickness (mm) to suppress rim focus')
 
     args = parser.parse_args()
 
@@ -1144,6 +1146,17 @@ def main():
                     cam_full = _embed_focus_into_full(cam_local, focus_bbox, vol_np.shape)
                 else:
                     cam_full = resize_volume_to_shape(cam, vol_np.shape)
+
+                # Optional edge tapering for Grad-CAM++ to avoid mask rims
+                try:
+                    taper_mm = float(getattr(args, 'gcpp_edge_taper_mm', 0.0))
+                except Exception:
+                    taper_mm = 0.0
+                if taper_mm > 0.0:
+                    dist_mm = _inside_distance_mm(brain_mask_orig, header)
+                    ramp = np.clip(dist_mm / max(taper_mm, 1e-6), 0.0, 1.0).astype(np.float32)
+                    cam_full = cam_full * ramp
+
                 cam_path = out_dir / f"{sid}_gradcam_plusplus_class{c}.nii.gz"
                 save_nifti(cam_full, affine, header, cam_path)
                 gradcam_paths[f"plusplus_{c}"] = str(cam_path)
