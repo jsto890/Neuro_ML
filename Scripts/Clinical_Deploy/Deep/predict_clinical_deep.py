@@ -531,6 +531,8 @@ def compute_gradcam_plusplus_simple3d_local(model: nn.Module, smri_tensor: torch
     for k, w in enumerate(weights):
         cam += w * activations[0, k]
     
+    # Suppress thin edge responses by subtracting per-slice percentile baseline then ReLU
+    cam = cam - torch.quantile(cam, 0.85)
     cam = F.relu(cam)
     cam = cam.unsqueeze(0).unsqueeze(0)
     target_size = smri_tensor.shape[-3:]
@@ -837,6 +839,17 @@ def _embed_focus_into_full(focus_vol: np.ndarray, bbox: Tuple[int, int, int, int
     if sz > 0 and sy > 0 and sx > 0:
         full[z0:z0+sz, y0:y0+sy, x0:x0+sx] = focus_vol[:sz, :sy, :sx].astype(np.float32)
     return full
+
+
+def _inside_distance_mm(mask: np.ndarray, header) -> np.ndarray:
+    if distance_transform_edt is None:
+        return (mask > 0).astype(np.float32)
+    try:
+        zooms = header.get_zooms()[:3] if header is not None else (1.0, 1.0, 1.0)
+    except Exception:
+        zooms = (1.0, 1.0, 1.0)
+    dist = distance_transform_edt(mask > 0, sampling=zooms).astype(np.float32)
+    return dist
 
 
 def resize_volume_to_shape(volume: np.ndarray, target_shape: Tuple[int, int, int]) -> np.ndarray:
