@@ -947,6 +947,7 @@ def main():
     parser.add_argument('--focus-input', action='store_true', help='Run prediction and interpretability on a cropped, eroded brain ROI to suppress edge/rim artifacts')
     parser.add_argument('--focus-erode-mm', type=float, default=2.0, help='Mask erosion in mm used to define the focused ROI (before padding)')
     parser.add_argument('--focus-pad-mm', type=float, default=2.0, help='Extra mm of padding added around the ROI after erosion when cropping the input')
+    parser.add_argument('--focus-taper-mm', type=float, default=3.0, help='Soft window thickness (mm) applied to input inside the brain mask to reduce border attention (0 disables)')
     # Grad-CAM++ edge suppression (does not affect vanilla Grad-CAM)
     parser.add_argument('--gcpp-edge-taper-mm', type=float, default=3.0, help='If >0, multiply Grad-CAM++ by an interior distance ramp of this thickness (mm) to suppress rim focus')
 
@@ -1052,8 +1053,17 @@ def main():
     # And embed to full shape for PNG overlays
     brain_mask_eroded = _embed_focus_into_full(brain_mask_eroded_focus, focus_bbox, vol_np.shape) if use_focus else brain_mask_eroded_focus
     
-    # Normalize ONLY the focus crop for model input
+    # Normalize ONLY the focus crop for model input, then apply optional soft interior window (taper) to down-weight border voxels for attention
     vol_focus_n = normalize_volume(vol_focus, method=args.normalize)
+    try:
+        taper_mm = float(getattr(args, 'focus_taper_mm', 0.0))
+    except Exception:
+        taper_mm = 0.0
+    if taper_mm > 0.0:
+        # Build a smooth ramp [0..1] inside the eroded focus mask and multiply the input
+        dist_mm_focus = _inside_distance_mm(brain_mask_focus, header)
+        ramp_focus = np.clip(dist_mm_focus / max(taper_mm, 1e-6), 0.0, 1.0).astype(np.float32)
+        vol_focus_n = vol_focus_n * ramp_focus
     input_tensor = to_model_tensor(vol_focus_n, device=device, resize_dims=tuple(args.resize_dims) if args.resize_dims else None)
 
     # Predict with optional ensemble + TTA
