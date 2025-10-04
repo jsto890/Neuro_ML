@@ -255,7 +255,8 @@ def set_dropout_enabled_only(module: nn.Module, enable: bool) -> None:
 
 def aggregate_predictions(models: List[nn.Module], input_tensor: torch.Tensor, avg_method: str,
                          tta_n: int = 0, tta_noise_std: float = 0.0, mc_dropout: bool = False,
-                         use_amp: bool = False, device_str: str = 'cpu'
+                         use_amp: bool = False, device_str: str = 'cpu',
+                         vote_weight: Optional[float] = None, vote_majority_thresh: Optional[float] = None
                          ) -> Tuple[np.ndarray, torch.Tensor, Dict[str, object]]:
     """
     Run ensemble with optional TTA and return probabilities and aggregated logits.
@@ -317,11 +318,22 @@ def aggregate_predictions(models: List[nn.Module], input_tensor: torch.Tensor, a
         vf = np.zeros_like(p)
         for i in range(p.shape[0]):
             vf[i] = float(vote_frac.get(i, 0.0))
-        # Confidence-adaptive blend: lean towards votes when p is flat
-        ent = -np.sum(np.clip(p, 1e-9, 1.0) * np.log(np.clip(p, 1e-9, 1.0)))
-        max_ent = np.log(max(1, p.shape[0]))
-        flatness = float(ent / max(max_ent, 1e-8))  # 0=peaked, 1=flat
-        alpha = 0.5 * flatness + 0.2  # in [0.2, 0.7]
+        # Majority snap if requested
+        if vote_majority_thresh is not None and len(vf) > 0:
+            top_v = float(np.max(vf))
+            top_i = int(np.argmax(vf))
+            if top_v >= float(vote_majority_thresh):
+                p = np.zeros_like(p); p[top_i] = 1.0
+                probs = p.astype(np.float32)
+                return probs, logits, meta
+        # Confidence-adaptive or user-forced blend
+        if vote_weight is None:
+            ent = -np.sum(np.clip(p, 1e-9, 1.0) * np.log(np.clip(p, 1e-9, 1.0)))
+            max_ent = np.log(max(1, p.shape[0]))
+            flatness = float(ent / max(max_ent, 1e-8))  # 0=peaked, 1=flat
+            alpha = 0.5 * flatness + 0.2  # in [0.2, 0.7]
+        else:
+            alpha = float(min(1.0, max(0.0, vote_weight)))
         consensus = (1.0 - alpha) * p + alpha * vf
         s = float(consensus.sum())
         if s > 0:
@@ -931,6 +943,9 @@ def main():
     parser.add_argument('--all-classes-interpret', action='store_true', help='Produce Grad-CAM for all classes (default: predicted only)')
     parser.add_argument('--save-overlay-pngs', action='store_true', help='Also save 2D slice overlays (axial/coronal/sagittal) as PNGs')
     parser.add_argument('--cam-layer', type=str, default='prepool', choices=['last', 'prepool', 'mid'], help='Which conv layer to use for Grad-CAM (Simple3DCNN)')
+    parser.add_argument('--cam-tta-n', type=int, default=0, help='Number of TTA replicates when computing CAMs (averaged for stability). If 0, falls back to --tta-n.')
+    parser.add_argument('--cam-tta-noise-std', type=float, default=0.0, help='Gaussian noise std for CAM TTA (fraction of input scale). If 0, falls back to --tta-noise-std.')
+    parser.add_argument('--cam-tta-filter-by-pred', action='store_true', help='When averaging CAMs over TTA, include only replicates that predict the target class')
     # Interpretability selection
     parser.add_argument('--run-all', action='store_true', help='Run all interpretability maps (default if neither --run nor --run-all provided)')
     parser.add_argument('--run', nargs='+', choices=['gradcam', 'gradcam_plusplus', 'saliency', 'smoothgrad', 'integrated_gradients', 'fused_saliency', 'occlusion', 'gradientshap'], help='One or more interpretability methods to run, e.g. --run gradcam smoothgrad fused_saliency')
@@ -950,6 +965,9 @@ def main():
     parser.add_argument('--focus-taper-mm', type=float, default=3.0, help='Soft window thickness (mm) applied to input inside the brain mask to reduce border attention (0 disables)')
     # Grad-CAM++ edge suppression (does not affect vanilla Grad-CAM)
     parser.add_argument('--gcpp-edge-taper-mm', type=float, default=3.0, help='If >0, multiply Grad-CAM++ by an interior distance ramp of this thickness (mm) to suppress rim focus')
+    # Voting emphasis for TTA
+    parser.add_argument('--vote-weight', type=float, default=None, help='Blend weight in [0,1] for TTA vote fractions when combining with averaged probabilities. Higher focuses more on votes. If not set, uses adaptive weighting.')
+    parser.add_argument('--vote-majority-thresh', type=float, default=None, help='If the top vote fraction ≥ this threshold, snap final probabilities to that class (majority rule).')
 
     args = parser.parse_args()
 
@@ -1074,7 +1092,8 @@ def main():
         probs, logits, meta_pred = aggregate_predictions(
             models, input_tensor, avg_method=args.ensemble_avg_method,
             tta_n=int(args.tta_n), tta_noise_std=float(args.tta_noise_std), mc_dropout=bool(args.mc_dropout),
-            use_amp=bool(args.amp), device_str=device
+            use_amp=bool(args.amp), device_str=device,
+            vote_weight=getattr(args, 'vote_weight', None), vote_majority_thresh=getattr(args, 'vote_majority_thresh', None)
         )
         pred_idx = int(np.argmax(probs))
 
@@ -1122,14 +1141,41 @@ def main():
         overlay_saved = False
         for c in classes_to_compute:
             try:
+                def _cam_for_model(m):
+                    # CAM TTA: average multiple noisy passes if requested (defaults to global TTA when unset)
+                    reps = int(getattr(args, 'cam_tta_n', 0))
+                    if reps <= 0:
+                        reps = int(getattr(args, 'tta_n', 0))
+                    reps = max(1, reps)
+                    noise_std = float(getattr(args, 'cam_tta_noise_std', 0.0))
+                    if noise_std <= 0.0:
+                        noise_std = float(getattr(args, 'tta_noise_std', 0.0))
+                    cams = []
+                    used = 0
+                    for r in range(reps):
+                        xt = input_tensor
+                        if reps > 1 and noise_std > 0.0:
+                            xt = xt + torch.randn_like(xt) * noise_std
+                        # Optionally filter by replicate's predicted class
+                        if bool(getattr(args, 'cam_tta_filter_by_pred', False)):
+                            with torch.no_grad():
+                                out = m(xt)
+                                lg = out[0] if isinstance(out, tuple) else out
+                                pred_r = int(torch.argmax(F.softmax(lg, dim=1), dim=1).item())
+                            if pred_r != int(c):
+                                continue
+                        cams.append(compute_gradcam_volume(gradcam_module, m, xt, c, args.model_arch, device, cam_layer=args.cam_layer))
+                        used += 1
+                    if len(cams) == 0:
+                        # Fallback: use single pass on original input to avoid empty average
+                        return compute_gradcam_volume(gradcam_module, m, input_tensor, c, args.model_arch, device, cam_layer=args.cam_layer)
+                    return np.mean(np.stack(cams, axis=0), axis=0).astype(np.float32)
+
                 if not is_ensemble:
-                    cam = compute_gradcam_volume(gradcam_module, models[0], input_tensor, c, args.model_arch, device, cam_layer=args.cam_layer)
+                    cam = _cam_for_model(models[0])
                 else:
-                    cam_accum = None
-                    for m in models:
-                        cam_i = compute_gradcam_volume(gradcam_module, m, input_tensor, c, args.model_arch, device, cam_layer=args.cam_layer)
-                        cam_accum = cam_i if cam_accum is None else (cam_accum + cam_i)
-                    cam = cam_accum / float(len(models))
+                    cam_list = [_cam_for_model(m) for m in models]
+                    cam = np.mean(np.stack(cam_list, axis=0), axis=0).astype(np.float32)
                 # Map CAM to full image shape (respecting focused ROI if enabled)
                 if use_focus:
                     cam_local = resize_volume_to_shape(cam, vol_focus_n.shape)
@@ -1166,14 +1212,38 @@ def main():
         overlay_saved_pp = False
         for c in classes_to_compute:
             try:
+                def _campp_for_model(m):
+                    reps = int(getattr(args, 'cam_tta_n', 0))
+                    if reps <= 0:
+                        reps = int(getattr(args, 'tta_n', 0))
+                    reps = max(1, reps)
+                    noise_std = float(getattr(args, 'cam_tta_noise_std', 0.0))
+                    if noise_std <= 0.0:
+                        noise_std = float(getattr(args, 'tta_noise_std', 0.0))
+                    cams = []
+                    used = 0
+                    for r in range(reps):
+                        xt = input_tensor
+                        if reps > 1 and noise_std > 0.0:
+                            xt = xt + torch.randn_like(xt) * noise_std
+                        if bool(getattr(args, 'cam_tta_filter_by_pred', False)):
+                            with torch.no_grad():
+                                out = m(xt)
+                                lg = out[0] if isinstance(out, tuple) else out
+                                pred_r = int(torch.argmax(F.softmax(lg, dim=1), dim=1).item())
+                            if pred_r != int(c):
+                                continue
+                        cams.append(compute_gradcam_plusplus_volume(gradcam_module, m, xt, c, args.model_arch, device, cam_layer=args.cam_layer))
+                        used += 1
+                    if len(cams) == 0:
+                        return compute_gradcam_plusplus_volume(gradcam_module, m, input_tensor, c, args.model_arch, device, cam_layer=args.cam_layer)
+                    return np.mean(np.stack(cams, axis=0), axis=0).astype(np.float32)
+
                 if not is_ensemble:
-                    cam = compute_gradcam_plusplus_volume(gradcam_module, models[0], input_tensor, c, args.model_arch, device, cam_layer=args.cam_layer)
+                    cam = _campp_for_model(models[0])
                 else:
-                    cam_accum = None
-                    for m in models:
-                        cam_i = compute_gradcam_plusplus_volume(gradcam_module, m, input_tensor, c, args.model_arch, device, cam_layer=args.cam_layer)
-                        cam_accum = cam_i if cam_accum is None else (cam_accum + cam_i)
-                    cam = cam_accum / float(len(models))
+                    cam_list = [_campp_for_model(m) for m in models]
+                    cam = np.mean(np.stack(cam_list, axis=0), axis=0).astype(np.float32)
                 # Map CAM++ to full image shape
                 if use_focus:
                     cam_local = resize_volume_to_shape(cam, vol_focus_n.shape)
