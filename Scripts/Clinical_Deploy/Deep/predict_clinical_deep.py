@@ -254,9 +254,9 @@ def set_dropout_enabled_only(module: nn.Module, enable: bool) -> None:
 
 
 def aggregate_predictions(models: List[nn.Module], input_tensor: torch.Tensor, avg_method: str,
-                          tta_n: int = 0, tta_noise_std: float = 0.0, mc_dropout: bool = False,
-                          use_amp: bool = False, device_str: str = 'cpu'
-                          ) -> Tuple[np.ndarray, torch.Tensor, Dict[str, object]]:
+                         tta_n: int = 0, tta_noise_std: float = 0.0, mc_dropout: bool = False,
+                         use_amp: bool = False, device_str: str = 'cpu'
+                         ) -> Tuple[np.ndarray, torch.Tensor, Dict[str, object]]:
     """
     Run ensemble with optional TTA and return probabilities and aggregated logits.
     Returns (probs_np, logits_tensor, meta)
@@ -291,10 +291,14 @@ def aggregate_predictions(models: List[nn.Module], input_tensor: torch.Tensor, a
                 v = int(torch.argmax(F.softmax(lg, dim=1), dim=1).item())
                 votes.append(v)
 
+    vote_hist = {int(i): int(votes.count(i)) for i in set(votes)}
+    total_votes = max(1, len(votes))
+    vote_frac = {k: v / float(total_votes) for k, v in vote_hist.items()}
     meta = {
         'tta_replicates': replicates,
         'votes': votes,
-        'vote_hist': {int(i): int(votes.count(i)) for i in set(votes)}
+        'vote_hist': vote_hist,
+        'vote_frac': vote_frac,
     }
 
     if avg_method == 'probs':
@@ -306,6 +310,26 @@ def aggregate_predictions(models: List[nn.Module], input_tensor: torch.Tensor, a
         logits_t = torch.mean(torch.stack(all_logits, dim=0), dim=0)
         logits = logits_t
         probs = softmax_probs(logits_t)
+
+    # Blend probabilities with vote fractions to form a consensus probability vector
+    try:
+        p = np.asarray(probs, dtype=np.float32)
+        vf = np.zeros_like(p)
+        for i in range(p.shape[0]):
+            vf[i] = float(vote_frac.get(i, 0.0))
+        # Confidence-adaptive blend: lean towards votes when p is flat
+        ent = -np.sum(np.clip(p, 1e-9, 1.0) * np.log(np.clip(p, 1e-9, 1.0)))
+        max_ent = np.log(max(1, p.shape[0]))
+        flatness = float(ent / max(max_ent, 1e-8))  # 0=peaked, 1=flat
+        alpha = 0.5 * flatness + 0.2  # in [0.2, 0.7]
+        consensus = (1.0 - alpha) * p + alpha * vf
+        s = float(consensus.sum())
+        if s > 0:
+            consensus = consensus / s
+        probs = consensus.astype(np.float32)
+    except Exception:
+        pass
+
     return probs, logits, meta
 
 
@@ -1049,7 +1073,7 @@ def main():
     confidence_raw = float(np.max(probs))
     prob_dict_raw = {label_map.get(i, str(i)): float(p) for i, p in enumerate(probs)}
 
-    # Risk-aware adjustment
+    # Risk-aware adjustment (applied after consensus blending)
     adjusted_probs = probs.copy()
     applied_risk = None
     if args.risk_weights and len(args.risk_weights) == int(args.num_classes):
