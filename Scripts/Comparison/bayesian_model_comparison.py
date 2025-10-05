@@ -983,12 +983,18 @@ class BayesianModelComparison:
                 model_predictions[data.model] = {
                     'predictions': [],
                     'probabilities': [],
-                    'labels': []
+                    'labels': [],
+                    'subject_ids': []
                 }
             
             model_predictions[data.model]['predictions'].extend(data.predictions)
-            model_predictions[data.model]['probabilities'].extend(data.probabilities)
+            # extend row-wise for 2D prob arrays
+            if isinstance(data.probabilities, np.ndarray) and data.probabilities.ndim == 2:
+                model_predictions[data.model]['probabilities'].extend([row for row in data.probabilities])
+            else:
+                model_predictions[data.model]['probabilities'].extend(data.probabilities)
             model_predictions[data.model]['labels'].extend(data.labels)
+            model_predictions[data.model]['subject_ids'].extend(list(data.subject_ids))
         
         # Convert to numpy arrays
         # Convert to numpy arrays in a stable, sorted model order
@@ -997,11 +1003,18 @@ class BayesianModelComparison:
             model_predictions[model]['predictions'] = np.array(model_predictions[model]['predictions'])
             model_predictions[model]['probabilities'] = np.array(model_predictions[model]['probabilities'])
             model_predictions[model]['labels'] = np.array(model_predictions[model]['labels'])
+            model_predictions[model]['subject_ids'] = np.array(model_predictions[model]['subject_ids'])
         
         # Ensemble with multiple weighting strategies
         if len(model_predictions) > 1:
             models = models_sorted
-            all_probs = np.array([model_predictions[model]['probabilities'] for model in models])
+            # Guard: require same number of samples per model to construct an ensemble. Otherwise skip.
+            num_samples = [model_predictions[m]['probabilities'].shape[0] for m in models]
+            same_shape = len(set(num_samples)) == 1
+            if same_shape:
+                all_probs = np.stack([model_predictions[model]['probabilities'] for model in models], axis=0)
+            else:
+                all_probs = None
             
             # Calculate individual accuracies first
             individual_accs = {
@@ -1027,25 +1040,31 @@ class BayesianModelComparison:
 
             # 1. Equal weight ensemble (original)
             equal_weights = np.ones(len(models)) / len(models)
-            equal_ensemble_probs = np.average(all_probs, axis=0, weights=equal_weights)
-            equal_ensemble_preds = np.argmax(equal_ensemble_probs, axis=1)
-            equal_ensemble_acc = accuracy_score(
-                true_labels, 
-                equal_ensemble_preds
-            )
-            equal_ensemble_auc = compute_macro_auc(equal_ensemble_probs, true_labels)
+            if all_probs is not None:
+                equal_ensemble_probs = np.average(all_probs, axis=0, weights=equal_weights)
+                equal_ensemble_preds = np.argmax(equal_ensemble_probs, axis=1)
+                equal_ensemble_acc = accuracy_score(true_labels, equal_ensemble_preds)
+                equal_ensemble_auc = compute_macro_auc(equal_ensemble_probs, true_labels)
+            else:
+                equal_ensemble_probs = None
+                equal_ensemble_preds = None
+                equal_ensemble_acc = None
+                equal_ensemble_auc = None
             
             # 2. Performance-weighted ensemble (based on individual accuracies)
             acc_values = np.array([individual_accs[model] for model in models])
             # Softmax weights to make them sum to 1 and emphasize differences
             performance_weights = np.exp(acc_values * 10) / np.sum(np.exp(acc_values * 10))
-            weighted_ensemble_probs = np.average(all_probs, axis=0, weights=performance_weights)
-            weighted_ensemble_preds = np.argmax(weighted_ensemble_probs, axis=1)
-            weighted_ensemble_acc = accuracy_score(
-                true_labels, 
-                weighted_ensemble_preds
-            )
-            weighted_ensemble_auc = compute_macro_auc(weighted_ensemble_probs, true_labels)
+            if all_probs is not None:
+                weighted_ensemble_probs = np.average(all_probs, axis=0, weights=performance_weights)
+                weighted_ensemble_preds = np.argmax(weighted_ensemble_probs, axis=1)
+                weighted_ensemble_acc = accuracy_score(true_labels, weighted_ensemble_preds)
+                weighted_ensemble_auc = compute_macro_auc(weighted_ensemble_probs, true_labels)
+            else:
+                weighted_ensemble_probs = None
+                weighted_ensemble_preds = None
+                weighted_ensemble_acc = None
+                weighted_ensemble_auc = None
             
             # 3. Top-2 weighted ensemble (DenseNet + Simple3DCNN only)
             top2_models = ['DenseNet121_3D', 'Simple3DCNN']
@@ -1067,16 +1086,18 @@ class BayesianModelComparison:
                 top2_ensemble_probs = None
                 top2_ensemble_auc = None
             
-            return {
+            result = {
                 'models': models,
                 'individual_accuracies': individual_accs,
                 'model_source_dirs': {m: self.model_source_dirs.get(m, '') for m in models},
-                'ensemble_weights': {
+            }
+            if all_probs is not None:
+                result['ensemble_weights'] = {
                     'equal': equal_weights.tolist(),
                     'performance_weighted': performance_weights.tolist(),
                     'top2_weighted': top2_weights.tolist() if 'top2_weights' in locals() else None
-                },
-                'ensemble_results': {
+                }
+                result['ensemble_results'] = {
                     'equal_weight': {
                         'predictions': equal_ensemble_preds,
                         'probabilities': equal_ensemble_probs,
@@ -1096,7 +1117,7 @@ class BayesianModelComparison:
                         'auc_macro_ovr': top2_ensemble_auc
                     } if top2_ensemble_acc is not None else None
                 }
-            }
+            return result
         
         return {}
     
