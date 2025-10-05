@@ -112,6 +112,10 @@ Examples:
         "--auto-find", action="store_true", default=True,
         help="Automatically find model output directories (default: True)"
     )
+    parser.add_argument(
+        "--classic-dirs", nargs="*",
+        help="Optional: one or more Classic results directories (each containing outercv_fold_* and enhanced_results_summary.json)."
+    )
     
     args = parser.parse_args()
     
@@ -160,7 +164,8 @@ Examples:
         
         results = comparator.run_complete_analysis(
             run_dirs=run_dirs,
-            models=args.models
+            models=args.models,
+            classic_dirs=args.classic_dirs
         )
         
         print(f"\n✅ Analysis complete!")
