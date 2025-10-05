@@ -298,6 +298,22 @@ class BayesianModelComparison:
                         values_by_model[m] = vals_np
         except Exception:
             return {}
+        # Append classic fold metrics (plotting only)
+        try:
+            if getattr(self, 'classic_summaries', None):
+                for cname, folds in self.classic_summaries.items():
+                    arr = []
+                    for f in folds:
+                        if metric == 'acc' and 'accuracy' in f:
+                            arr.append(float(f['accuracy']))
+                        elif metric == 'auc' and 'auc' in f:
+                            arr.append(float(f['auc']))
+                        elif metric == 'mcc' and 'mcc' in f:
+                            arr.append(float(f['mcc']))
+                    if arr:
+                        values_by_model[cname] = np.asarray(arr, dtype=float)
+        except Exception:
+            pass
         return values_by_model
 
     def _plot_box_whisker_with_left_density(self,
@@ -387,9 +403,10 @@ class BayesianModelComparison:
         ax_main.grid(True, axis='y', alpha=0.3)
 
         # Legend on the right with model name, colour, mean and std
-        handles = [mpatches.Patch(facecolor=colors[i], edgecolor='black', alpha=0.7,
-                                  label=f"{models[i]} — μ={means[i]:.3f}, σ={stds[i]:.3f}")
-                   for i in range(len(models))]
+        handles = []
+        for i in range(len(models)):
+            label = f"{models[i]} — μ={means[i]:.3f}, σ={stds[i]:.3f}"
+            handles.append(mpatches.Patch(facecolor=colors[i], edgecolor='black', alpha=0.7, label=label))
         ax_main.legend(handles=handles, title='Models', bbox_to_anchor=(1.02, 1), loc='upper left')
 
         plt.tight_layout()
@@ -415,6 +432,63 @@ class BayesianModelComparison:
             model_dirs[entry.name] = entry
         
         return model_dirs
+
+    def _load_classic_fold_summaries(self, classic_dirs: List[str]) -> Dict[str, List[Dict[str, float]]]:
+        """Load classic Ensemble fold-level metrics (ACC, AUC, MCC) for plotting.
+
+        Returns: { classic_model_name: [ { 'fold': int, 'accuracy': float, 'auc': float, 'mcc': float }, ... ] }
+        """
+        summaries: Dict[str, List[Dict[str, float]]] = {}
+        import json
+        for cdir in classic_dirs:
+            base = Path(cdir)
+            if not base.exists():
+                continue
+            cname = base.name
+            fold_rows: List[Dict[str, float]] = []
+            # Prefer outer_cv_summary.json if present at root for quick fold metrics
+            outer_summary = base / 'outer_cv_summary.json'
+            if outer_summary.exists():
+                try:
+                    with open(outer_summary, 'r') as fh:
+                        data = json.load(fh)
+                    for f in data.get('folds', []):
+                        row = {
+                            'fold': int(f.get('fold', len(fold_rows)+1)),
+                            'accuracy': float(f.get('accuracy', float('nan'))),
+                            'auc': float(f.get('auc', float('nan'))),
+                            'mcc': float(f.get('mcc', float('nan')))
+                        }
+                        fold_rows.append(row)
+                except Exception:
+                    pass
+            # Also scan per-fold directories for enhanced_results_summary.json as a fallback
+            fold_dirs = sorted([d for d in base.glob('outercv_fold_*') if d.is_dir()])
+            for fdir in fold_dirs:
+                try:
+                    summary = fdir / 'enhanced_results_summary.json'
+                    if not summary.exists():
+                        continue
+                    with open(summary, 'r') as fh:
+                        res = json.load(fh)
+                    test = res.get('results', {}).get('Ensemble', {}).get('test', None)
+                    if not isinstance(test, dict):
+                        continue
+                    fold_idx = int(str(fdir.name).split('_')[-1]) if str(fdir.name).split('_')[-1].isdigit() else len(fold_rows)+1
+                    row = {
+                        'fold': fold_idx,
+                        'accuracy': float(test.get('accuracy', float('nan'))),
+                        'auc': float(test.get('auc', float('nan'))),
+                        'mcc': float(test.get('mcc', float('nan')))
+                    }
+                    # Avoid duplicate fold if outer summary already had it
+                    if not any(r.get('fold') == fold_idx for r in fold_rows):
+                        fold_rows.append(row)
+                except Exception:
+                    continue
+            if fold_rows:
+                summaries[cname] = fold_rows
+        return summaries
 
     def _load_classic_results_as_model_data(self, classic_dirs: List[str]) -> List[ModelFoldData]:
         """Ingest Classic results directories and convert to ModelFoldData entries.
@@ -1067,24 +1141,21 @@ class BayesianModelComparison:
                 weighted_ensemble_auc = None
             
             # 3. Top-2 weighted ensemble (DenseNet + Simple3DCNN only)
-            top2_models = ['DenseNet121_3D', 'Simple3DCNN']
-            top2_mask = [model in top2_models for model in models]
-            if sum(top2_mask) >= 2:
-                top2_probs = all_probs[top2_mask]
-                top2_weights = np.array([individual_accs[model] for model in models if model in top2_models])
-                top2_weights = top2_weights / np.sum(top2_weights)
-                top2_ensemble_probs = np.average(top2_probs, axis=0, weights=top2_weights)
-                top2_ensemble_preds = np.argmax(top2_ensemble_probs, axis=1)
-                top2_ensemble_acc = accuracy_score(
-                    true_labels, 
-                    top2_ensemble_preds
-                )
-                top2_ensemble_auc = compute_macro_auc(top2_ensemble_probs, true_labels)
-            else:
-                top2_ensemble_acc = None
-                top2_ensemble_preds = None
-                top2_ensemble_probs = None
-                top2_ensemble_auc = None
+            top2_ensemble_acc = None
+            top2_ensemble_preds = None
+            top2_ensemble_probs = None
+            top2_ensemble_auc = None
+            if all_probs is not None:
+                top2_models = ['DenseNet121_3D', 'Simple3DCNN']
+                top2_mask = [model in top2_models for model in models]
+                if sum(top2_mask) >= 2:
+                    top2_probs = all_probs[top2_mask]
+                    top2_weights = np.array([individual_accs[model] for model in models if model in top2_models])
+                    top2_weights = top2_weights / np.sum(top2_weights)
+                    top2_ensemble_probs = np.average(top2_probs, axis=0, weights=top2_weights)
+                    top2_ensemble_preds = np.argmax(top2_ensemble_probs, axis=1)
+                    top2_ensemble_acc = accuracy_score(true_labels, top2_ensemble_preds)
+                    top2_ensemble_auc = compute_macro_auc(top2_ensemble_probs, true_labels)
             
             result = {
                 'models': models,
@@ -1265,29 +1336,24 @@ class BayesianModelComparison:
         except Exception as e:
             print(f"Warning: failed to draw overlaid normal densities: {e}")
         
-        # Model comparison probabilities
+        # Model comparison probabilities (leave as-is; classic synthetic model is not part of Bayesian comparisons)
         if 'model_comparisons' in results:
             comp_df = results['model_comparisons']
             if not comp_df.empty:
-                # Create heatmap of comparison probabilities
-                models = sorted(set(comp_df['model_a'].tolist() + comp_df['model_b'].tolist()))
-                n_models = len(models)
+                models_heat = sorted(set(comp_df['model_a'].tolist() + comp_df['model_b'].tolist()))
+                n_models = len(models_heat)
                 heatmap = np.zeros((n_models, n_models))
-                
                 for _, row in comp_df.iterrows():
-                    i = models.index(row['model_a'])
-                    j = models.index(row['model_b'])
+                    i = models_heat.index(row['model_a'])
+                    j = models_heat.index(row['model_b'])
                     heatmap[i, j] = row['prob_a_better']
                     heatmap[j, i] = row['prob_b_better']
-                
                 im = ax2.imshow(heatmap, cmap='RdBu_r', vmin=0, vmax=1)
                 ax2.set_xticks(range(n_models))
                 ax2.set_yticks(range(n_models))
-                ax2.set_xticklabels(models, rotation=45)
-                ax2.set_yticklabels(models)
+                ax2.set_xticklabels(models_heat, rotation=45)
+                ax2.set_yticklabels(models_heat)
                 ax2.set_title('Model Comparison Probabilities\n(P(model A > model B))')
-                
-                # Add colorbar
                 plt.colorbar(im, ax=ax2)
         
         plt.tight_layout()
@@ -1341,6 +1407,13 @@ class BayesianModelComparison:
                 pad = 0.05
                 x_min = max(0.0, x_min - pad)
                 x_max = min(1.0, x_max + pad)
+            # Append classic AUC mean per fold if available
+            if getattr(self, 'classic_summaries', None):
+                for cname, folds in self.classic_summaries.items():
+                    vals = [float(f['auc']) for f in folds if 'auc' in f]
+                    if vals:
+                        auc_per_model[cname] = np.array(vals, dtype=float)
+                        models.append(cname)
             plt.figure(figsize=(10,5))
             colors = plt.cm.tab10(np.linspace(0,1,len(models)))
             idx = 0
@@ -1383,6 +1456,13 @@ class BayesianModelComparison:
                     continue
                 arr = (dfm['k'].values / dfm['n'].values).astype(float)
                 acc_per_model[m] = arr
+            # Append classic fold mean accuracies if available
+            if getattr(self, 'classic_summaries', None):
+                for cname, folds in self.classic_summaries.items():
+                    vals = [float(f['accuracy']) for f in folds if 'accuracy' in f]
+                    if vals:
+                        acc_per_model[cname] = np.array(vals, dtype=float)
+                        models.append(cname)
             if not acc_per_model:
                 return
             # Compute Beta modes and sds per model
@@ -1443,6 +1523,15 @@ class BayesianModelComparison:
             models = sorted(df_accuracy['model'].unique().tolist())
             # Build per-fold accuracies per model
             acc_per_model = {m: (df_accuracy[df_accuracy['model']==m]['k'].values / df_accuracy[df_accuracy['model']==m]['n'].values).astype(float) for m in models}
+            # Append classic summaries if available (these will be included in densities but excluded from pairwise grid)
+            classic_models = []
+            if getattr(self, 'classic_summaries', None):
+                for cname, folds in self.classic_summaries.items():
+                    vals = [float(f['accuracy']) for f in folds if 'accuracy' in f]
+                    if vals:
+                        acc_per_model[cname] = np.array(vals, dtype=float)
+                        classic_models.append(cname)
+                        models.append(cname)
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,5))
             colors = plt.cm.tab10(np.linspace(0,1,len(models)))
             # Dynamic x-limits based on fitted Beta per model
@@ -1494,18 +1583,20 @@ class BayesianModelComparison:
                     sb = rng.choice(b, size=b.size, replace=True)
                     diffs[i] = np.mean(sa) - np.mean(sb)
                 return float(np.mean(diffs > 0))
-            prob_matrix = np.zeros((len(models), len(models)))
-            for i, mi in enumerate(models):
-                for j, mj in enumerate(models):
+            # Build pairwise probabilities only for non-classic models
+            base_models = [m for m in models if m not in classic_models]
+            prob_matrix = np.zeros((len(base_models), len(base_models)))
+            for i, mi in enumerate(base_models):
+                for j, mj in enumerate(base_models):
                     if i == j:
                         prob_matrix[i, j] = 0.5
                     else:
                         prob_matrix[i, j] = boot_prob_greater(acc_per_model[mi], acc_per_model[mj])
             im = ax2.imshow(prob_matrix, cmap='RdBu_r', vmin=0, vmax=1)
-            ax2.set_xticks(range(len(models)))
-            ax2.set_yticks(range(len(models)))
-            ax2.set_xticklabels(models, rotation=45)
-            ax2.set_yticklabels(models)
+            ax2.set_xticks(range(len(base_models)))
+            ax2.set_yticks(range(len(base_models)))
+            ax2.set_xticklabels(base_models, rotation=45)
+            ax2.set_yticklabels(base_models)
             ax2.set_title('P(ACC row > ACC column) (bootstrap)')
             plt.colorbar(im, ax=ax2)
             plt.tight_layout()
@@ -1553,6 +1644,15 @@ class BayesianModelComparison:
                     auc_vals.append(roc_auc_score(dmc['y'].values, dmc['score'].values))
                 if len(auc_vals)>0:
                     auc_per_model[m] = np.array(auc_vals)
+            # Optionally append classic models with fold-level AUC only
+            classic_models = []
+            if getattr(self, 'classic_summaries', None):
+                for cname, folds in self.classic_summaries.items():
+                    vals = [float(f['auc']) for f in folds if 'auc' in f]
+                    if vals:
+                        auc_per_model[cname] = np.array(vals, dtype=float)
+                        classic_models.append(cname)
+                        models.append(cname)
             # Left panel densities
             # dynamic x-limits using mode ± 5*sd of most extreme models
             modes = []
@@ -1597,8 +1697,9 @@ class BayesianModelComparison:
             ax1.grid(True, alpha=0.3)
             ax1.legend(bbox_to_anchor=(1.04,1), loc='upper left')
             ax1.set_xlim(x_min, x_max)
-            # Right panel bootstrap pairwise heatmap
-            prob_matrix, model_order = self._bootstrap_pairwise_prob_matrix({m: np.array(auc_per_model[m]) for m in models})
+            # Right panel bootstrap pairwise heatmap (exclude classic synthetic models)
+            base_values = {m: np.array(auc_per_model[m]) for m in models if m not in classic_models}
+            prob_matrix, model_order = self._bootstrap_pairwise_prob_matrix(base_values)
             im = ax2.imshow(prob_matrix, cmap='RdBu_r', vmin=0, vmax=1)
             ax2.set_xticks(range(len(model_order)))
             ax2.set_yticks(range(len(model_order)))
@@ -1631,6 +1732,15 @@ class BayesianModelComparison:
                     except Exception:
                         continue
                 mcc_per_model[m] = np.array(vals)
+            # Append classic models with fold-level MCC
+            classic_models = []
+            if getattr(self, 'classic_summaries', None):
+                for cname, folds in self.classic_summaries.items():
+                    vals = [float(f['mcc']) for f in folds if 'mcc' in f]
+                    if vals:
+                        mcc_per_model[cname] = np.array(vals, dtype=float)
+                        classic_models.append(cname)
+                        models.append(cname)
             # Left panel densities
             # Compute modes/sds globally to determine x-range
             modes_01 = []
@@ -1679,8 +1789,9 @@ class BayesianModelComparison:
             ax1.set_title('MCC distributions across folds — Beta fit via transform')
             ax1.grid(True, alpha=0.3)
             ax1.legend(bbox_to_anchor=(1.04,1), loc='upper left')
-            # Right panel bootstrap heatmap
-            prob_matrix, model_order = self._bootstrap_pairwise_prob_matrix(mcc_per_model)
+            # Right panel bootstrap heatmap (exclude classic synthetic models)
+            base_values = {m: np.array(mcc_per_model[m]) for m in models if m not in classic_models}
+            prob_matrix, model_order = self._bootstrap_pairwise_prob_matrix(base_values)
             im = ax2.imshow(prob_matrix, cmap='RdBu_r', vmin=0, vmax=1)
             ax2.set_xticks(range(len(model_order)))
             ax2.set_yticks(range(len(model_order)))
@@ -1712,6 +1823,13 @@ class BayesianModelComparison:
                         mcc_per_model[m].append(float(mcc))
                     except Exception:
                         continue
+            # Append classic MCC fold values if available
+            if getattr(self, 'classic_summaries', None):
+                for cname, folds in self.classic_summaries.items():
+                    vals = [float(f['mcc']) for f in folds if 'mcc' in f]
+                    if vals:
+                        mcc_per_model[cname] = np.array(vals, dtype=float)
+                        models.append(cname)
             plt.figure(figsize=(8,5))
             colors = plt.cm.tab10(np.linspace(0,1,len(models)))
             from scipy.stats import norm
@@ -2255,6 +2373,12 @@ class BayesianModelComparison:
             models = sorted(df_skill['model'].unique().tolist())
             classes = sorted(df_auc['class'].unique().tolist())
             class_names = [self.class_labels[c] if c < len(self.class_labels) else f"Class {c}" for c in classes]
+            # Optionally append classic model(s) using fold summary metrics only (no per-class breakdown available)
+            classic_models = []
+            if getattr(self, 'classic_summaries', None):
+                for cname in self.classic_summaries.keys():
+                    classic_models.append(cname)
+            # ACC (one-vs-rest) for deep models
             # ACC (one-vs-rest): accuracy of detecting class c vs others
             acc_by_model_class = {m: [] for m in models}
             for m in models:
@@ -2266,6 +2390,13 @@ class BayesianModelComparison:
                     y_true = (dfs['true_label'].values == c).astype(int)
                     y_pred = (dfs['predicted_label'].values == c).astype(int)
                     acc_by_model_class[m].append(accuracy_score(y_true, y_pred))
+            # Append classic models with overall ACC only: replicate mean across classes as dotted markers
+            for cname in classic_models:
+                folds = self.classic_summaries.get(cname, [])
+                acc_vals = [float(f['accuracy']) for f in folds if 'accuracy' in f]
+                mean_acc = float(np.mean(acc_vals)) if acc_vals else np.nan
+                acc_by_model_class[cname] = [mean_acc for _ in classes]
+                models.append(cname)
             # Plot combined ACC
             plt.figure(figsize=(10,5))
             x = np.arange(len(models))
@@ -2302,12 +2433,18 @@ class BayesianModelComparison:
             # AUC (one-vs-rest): from df_auc
             auc_by_model_class = {m: [] for m in models}
             for m in models:
-                for c in classes:
-                    dmc = df_auc[(df_auc['model']==m) & (df_auc['class']==c)]
-                    if dmc.empty:
-                        auc_by_model_class[m].append(np.nan)
-                        continue
-                    auc_by_model_class[m].append(roc_auc_score(dmc['y'].values, dmc['score'].values))
+                if m in classic_models:
+                    folds = self.classic_summaries.get(m, [])
+                    auc_vals = [float(f['auc']) for f in folds if 'auc' in f]
+                    mean_auc = float(np.mean(auc_vals)) if auc_vals else np.nan
+                    auc_by_model_class[m] = [mean_auc for _ in classes]
+                else:
+                    for c in classes:
+                        dmc = df_auc[(df_auc['model']==m) & (df_auc['class']==c)]
+                        if dmc.empty:
+                            auc_by_model_class[m].append(np.nan)
+                            continue
+                        auc_by_model_class[m].append(roc_auc_score(dmc['y'].values, dmc['score'].values))
             plt.figure(figsize=(10,5))
             x = np.arange(len(models))
             means = np.array([np.nanmean(auc_by_model_class[m]) for m in models])
@@ -2433,10 +2570,10 @@ class BayesianModelComparison:
             print("No model data found!")
             return BayesianResults({}, {}, {}, {}, {})
         
-        # If classic results provided, ingest and append as synthetic model(s)
+        # If classic results provided, ingest fold summaries for plotting only
+        self.classic_summaries = None
         if classic_dirs:
-            classic_model_data = self._load_classic_results_as_model_data(classic_dirs)
-            model_data.extend(classic_model_data)
+            self.classic_summaries = self._load_classic_fold_summaries(classic_dirs)
         # Prepare data
         data_dict = self.prepare_data_for_analysis(model_data)
         
