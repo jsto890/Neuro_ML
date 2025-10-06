@@ -433,6 +433,31 @@ class BayesianModelComparison:
         
         return model_dirs
 
+    def _normalize_loaded_accuracy_results(self, acc: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize accuracy_results loaded from JSON back to runtime-friendly types."""
+        try:
+            out = dict(acc)
+            if 'accuracy_samples' in out and isinstance(out['accuracy_samples'], list):
+                out['accuracy_samples'] = np.asarray(out['accuracy_samples'])
+            if 'accuracy_means' in out and isinstance(out['accuracy_means'], list):
+                out['accuracy_means'] = np.asarray(out['accuracy_means'])
+            if 'accuracy_std' in out and isinstance(out['accuracy_std'], list):
+                out['accuracy_std'] = np.asarray(out['accuracy_std'])
+            if 'accuracy_ci_lower' in out and isinstance(out['accuracy_ci_lower'], list):
+                out['accuracy_ci_lower'] = np.asarray(out['accuracy_ci_lower'])
+            if 'accuracy_ci_upper' in out and isinstance(out['accuracy_ci_upper'], list):
+                out['accuracy_ci_upper'] = np.asarray(out['accuracy_ci_upper'])
+            if 'models' in out and isinstance(out['models'], list):
+                out['models'] = np.asarray(out['models'])
+            if 'model_comparisons' in out and isinstance(out['model_comparisons'], list):
+                try:
+                    out['model_comparisons'] = pd.DataFrame(out['model_comparisons'])
+                except Exception:
+                    out['model_comparisons'] = pd.DataFrame()
+            return out
+        except Exception:
+            return acc
+
     def _load_classic_fold_summaries(self, classic_dirs: List[str]) -> Dict[str, List[Dict[str, float]]]:
         """Load classic Ensemble fold-level metrics (ACC, AUC, MCC) for plotting.
 
@@ -2377,9 +2402,8 @@ class BayesianModelComparison:
             classes = sorted(df_auc['class'].unique().tolist())
             class_names = [self.class_labels[c] if c < len(self.class_labels) else f"Class {c}" for c in classes]
             # Optionally append classic model(s) using fold summary metrics only (no per-class breakdown available)
+            # Remove Classic from OVR plots per request
             classic_models = []
-            if getattr(self, 'classic_summaries', None):
-                classic_models = ['ClassicEnsemble'] if any(self.classic_summaries.values()) else []
             # ACC (one-vs-rest) for deep models
             # ACC (one-vs-rest): accuracy of detecting class c vs others
             acc_by_model_class = {m: [] for m in models}
@@ -2424,18 +2448,42 @@ class BayesianModelComparison:
                 ymax = min(1.0, ymax + pad)
             ax.set_ylim(ymin, ymax)
             ax.grid(True, axis='y', alpha=0.3)
-            # Mini boxplots for CN/AD/PD and Mean
-            # Build data per model in order: [CN, AD, PD, Mean]
-            box_data = []
+            # Mini boxplots for CN/AD/PD and Mean using actual per-site values per class
+            # For each model and class, build per-site ACC values
+            per_site_acc = {}
             for m in models:
-                vals = [acc_by_model_class[m][ci] for ci,_ in enumerate(classes)]
-                vals.append(float(np.nanmean(vals)))
-                box_data.append(vals)
-            # inset axes for each model
+                per_site_acc[m] = []
+                dfs = df_skill[df_skill['model']==m]
+                for c in classes:
+                    vals_class = []
+                    for s in sorted(df_skill['site'].unique().tolist()):
+                        dms = dfs[dfs['site']==s]
+                        if dms.empty:
+                            continue
+                        y_true = (dms['true_label'].values == c).astype(int)
+                        y_pred = (dms['predicted_label'].values == c).astype(int)
+                        if y_true.size:
+                            vals_class.append(accuracy_score(y_true, y_pred))
+                    per_site_acc[m].append(vals_class)
+                # Mean across classes per site (aligned by index where possible)
+                max_len = max((len(v) for v in per_site_acc[m] if isinstance(v, list)), default=0)
+                mean_per_site = []
+                for idx in range(max_len):
+                    vals_at_idx = []
+                    for v in per_site_acc[m]:
+                        if idx < len(v):
+                            vals_at_idx.append(v[idx])
+                    if vals_at_idx:
+                        mean_per_site.append(float(np.mean(vals_at_idx)))
+                per_site_acc[m].append(mean_per_site)
+            # inset boxplots
             for i, m in enumerate(models):
                 inset = ax.inset_axes([0.06 + i*(0.88/max(1,len(models))), 0.02, 0.88/max(1,len(models)), 0.18])
-                b = inset.boxplot([ [acc_by_model_class[m][ci] for _ in [0,1]] for ci in range(len(classes)) ] + [[np.nanmean([acc_by_model_class[m][ci] for ci in range(len(classes))]) for _ in [0,1]]],
-                                  vert=True, patch_artist=True, widths=0.6)
+                data = per_site_acc[m]
+                # ensure we have len(classes)+1 lists
+                while len(data) < len(classes)+1:
+                    data.append([])
+                b = inset.boxplot(data, vert=True, patch_artist=True, widths=0.6)
                 for j, patch in enumerate(b['boxes']):
                     patch.set_facecolor(colors[j] if j < len(classes) else 'gray')
                     patch.set_alpha(0.5)
@@ -2485,11 +2533,42 @@ class BayesianModelComparison:
                 ymax = min(1.0, ymax + pad)
             ax.set_ylim(ymin, ymax)
             ax.grid(True, axis='y', alpha=0.3)
-            # Mini boxplots for CN/AD/PD and Mean
+            # Mini boxplots for CN/AD/PD and Mean using per-site class AUCs
+            per_site_auc = {}
+            for m in models:
+                per_site_auc[m] = []
+                dfm = df_auc[df_auc['model']==m]
+                for c in classes:
+                    vals_class = []
+                    for s in sorted(df_auc['site'].unique().tolist()):
+                        dms = dfm[(dfm['class']==c) & (dfm['site']==s)]
+                        if dms.empty:
+                            continue
+                        y = dms['y'].values
+                        score = dms['score'].values
+                        if len(np.unique(y)) < 2:
+                            continue
+                        try:
+                            vals_class.append(roc_auc_score(y, score))
+                        except Exception:
+                            pass
+                    per_site_auc[m].append(vals_class)
+                max_len = max((len(v) for v in per_site_auc[m] if isinstance(v, list)), default=0)
+                mean_per_site = []
+                for idx in range(max_len):
+                    vals_at_idx = []
+                    for v in per_site_auc[m]:
+                        if idx < len(v):
+                            vals_at_idx.append(v[idx])
+                    if vals_at_idx:
+                        mean_per_site.append(float(np.mean(vals_at_idx)))
+                per_site_auc[m].append(mean_per_site)
             for i, m in enumerate(models):
                 inset = ax.inset_axes([0.06 + i*(0.88/max(1,len(models))), 0.02, 0.88/max(1,len(models)), 0.18])
-                b = inset.boxplot([ [auc_by_model_class[m][ci] for _ in [0,1]] for ci in range(len(classes)) ] + [[np.nanmean([auc_by_model_class[m][ci] for ci in range(len(classes))]) for _ in [0,1]]],
-                                  vert=True, patch_artist=True, widths=0.6)
+                data = per_site_auc[m]
+                while len(data) < len(classes)+1:
+                    data.append([])
+                b = inset.boxplot(data, vert=True, patch_artist=True, widths=0.6)
                 for j, patch in enumerate(b['boxes']):
                     patch.set_facecolor(colors[j] if j < len(classes) else 'gray')
                     patch.set_alpha(0.5)
@@ -2613,7 +2692,7 @@ class BayesianModelComparison:
                 # Load previously saved results and bypass expensive steps
                 with open(prev / 'results' / 'accuracy_results.json','r') as f:
                     import json
-                    accuracy_results = json.load(f)
+                    accuracy_results = self._normalize_loaded_accuracy_results(json.load(f))
                 with open(prev / 'results' / 'skill_results.json','r') as f:
                     skill_results = json.load(f)
             except Exception:
