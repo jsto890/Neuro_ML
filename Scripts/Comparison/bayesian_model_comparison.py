@@ -2429,12 +2429,12 @@ class BayesianModelComparison:
             fig, ax = plt.subplots(figsize=(12,6))
             x = np.arange(len(models))
             means = np.array([np.nanmean(acc_by_model_class[m]) for m in models])
-            ax.scatter(x, means, c='black', marker='D', s=64, zorder=3, label='Mean ACC')
+            ax.scatter(x, means, c='black', marker='D', s=64, zorder=3)
             colors = plt.cm.tab10(np.linspace(0,1,len(classes)))
             # per-class points
             for ci, c in enumerate(classes):
                 vals = [acc_by_model_class[m][ci] for m in models]
-                ax.plot(x, vals, marker='o', linestyle='-', color=colors[ci], alpha=0.8, label=class_names[ci] if ci==0 else None)
+                ax.plot(x, vals, marker='o', linestyle='-', color=colors[ci], alpha=0.8)
             ax.set_ylabel('Accuracy (one-vs-rest)')
             ax.set_xlabel('Model')
             ax.set_title('One-vs-rest ACC by model')
@@ -2448,51 +2448,19 @@ class BayesianModelComparison:
                 ymax = min(1.0, ymax + pad)
             ax.set_ylim(ymin, ymax)
             ax.grid(True, axis='y', alpha=0.3)
-            # Mini boxplots for CN/AD/PD and Mean using actual per-site values per class
-            # For each model and class, build per-site ACC values
-            per_site_acc = {}
-            for m in models:
-                per_site_acc[m] = []
-                dfs = df_skill[df_skill['model']==m]
-                for c in classes:
-                    vals_class = []
-                    for s in sorted(df_skill['site'].unique().tolist()):
-                        dms = dfs[dfs['site']==s]
-                        if dms.empty:
-                            continue
-                        y_true = (dms['true_label'].values == c).astype(int)
-                        y_pred = (dms['predicted_label'].values == c).astype(int)
-                        if y_true.size:
-                            vals_class.append(accuracy_score(y_true, y_pred))
-                    per_site_acc[m].append(vals_class)
-                # Mean across classes per site (aligned by index where possible)
-                max_len = max((len(v) for v in per_site_acc[m] if isinstance(v, list)), default=0)
-                mean_per_site = []
-                for idx in range(max_len):
-                    vals_at_idx = []
-                    for v in per_site_acc[m]:
-                        if idx < len(v):
-                            vals_at_idx.append(v[idx])
-                    if vals_at_idx:
-                        mean_per_site.append(float(np.mean(vals_at_idx)))
-                per_site_acc[m].append(mean_per_site)
-            # inset boxplots
-            for i, m in enumerate(models):
-                inset = ax.inset_axes([0.06 + i*(0.88/max(1,len(models))), 0.02, 0.88/max(1,len(models)), 0.18])
-                data = per_site_acc[m]
-                # ensure we have len(classes)+1 lists
-                while len(data) < len(classes)+1:
-                    data.append([])
-                b = inset.boxplot(data, vert=True, patch_artist=True, widths=0.6)
-                for j, patch in enumerate(b['boxes']):
-                    patch.set_facecolor(colors[j] if j < len(classes) else 'gray')
-                    patch.set_alpha(0.5)
-                inset.set_xticks([])
-                inset.set_yticks([])
-                inset.set_ylim(ymin, ymax)
-                for spine in ['top','right','left','bottom']:
-                    inset.spines[spine].set_visible(False)
-            ax.legend(title='Class', bbox_to_anchor=(1.04,1), loc='upper left')
+            # (Points only; box insets removed per request)
+            # Explicit legend: Mean, CN, AD, PD
+            try:
+                from matplotlib.lines import Line2D
+                handles = [
+                    Line2D([], [], color='black', marker='D', linestyle='None', label='Mean'),
+                    Line2D([], [], color='black', marker='o', linestyle='-', label='CN'),
+                    Line2D([], [], color='black', marker='s', linestyle='-', label='AD'),
+                    Line2D([], [], color='black', marker='^', linestyle='-', label='PD')
+                ]
+                ax.legend(handles=handles, title='Legend', bbox_to_anchor=(1.04,1), loc='upper left')
+            except Exception:
+                pass
             plt.tight_layout()
             plt.savefig(self.plots_dir / 'ovr_acc_combined.png', dpi=300, bbox_inches='tight')
             plt.close()
@@ -2515,11 +2483,11 @@ class BayesianModelComparison:
             fig, ax = plt.subplots(figsize=(12,6))
             x = np.arange(len(models))
             means = np.array([np.nanmean(auc_by_model_class[m]) for m in models])
-            ax.scatter(x, means, c='black', marker='D', s=64, zorder=3, label='Mean AUC')
+            ax.scatter(x, means, c='black', marker='D', s=64, zorder=3)
             colors = plt.cm.tab10(np.linspace(0,1,len(classes)))
             for ci, c in enumerate(classes):
                 vals = [auc_by_model_class[m][ci] for m in models]
-                ax.plot(x, vals, marker='s', linestyle='--', color=colors[ci], alpha=0.8, label=class_names[ci] if ci==0 else None)
+                ax.plot(x, vals, marker='s', linestyle='--', color=colors[ci], alpha=0.8)
             ax.set_ylabel('AUC (one-vs-rest)')
             ax.set_xlabel('Model')
             ax.set_title('One-vs-rest AUC by model')
@@ -2533,51 +2501,19 @@ class BayesianModelComparison:
                 ymax = min(1.0, ymax + pad)
             ax.set_ylim(ymin, ymax)
             ax.grid(True, axis='y', alpha=0.3)
-            # Mini boxplots for CN/AD/PD and Mean using per-site class AUCs
-            per_site_auc = {}
-            for m in models:
-                per_site_auc[m] = []
-                dfm = df_auc[df_auc['model']==m]
-                for c in classes:
-                    vals_class = []
-                    for s in sorted(df_auc['site'].unique().tolist()):
-                        dms = dfm[(dfm['class']==c) & (dfm['site']==s)]
-                        if dms.empty:
-                            continue
-                        y = dms['y'].values
-                        score = dms['score'].values
-                        if len(np.unique(y)) < 2:
-                            continue
-                        try:
-                            vals_class.append(roc_auc_score(y, score))
-                        except Exception:
-                            pass
-                    per_site_auc[m].append(vals_class)
-                max_len = max((len(v) for v in per_site_auc[m] if isinstance(v, list)), default=0)
-                mean_per_site = []
-                for idx in range(max_len):
-                    vals_at_idx = []
-                    for v in per_site_auc[m]:
-                        if idx < len(v):
-                            vals_at_idx.append(v[idx])
-                    if vals_at_idx:
-                        mean_per_site.append(float(np.mean(vals_at_idx)))
-                per_site_auc[m].append(mean_per_site)
-            for i, m in enumerate(models):
-                inset = ax.inset_axes([0.06 + i*(0.88/max(1,len(models))), 0.02, 0.88/max(1,len(models)), 0.18])
-                data = per_site_auc[m]
-                while len(data) < len(classes)+1:
-                    data.append([])
-                b = inset.boxplot(data, vert=True, patch_artist=True, widths=0.6)
-                for j, patch in enumerate(b['boxes']):
-                    patch.set_facecolor(colors[j] if j < len(classes) else 'gray')
-                    patch.set_alpha(0.5)
-                inset.set_xticks([])
-                inset.set_yticks([])
-                inset.set_ylim(ymin, ymax)
-                for spine in ['top','right','left','bottom']:
-                    inset.spines[spine].set_visible(False)
-            ax.legend(title='Class', bbox_to_anchor=(1.04,1), loc='upper left')
+            # (Points only; box insets removed per request)
+            # Explicit legend: Mean, CN, AD, PD
+            try:
+                from matplotlib.lines import Line2D
+                handles = [
+                    Line2D([], [], color='black', marker='D', linestyle='None', label='Mean'),
+                    Line2D([], [], color='black', marker='o', linestyle='-', label='CN'),
+                    Line2D([], [], color='black', marker='s', linestyle='-', label='AD'),
+                    Line2D([], [], color='black', marker='^', linestyle='-', label='PD')
+                ]
+                ax.legend(handles=handles, title='Legend', bbox_to_anchor=(1.04,1), loc='upper left')
+            except Exception:
+                pass
             plt.tight_layout()
             plt.savefig(self.plots_dir / 'ovr_auc_combined.png', dpi=300, bbox_inches='tight')
             plt.close()
