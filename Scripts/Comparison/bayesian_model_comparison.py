@@ -2115,27 +2115,32 @@ class BayesianModelComparison:
                     spec_boot[c][m] = spec[~np.isnan(spec)]
             # Plot: rows=Sensitivity/Specificity, cols=classes
             fig, axes = plt.subplots(2, len(classes), figsize=(4*len(classes), 8), sharey='row')
+            positions = np.arange(1, len(models) + 1)
             if len(classes) == 1:
                 axes = np.array([axes]).reshape(2,1)
             for ci, c in enumerate(classes):
                 # Sensitivity
                 ax1 = axes[0, ci]
                 data_s = [sens_boot[c].get(m, np.array([])) for m in models]
-                bp1 = ax1.boxplot(data_s, patch_artist=True)
+                bp1 = ax1.boxplot(data_s, positions=positions, widths=0.6, patch_artist=True)
                 for i, box in enumerate(bp1['boxes']):
                     box.set_facecolor(colors[i]); box.set_alpha(0.5)
                 ax1.set_title(f"{class_names[ci]} — Sensitivity")
-                ax1.set_xticks(range(1, len(models)+1)); ax1.set_xticklabels(models, rotation=20)
-                ax1.set_ylim(0, 1); ax1.grid(True, axis='y', alpha=0.3)
+                ax1.set_xticks(positions); ax1.set_xticklabels(models, rotation=20)
+                ax1.set_xlim(0.5, len(models) + 0.5)
+                ax1.set_ylim(0.6, 1)
+                ax1.grid(True, axis='y', alpha=0.3)
                 # Specificity
                 ax2 = axes[1, ci]
                 data_p = [spec_boot[c].get(m, np.array([])) for m in models]
-                bp2 = ax2.boxplot(data_p, patch_artist=True)
+                bp2 = ax2.boxplot(data_p, positions=positions, widths=0.6, patch_artist=True)
                 for i, box in enumerate(bp2['boxes']):
                     box.set_facecolor(colors[i]); box.set_alpha(0.5)
                 ax2.set_title(f"{class_names[ci]} — Specificity")
-                ax2.set_xticks(range(1, len(models)+1)); ax2.set_xticklabels(models, rotation=20)
-                ax2.set_ylim(0, 1); ax2.grid(True, axis='y', alpha=0.3)
+                ax2.set_xticks(positions); ax2.set_xticklabels(models, rotation=20)
+                ax2.set_xlim(0.5, len(models) + 0.5)
+                ax2.set_ylim(0.6, 1)
+                ax2.grid(True, axis='y', alpha=0.3)
             axes[0,0].set_ylabel('Sensitivity')
             axes[1,0].set_ylabel('Specificity')
             plt.tight_layout()
