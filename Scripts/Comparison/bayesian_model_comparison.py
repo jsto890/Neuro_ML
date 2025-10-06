@@ -2008,6 +2008,142 @@ class BayesianModelComparison:
         plt.savefig(self.plots_dir / 'model_comparison_matrix.png', dpi=300, bbox_inches='tight')
         plt.close()
 
+    def _compute_binary_counts(self, y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
+        tp = float(np.sum((y_true == 1) & (y_pred == 1)))
+        tn = float(np.sum((y_true == 0) & (y_pred == 0)))
+        fp = float(np.sum((y_true == 0) & (y_pred == 1)))
+        fn = float(np.sum((y_true == 1) & (y_pred == 0)))
+        return {'tp': tp, 'tn': tn, 'fp': fp, 'fn': fn}
+
+    def _compute_metrics_from_counts(self, counts: Dict[str, float]) -> Dict[str, float]:
+        tp, tn, fp, fn = counts['tp'], counts['tn'], counts['fp'], counts['fn']
+        sens = tp / (tp + fn) if (tp + fn) > 0 else np.nan
+        spec = tn / (tn + fp) if (tn + fp) > 0 else np.nan
+        ppv = tp / (tp + fp) if (tp + fp) > 0 else np.nan
+        npv = tn / (tn + fn) if (tn + fn) > 0 else np.nan
+        return {'sensitivity': sens, 'specificity': spec, 'ppv': ppv, 'npv': npv}
+
+    def _bootstrap_metric_arrays(self, y_true: np.ndarray, y_pred: np.ndarray, B: int = 2000, rng: Optional[np.random.Generator] = None) -> Dict[str, np.ndarray]:
+        if rng is None:
+            rng = np.random.default_rng(self.random_seed)
+        n = y_true.shape[0]
+        if n == 0:
+            return {'sensitivity': np.array([]), 'specificity': np.array([]), 'ppv': np.array([]), 'npv': np.array([])}
+        sens_arr = np.empty(B)
+        spec_arr = np.empty(B)
+        ppv_arr = np.empty(B)
+        npv_arr = np.empty(B)
+        for i in range(B):
+            idx = rng.integers(0, n, n)
+            cts = self._compute_binary_counts(y_true[idx], y_pred[idx])
+            mets = self._compute_metrics_from_counts(cts)
+            sens_arr[i] = mets['sensitivity']
+            spec_arr[i] = mets['specificity']
+            ppv_arr[i] = mets['ppv']
+            npv_arr[i] = mets['npv']
+        return {'sensitivity': sens_arr, 'specificity': spec_arr, 'ppv': ppv_arr, 'npv': npv_arr}
+
+    def _export_per_class_metrics_table(self, df_skill: pd.DataFrame, n_boot: int = 2000) -> None:
+        try:
+            models = sorted(df_skill['model'].unique().tolist())
+            classes = sorted(df_skill['true_label'].unique().tolist())
+            class_names = [self.class_labels[c] if c < len(self.class_labels) else f"Class {c}" for c in classes]
+            rows = []
+            rng = np.random.default_rng(self.random_seed)
+            for m in models:
+                dfm = df_skill[df_skill['model'] == m]
+                per_class_boot: Dict[int, Dict[str, np.ndarray]] = {}
+                for ci, c in enumerate(classes):
+                    y_true = (dfm['true_label'].values == c).astype(int)
+                    y_pred = (dfm['predicted_label'].values == c).astype(int)
+                    boots = self._bootstrap_metric_arrays(y_true, y_pred, B=n_boot, rng=rng)
+                    per_class_boot[c] = boots
+                    for metric_name, arr in boots.items():
+                        arr = arr[~np.isnan(arr)]
+                        if arr.size == 0:
+                            mean_v = np.nan; lo = np.nan; hi = np.nan
+                        else:
+                            mean_v = float(np.mean(arr))
+                            lo = float(np.percentile(arr, 2.5))
+                            hi = float(np.percentile(arr, 97.5))
+                        rows.append({'model': m, 'class': class_names[ci], 'metric': metric_name, 'mean': mean_v, 'ci_lower': lo, 'ci_upper': hi})
+                # Macro averages by bootstrap (mean across classes per draw)
+                for metric_name in ['sensitivity', 'specificity', 'ppv', 'npv']:
+                    valid_arrays = [per_class_boot[c][metric_name] for c in classes if c in per_class_boot]
+                    if not valid_arrays:
+                        continue
+                    mat = np.vstack(valid_arrays)
+                    macro_arr = np.nanmean(mat, axis=0)
+                    macro_arr = macro_arr[~np.isnan(macro_arr)]
+                    mean_v = float(np.mean(macro_arr)) if macro_arr.size else np.nan
+                    lo = float(np.percentile(macro_arr, 2.5)) if macro_arr.size else np.nan
+                    hi = float(np.percentile(macro_arr, 97.5)) if macro_arr.size else np.nan
+                    rows.append({'model': m, 'class': 'Macro', 'metric': metric_name, 'mean': mean_v, 'ci_lower': lo, 'ci_upper': hi})
+                # Micro averages (pooled counts across classes)
+                tp = tn = fp = fn = 0.0
+                for c in classes:
+                    y_true = (dfm['true_label'].values == c).astype(int)
+                    y_pred = (dfm['predicted_label'].values == c).astype(int)
+                    counts = self._compute_binary_counts(y_true, y_pred)
+                    tp += counts['tp']; tn += counts['tn']; fp += counts['fp']; fn += counts['fn']
+                mic = self._compute_metrics_from_counts({'tp': tp, 'tn': tn, 'fp': fp, 'fn': fn})
+                for metric_name, val in mic.items():
+                    rows.append({'model': m, 'class': 'Micro', 'metric': metric_name, 'mean': float(val), 'ci_lower': np.nan, 'ci_upper': np.nan})
+            out_df = pd.DataFrame(rows)
+            out_df.to_csv(self.results_dir / 'per_class_metrics.csv', index=False)
+        except Exception as e:
+            print(f"Warning: failed per-class metrics table: {e}")
+
+    def _plot_per_class_sens_spec_box(self, df_skill: pd.DataFrame, n_boot: int = 1000) -> None:
+        try:
+            models = sorted(df_skill['model'].unique().tolist())
+            classes = sorted(df_skill['true_label'].unique().tolist())
+            class_names = [self.class_labels[c] if c < len(self.class_labels) else f"Class {c}" for c in classes]
+            rng = np.random.default_rng(self.random_seed)
+            colors = plt.cm.tab10(np.linspace(0,1,len(models)))
+            # Prepare bootstrap arrays
+            sens_boot: Dict[int, Dict[str, np.ndarray]] = {c: {} for c in classes}
+            spec_boot: Dict[int, Dict[str, np.ndarray]] = {c: {} for c in classes}
+            for m in models:
+                dfm = df_skill[df_skill['model'] == m]
+                for c in classes:
+                    y_true = (dfm['true_label'].values == c).astype(int)
+                    y_pred = (dfm['predicted_label'].values == c).astype(int)
+                    boots = self._bootstrap_metric_arrays(y_true, y_pred, B=n_boot, rng=rng)
+                    sens = boots['sensitivity']; spec = boots['specificity']
+                    sens_boot[c][m] = sens[~np.isnan(sens)]
+                    spec_boot[c][m] = spec[~np.isnan(spec)]
+            # Plot: rows=Sensitivity/Specificity, cols=classes
+            fig, axes = plt.subplots(2, len(classes), figsize=(4*len(classes), 8), sharey='row')
+            if len(classes) == 1:
+                axes = np.array([axes]).reshape(2,1)
+            for ci, c in enumerate(classes):
+                # Sensitivity
+                ax1 = axes[0, ci]
+                data_s = [sens_boot[c].get(m, np.array([])) for m in models]
+                bp1 = ax1.boxplot(data_s, patch_artist=True)
+                for i, box in enumerate(bp1['boxes']):
+                    box.set_facecolor(colors[i]); box.set_alpha(0.5)
+                ax1.set_title(f"{class_names[ci]} — Sensitivity")
+                ax1.set_xticks(range(1, len(models)+1)); ax1.set_xticklabels(models, rotation=20)
+                ax1.set_ylim(0, 1); ax1.grid(True, axis='y', alpha=0.3)
+                # Specificity
+                ax2 = axes[1, ci]
+                data_p = [spec_boot[c].get(m, np.array([])) for m in models]
+                bp2 = ax2.boxplot(data_p, patch_artist=True)
+                for i, box in enumerate(bp2['boxes']):
+                    box.set_facecolor(colors[i]); box.set_alpha(0.5)
+                ax2.set_title(f"{class_names[ci]} — Specificity")
+                ax2.set_xticks(range(1, len(models)+1)); ax2.set_xticklabels(models, rotation=20)
+                ax2.set_ylim(0, 1); ax2.grid(True, axis='y', alpha=0.3)
+            axes[0,0].set_ylabel('Sensitivity')
+            axes[1,0].set_ylabel('Specificity')
+            plt.tight_layout()
+            plt.savefig(self.plots_dir / 'per_class_sens_spec_box.png', dpi=300, bbox_inches='tight')
+            plt.close()
+        except Exception as e:
+            print(f"Warning: failed per-class sens/spec box plot: {e}")
+
     def _plot_confusion_matrices(self, df_skill: pd.DataFrame):
         """Plot normalized confusion matrices per model and the equal/performance-weighted ensembles if available."""
         try:
