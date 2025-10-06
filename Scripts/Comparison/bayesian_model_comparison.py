@@ -338,7 +338,8 @@ class BayesianModelComparison:
         colors = plt.cm.tab10(np.linspace(0, 1, len(models)))
 
         # Figure with left density panel and right boxplot panel sharing Y
-        fig = plt.figure(figsize=(12, 6))
+        # Make width scale with number of models to avoid label overlap
+        fig = plt.figure(figsize=(max(12, 6 + 0.6*len(models)), 6))
         gs = GridSpec(1, 2, width_ratios=[1.2, 4.5], wspace=0.05)
         ax_left = fig.add_subplot(gs[0, 0])
         ax_main = fig.add_subplot(gs[0, 1], sharey=ax_left)
@@ -398,7 +399,7 @@ class BayesianModelComparison:
         ax_main.set_xlim(0.5, len(models) + 0.5)
         ax_main.set_ylim(y_min, y_max)
         ax_main.set_xticks(positions)
-        ax_main.set_xticklabels(models, rotation=20)
+        ax_main.set_xticklabels(models, rotation=35, ha='right')
         ax_main.set_ylabel(y_label)
         ax_main.grid(True, axis='y', alpha=0.3)
 
@@ -1999,7 +2000,7 @@ class BayesianModelComparison:
             matrix[i, j] = row['prob_a_better']
             matrix[j, i] = row['prob_b_better']
         
-        plt.figure(figsize=(10, 8))
+        plt.figure(figsize=(max(10, 6 + 0.5*len(models)), 8))
         sns.heatmap(matrix, annot=True, fmt='.3f', cmap='RdBu_r', 
                    xticklabels=models, yticklabels=models, 
                    center=0.5, vmin=0, vmax=1)
@@ -2115,6 +2116,11 @@ class BayesianModelComparison:
                     spec_boot[c][m] = spec[~np.isnan(spec)]
             # Plot: rows=Sensitivity/Specificity, cols=classes
             fig, axes = plt.subplots(2, len(classes), figsize=(4*len(classes), 8), sharey='row')
+            # Expand figure width if many models to avoid x-label overlap
+            try:
+                fig.set_size_inches(max(4*len(classes), 6 + 0.6*len(models)), 8)
+            except Exception:
+                pass
             positions = np.arange(1, len(models) + 1)
             if len(classes) == 1:
                 axes = np.array([axes]).reshape(2,1)
@@ -2126,7 +2132,7 @@ class BayesianModelComparison:
                 for i, box in enumerate(bp1['boxes']):
                     box.set_facecolor(colors[i]); box.set_alpha(0.5)
                 ax1.set_title(f"{class_names[ci]} — Sensitivity")
-                ax1.set_xticks(positions); ax1.set_xticklabels(models, rotation=20)
+                ax1.set_xticks(positions); ax1.set_xticklabels(models, rotation=35, ha='right')
                 ax1.set_xlim(0.5, len(models) + 0.5)
                 ax1.set_ylim(0.6, 1)
                 ax1.grid(True, axis='y', alpha=0.3)
@@ -2137,7 +2143,7 @@ class BayesianModelComparison:
                 for i, box in enumerate(bp2['boxes']):
                     box.set_facecolor(colors[i]); box.set_alpha(0.5)
                 ax2.set_title(f"{class_names[ci]} — Specificity")
-                ax2.set_xticks(positions); ax2.set_xticklabels(models, rotation=20)
+                ax2.set_xticks(positions); ax2.set_xticklabels(models, rotation=35, ha='right')
                 ax2.set_xlim(0.5, len(models) + 0.5)
                 ax2.set_ylim(0.6, 1)
                 ax2.grid(True, axis='y', alpha=0.3)
@@ -2569,7 +2575,8 @@ class BayesianModelComparison:
                 acc_by_model_class[cname] = [mean_acc for _ in classes]
                 models.append(cname)
             # Plot combined ACC as scatter (means only) with per-class markers; add mini boxplots per class
-            fig, ax = plt.subplots(figsize=(12,6))
+            # Scale width by number of models to avoid label overlap
+            fig, ax = plt.subplots(figsize=(max(12, 6 + 0.6*len(models)), 6))
             x = np.arange(len(models))
             # Use actual 3-way accuracy (overall accuracy) for the mean line/points
             overall_acc_by_model: Dict[str, float] = {}
@@ -2592,7 +2599,7 @@ class BayesianModelComparison:
             ax.set_xlabel('Model')
             ax.set_title('One-vs-rest ACC by model')
             ax.set_xticks(x)
-            ax.set_xticklabels(models, rotation=20)
+            ax.set_xticklabels(models, rotation=35, ha='right')
             ymin = max(0.0, float(np.nanmin([v for vv in acc_by_model_class.values() for v in vv]) - 0.02))
             ymax = min(1.0, float(np.nanmax([v for vv in acc_by_model_class.values() for v in vv]) + 0.02))
             if ymax - ymin < 0.05:
@@ -2630,7 +2637,7 @@ class BayesianModelComparison:
                             auc_by_model_class[m].append(np.nan)
                             continue
                         auc_by_model_class[m].append(roc_auc_score(dmc['y'].values, dmc['score'].values))
-            fig, ax = plt.subplots(figsize=(12,6))
+            fig, ax = plt.subplots(figsize=(max(12, 6 + 0.6*len(models)), 6))
             x = np.arange(len(models))
             means = np.array([np.nanmean(auc_by_model_class[m]) for m in models])
             ax.scatter(x, means, c='black', marker='D', s=64, zorder=3)
@@ -2643,7 +2650,7 @@ class BayesianModelComparison:
             ax.set_xlabel('Model')
             ax.set_title('One-vs-rest AUC by model')
             ax.set_xticks(x)
-            ax.set_xticklabels(models, rotation=20)
+            ax.set_xticklabels(models, rotation=35, ha='right')
             ymin = max(0.0, float(np.nanmin([v for vv in auc_by_model_class.values() for v in vv]) - 0.02))
             ymax = min(1.0, float(np.nanmax([v for vv in auc_by_model_class.values() for v in vv]) + 0.02))
             if ymax - ymin < 0.05:
