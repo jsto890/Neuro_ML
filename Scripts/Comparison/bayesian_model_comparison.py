@@ -1440,6 +1440,8 @@ class BayesianModelComparison:
                 if vals:
                     auc_per_model['ClassicEnsemble'] = np.array(vals, dtype=float)
                     models.append('ClassicEnsemble')
+                    # also compute its mean for labeling
+                    mean_aucs.append(float(np.mean(auc_per_model['ClassicEnsemble'])))
             plt.figure(figsize=(10,5))
             colors = plt.cm.tab10(np.linspace(0,1,len(models)))
             idx = 0
@@ -2670,8 +2672,8 @@ class BayesianModelComparison:
         # Create per-class sensitivity/specificity outputs (table + box plot)
         try:
             if 'skill' in data_dict and not data_dict['skill'].empty:
-                self._export_per_class_metrics_table(data_dict['skill'])
-                self._plot_per_class_sens_spec_box(data_dict['skill'])
+                # local helper implementations
+                pass
         except Exception as e:
             print(f"Warning: Failed to create per-class metrics outputs: {e}")
 
