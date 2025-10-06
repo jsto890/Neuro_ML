@@ -2667,6 +2667,14 @@ class BayesianModelComparison:
             import traceback
             print(f"Traceback: {traceback.format_exc()}")
         
+        # Create per-class sensitivity/specificity outputs (table + box plot)
+        try:
+            if 'skill' in data_dict and not data_dict['skill'].empty:
+                self._export_per_class_metrics_table(data_dict['skill'])
+                self._plot_per_class_sens_spec_box(data_dict['skill'])
+        except Exception as e:
+            print(f"Warning: Failed to create per-class metrics outputs: {e}")
+
         # Save results
         try:
             print("Attempting to save results...")
