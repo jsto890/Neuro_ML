@@ -2401,36 +2401,50 @@ class BayesianModelComparison:
                 mean_acc = float(np.mean(acc_vals)) if acc_vals else np.nan
                 acc_by_model_class[cname] = [mean_acc for _ in classes]
                 models.append(cname)
-            # Plot combined ACC
-            plt.figure(figsize=(10,5))
+            # Plot combined ACC as scatter (means only) with per-class markers; add mini boxplots per class
+            fig, ax = plt.subplots(figsize=(12,6))
             x = np.arange(len(models))
             means = np.array([np.nanmean(acc_by_model_class[m]) for m in models])
-            mins = np.array([np.nanmin(acc_by_model_class[m]) for m in models])
-            maxs = np.array([np.nanmax(acc_by_model_class[m]) for m in models])
-            # bar for mean
-            sns.barplot(x=models, y=means, color='skyblue', edgecolor='black')
-            # whiskers for range
-            for i in range(len(models)):
-                plt.plot([i, i], [mins[i], maxs[i]], color='black', lw=1.5)
-            # per-class markers
+            ax.scatter(x, means, c='black', marker='D', s=64, zorder=3, label='Mean ACC')
             colors = plt.cm.tab10(np.linspace(0,1,len(classes)))
+            # per-class points
             for ci, c in enumerate(classes):
                 vals = [acc_by_model_class[m][ci] for m in models]
-                plt.plot(x, vals, marker='o', linestyle='-', color=colors[ci], label=class_names[ci])
-            plt.ylabel('Accuracy (one-vs-rest)')
-            plt.xlabel('Model')
-            plt.title('One-vs-rest ACC by model')
-            plt.xticks(rotation=20)
-            # Dynamic y-limits with small margins
-            ymin = max(0.0, float(np.nanmin(mins) - 0.02))
-            ymax = min(1.0, float(np.nanmax(maxs) + 0.02))
+                ax.plot(x, vals, marker='o', linestyle='-', color=colors[ci], alpha=0.8, label=class_names[ci] if ci==0 else None)
+            ax.set_ylabel('Accuracy (one-vs-rest)')
+            ax.set_xlabel('Model')
+            ax.set_title('One-vs-rest ACC by model')
+            ax.set_xticks(x)
+            ax.set_xticklabels(models, rotation=20)
+            ymin = max(0.0, float(np.nanmin([v for vv in acc_by_model_class.values() for v in vv]) - 0.02))
+            ymax = min(1.0, float(np.nanmax([v for vv in acc_by_model_class.values() for v in vv]) + 0.02))
             if ymax - ymin < 0.05:
                 pad = 0.025
                 ymin = max(0.0, ymin - pad)
                 ymax = min(1.0, ymax + pad)
-            plt.ylim(ymin, ymax)
-            plt.grid(True, axis='y', alpha=0.3)
-            plt.legend(title='Class', bbox_to_anchor=(1.04,1), loc='upper left')
+            ax.set_ylim(ymin, ymax)
+            ax.grid(True, axis='y', alpha=0.3)
+            # Mini boxplots for CN/AD/PD and Mean
+            # Build data per model in order: [CN, AD, PD, Mean]
+            box_data = []
+            for m in models:
+                vals = [acc_by_model_class[m][ci] for ci,_ in enumerate(classes)]
+                vals.append(float(np.nanmean(vals)))
+                box_data.append(vals)
+            # inset axes for each model
+            for i, m in enumerate(models):
+                inset = ax.inset_axes([0.06 + i*(0.88/max(1,len(models))), 0.02, 0.88/max(1,len(models)), 0.18])
+                b = inset.boxplot([ [acc_by_model_class[m][ci] for _ in [0,1]] for ci in range(len(classes)) ] + [[np.nanmean([acc_by_model_class[m][ci] for ci in range(len(classes))]) for _ in [0,1]]],
+                                  vert=True, patch_artist=True, widths=0.6)
+                for j, patch in enumerate(b['boxes']):
+                    patch.set_facecolor(colors[j] if j < len(classes) else 'gray')
+                    patch.set_alpha(0.5)
+                inset.set_xticks([])
+                inset.set_yticks([])
+                inset.set_ylim(ymin, ymax)
+                for spine in ['top','right','left','bottom']:
+                    inset.spines[spine].set_visible(False)
+            ax.legend(title='Class', bbox_to_anchor=(1.04,1), loc='upper left')
             plt.tight_layout()
             plt.savefig(self.plots_dir / 'ovr_acc_combined.png', dpi=300, bbox_inches='tight')
             plt.close()
@@ -2450,31 +2464,41 @@ class BayesianModelComparison:
                             auc_by_model_class[m].append(np.nan)
                             continue
                         auc_by_model_class[m].append(roc_auc_score(dmc['y'].values, dmc['score'].values))
-            plt.figure(figsize=(10,5))
+            fig, ax = plt.subplots(figsize=(12,6))
             x = np.arange(len(models))
             means = np.array([np.nanmean(auc_by_model_class[m]) for m in models])
-            mins = np.array([np.nanmin(auc_by_model_class[m]) for m in models])
-            maxs = np.array([np.nanmax(auc_by_model_class[m]) for m in models])
-            sns.barplot(x=models, y=means, color='lightgreen', edgecolor='black')
-            for i in range(len(models)):
-                plt.plot([i, i], [mins[i], maxs[i]], color='black', lw=1.5)
+            ax.scatter(x, means, c='black', marker='D', s=64, zorder=3, label='Mean AUC')
             colors = plt.cm.tab10(np.linspace(0,1,len(classes)))
             for ci, c in enumerate(classes):
                 vals = [auc_by_model_class[m][ci] for m in models]
-                plt.plot(x, vals, marker='s', linestyle='--', color=colors[ci], label=class_names[ci])
-            plt.ylabel('AUC (one-vs-rest)')
-            plt.xlabel('Model')
-            plt.title('One-vs-rest AUC by model')
-            plt.xticks(rotation=20)
-            ymin = max(0.0, float(np.nanmin(mins) - 0.02))
-            ymax = min(1.0, float(np.nanmax(maxs) + 0.02))
+                ax.plot(x, vals, marker='s', linestyle='--', color=colors[ci], alpha=0.8, label=class_names[ci] if ci==0 else None)
+            ax.set_ylabel('AUC (one-vs-rest)')
+            ax.set_xlabel('Model')
+            ax.set_title('One-vs-rest AUC by model')
+            ax.set_xticks(x)
+            ax.set_xticklabels(models, rotation=20)
+            ymin = max(0.0, float(np.nanmin([v for vv in auc_by_model_class.values() for v in vv]) - 0.02))
+            ymax = min(1.0, float(np.nanmax([v for vv in auc_by_model_class.values() for v in vv]) + 0.02))
             if ymax - ymin < 0.05:
                 pad = 0.025
                 ymin = max(0.0, ymin - pad)
                 ymax = min(1.0, ymax + pad)
-            plt.ylim(ymin, ymax)
-            plt.grid(True, axis='y', alpha=0.3)
-            plt.legend(title='Class', bbox_to_anchor=(1.04,1), loc='upper left')
+            ax.set_ylim(ymin, ymax)
+            ax.grid(True, axis='y', alpha=0.3)
+            # Mini boxplots for CN/AD/PD and Mean
+            for i, m in enumerate(models):
+                inset = ax.inset_axes([0.06 + i*(0.88/max(1,len(models))), 0.02, 0.88/max(1,len(models)), 0.18])
+                b = inset.boxplot([ [auc_by_model_class[m][ci] for _ in [0,1]] for ci in range(len(classes)) ] + [[np.nanmean([auc_by_model_class[m][ci] for ci in range(len(classes))]) for _ in [0,1]]],
+                                  vert=True, patch_artist=True, widths=0.6)
+                for j, patch in enumerate(b['boxes']):
+                    patch.set_facecolor(colors[j] if j < len(classes) else 'gray')
+                    patch.set_alpha(0.5)
+                inset.set_xticks([])
+                inset.set_yticks([])
+                inset.set_ylim(ymin, ymax)
+                for spine in ['top','right','left','bottom']:
+                    inset.spines[spine].set_visible(False)
+            ax.legend(title='Class', bbox_to_anchor=(1.04,1), loc='upper left')
             plt.tight_layout()
             plt.savefig(self.plots_dir / 'ovr_auc_combined.png', dpi=300, bbox_inches='tight')
             plt.close()
@@ -2556,7 +2580,7 @@ class BayesianModelComparison:
         
         print(f"Results saved to {self.output_dir}")
     
-    def run_complete_analysis(self, run_dirs: List[str], models: Optional[List[str]] = None, classic_dirs: Optional[List[str]] = None) -> BayesianResults:
+    def run_complete_analysis(self, run_dirs: List[str], models: Optional[List[str]] = None, classic_dirs: Optional[List[str]] = None, skip_bayes: bool = False, reuse_from_dir: Optional[str] = None) -> BayesianResults:
         """
         Run complete Bayesian model comparison analysis.
         
@@ -2582,9 +2606,23 @@ class BayesianModelComparison:
         # Prepare data
         data_dict = self.prepare_data_for_analysis(model_data)
         
-        # Run analyses
-        accuracy_results = self.hierarchical_accuracy_analysis(data_dict['accuracy'])
-        skill_results = self.trial_level_skill_analysis(data_dict['skill'])
+        # Run analyses (optional skipping / reuse)
+        if skip_bayes and reuse_from_dir:
+            try:
+                prev = Path(reuse_from_dir)
+                # Load previously saved results and bypass expensive steps
+                with open(prev / 'results' / 'accuracy_results.json','r') as f:
+                    import json
+                    accuracy_results = json.load(f)
+                with open(prev / 'results' / 'skill_results.json','r') as f:
+                    skill_results = json.load(f)
+            except Exception:
+                # Fall back to minimal run (just stacking and frequentist parts)
+                accuracy_results = {}
+                skill_results = {}
+        else:
+            accuracy_results = self.hierarchical_accuracy_analysis(data_dict['accuracy'])
+            skill_results = self.trial_level_skill_analysis(data_dict['skill'])
         calibration_results = self.bayesian_calibration_analysis(data_dict['calibration'])
         auc_results = self.bayesian_auc_analysis(data_dict['auc'])
         stacking_results = self.stacking_ensemble_analysis(model_data)
