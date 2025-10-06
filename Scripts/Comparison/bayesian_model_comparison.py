@@ -2428,8 +2428,18 @@ class BayesianModelComparison:
             # Plot combined ACC as scatter (means only) with per-class markers; add mini boxplots per class
             fig, ax = plt.subplots(figsize=(12,6))
             x = np.arange(len(models))
-            means = np.array([np.nanmean(acc_by_model_class[m]) for m in models])
+            # Use actual 3-way accuracy (overall accuracy) for the mean line/points
+            overall_acc_by_model: Dict[str, float] = {}
+            for m in models:
+                dfm_all = df_skill[df_skill['model']==m]
+                if 'correct' in dfm_all.columns and not dfm_all.empty:
+                    overall_acc_by_model[m] = float(np.mean(dfm_all['correct'].astype(float)))
+                else:
+                    # fallback to macro OVR if something is missing
+                    overall_acc_by_model[m] = float(np.nanmean(acc_by_model_class[m]))
+            means = np.array([overall_acc_by_model[m] for m in models])
             ax.scatter(x, means, c='black', marker='D', s=64, zorder=3)
+            ax.plot(x, means, color='black', linestyle='-', linewidth=1.5, alpha=0.9, zorder=2)
             colors = plt.cm.tab10(np.linspace(0,1,len(classes)))
             # per-class points
             for ci, c in enumerate(classes):
@@ -2449,15 +2459,12 @@ class BayesianModelComparison:
             ax.set_ylim(ymin, ymax)
             ax.grid(True, axis='y', alpha=0.3)
             # (Points only; box insets removed per request)
-            # Explicit legend: Mean, CN, AD, PD
+            # Explicit legend: ACC, CN, AD, PD matching colors/markers
             try:
                 from matplotlib.lines import Line2D
-                handles = [
-                    Line2D([], [], color='black', marker='D', linestyle='None', label='Mean'),
-                    Line2D([], [], color='black', marker='o', linestyle='-', label='CN'),
-                    Line2D([], [], color='black', marker='s', linestyle='-', label='AD'),
-                    Line2D([], [], color='black', marker='^', linestyle='-', label='PD')
-                ]
+                handles = [Line2D([], [], color='black', marker='D', linestyle='None', label='ACC')]
+                for ci, cname in enumerate(class_names):
+                    handles.append(Line2D([], [], color=colors[ci], marker='o', linestyle='-', label=cname))
                 ax.legend(handles=handles, title='Legend', bbox_to_anchor=(1.04,1), loc='upper left')
             except Exception:
                 pass
@@ -2484,6 +2491,7 @@ class BayesianModelComparison:
             x = np.arange(len(models))
             means = np.array([np.nanmean(auc_by_model_class[m]) for m in models])
             ax.scatter(x, means, c='black', marker='D', s=64, zorder=3)
+            ax.plot(x, means, color='black', linestyle='-', linewidth=1.5, alpha=0.9, zorder=2)
             colors = plt.cm.tab10(np.linspace(0,1,len(classes)))
             for ci, c in enumerate(classes):
                 vals = [auc_by_model_class[m][ci] for m in models]
@@ -2502,15 +2510,12 @@ class BayesianModelComparison:
             ax.set_ylim(ymin, ymax)
             ax.grid(True, axis='y', alpha=0.3)
             # (Points only; box insets removed per request)
-            # Explicit legend: Mean, CN, AD, PD
+            # Explicit legend: AUC, CN, AD, PD matching colors/markers
             try:
                 from matplotlib.lines import Line2D
-                handles = [
-                    Line2D([], [], color='black', marker='D', linestyle='None', label='Mean'),
-                    Line2D([], [], color='black', marker='o', linestyle='-', label='CN'),
-                    Line2D([], [], color='black', marker='s', linestyle='-', label='AD'),
-                    Line2D([], [], color='black', marker='^', linestyle='-', label='PD')
-                ]
+                handles = [Line2D([], [], color='black', marker='D', linestyle='None', label='AUC')]
+                for ci, cname in enumerate(class_names):
+                    handles.append(Line2D([], [], color=colors[ci], marker='s', linestyle='--', label=cname))
                 ax.legend(handles=handles, title='Legend', bbox_to_anchor=(1.04,1), loc='upper left')
             except Exception:
                 pass
