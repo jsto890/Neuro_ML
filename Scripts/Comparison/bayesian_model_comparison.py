@@ -298,20 +298,20 @@ class BayesianModelComparison:
                         values_by_model[m] = vals_np
         except Exception:
             return {}
-        # Append classic fold metrics (plotting only)
+        # Append classic fold metrics combined under a single display label
         try:
             if getattr(self, 'classic_summaries', None):
-                for cname, folds in self.classic_summaries.items():
-                    arr = []
+                arr_all = []
+                for _, folds in self.classic_summaries.items():
                     for f in folds:
                         if metric == 'acc' and 'accuracy' in f:
-                            arr.append(float(f['accuracy']))
+                            arr_all.append(float(f['accuracy']))
                         elif metric == 'auc' and 'auc' in f:
-                            arr.append(float(f['auc']))
+                            arr_all.append(float(f['auc']))
                         elif metric == 'mcc' and 'mcc' in f:
-                            arr.append(float(f['mcc']))
-                    if arr:
-                        values_by_model[cname] = np.asarray(arr, dtype=float)
+                            arr_all.append(float(f['mcc']))
+                if arr_all:
+                    values_by_model['ClassicEnsemble'] = np.asarray(arr_all, dtype=float)
         except Exception:
             pass
         return values_by_model
@@ -1409,11 +1409,12 @@ class BayesianModelComparison:
                 x_max = min(1.0, x_max + pad)
             # Append classic AUC mean per fold if available
             if getattr(self, 'classic_summaries', None):
-                for cname, folds in self.classic_summaries.items():
-                    vals = [float(f['auc']) for f in folds if 'auc' in f]
-                    if vals:
-                        auc_per_model[cname] = np.array(vals, dtype=float)
-                        models.append(cname)
+                vals = []
+                for folds in self.classic_summaries.values():
+                    vals.extend([float(f['auc']) for f in folds if 'auc' in f])
+                if vals:
+                    auc_per_model['ClassicEnsemble'] = np.array(vals, dtype=float)
+                    models.append('ClassicEnsemble')
             plt.figure(figsize=(10,5))
             colors = plt.cm.tab10(np.linspace(0,1,len(models)))
             idx = 0
@@ -1458,11 +1459,12 @@ class BayesianModelComparison:
                 acc_per_model[m] = arr
             # Append classic fold mean accuracies if available
             if getattr(self, 'classic_summaries', None):
-                for cname, folds in self.classic_summaries.items():
-                    vals = [float(f['accuracy']) for f in folds if 'accuracy' in f]
-                    if vals:
-                        acc_per_model[cname] = np.array(vals, dtype=float)
-                        models.append(cname)
+                vals = []
+                for folds in self.classic_summaries.values():
+                    vals.extend([float(f['accuracy']) for f in folds if 'accuracy' in f])
+                if vals:
+                    acc_per_model['ClassicEnsemble'] = np.array(vals, dtype=float)
+                    models.append('ClassicEnsemble')
             if not acc_per_model:
                 return
             # Compute Beta modes and sds per model
@@ -1825,11 +1827,12 @@ class BayesianModelComparison:
                         continue
             # Append classic MCC fold values if available
             if getattr(self, 'classic_summaries', None):
-                for cname, folds in self.classic_summaries.items():
-                    vals = [float(f['mcc']) for f in folds if 'mcc' in f]
-                    if vals:
-                        mcc_per_model[cname] = np.array(vals, dtype=float)
-                        models.append(cname)
+                vals = []
+                for folds in self.classic_summaries.values():
+                    vals.extend([float(f['mcc']) for f in folds if 'mcc' in f])
+                if vals:
+                    mcc_per_model['ClassicEnsemble'] = np.array(vals, dtype=float)
+                    models.append('ClassicEnsemble')
             plt.figure(figsize=(8,5))
             colors = plt.cm.tab10(np.linspace(0,1,len(models)))
             from scipy.stats import norm
@@ -1973,7 +1976,7 @@ class BayesianModelComparison:
         sns.heatmap(matrix, annot=True, fmt='.3f', cmap='RdBu_r', 
                    xticklabels=models, yticklabels=models, 
                    center=0.5, vmin=0, vmax=1)
-        plt.title('Model Comparison Matrix\n(P(model row > model column))')
+        plt.title('Deep LearningModel Comparison Matrix\n(P(model row > model column))')
         plt.tight_layout()
         plt.savefig(self.plots_dir / 'model_comparison_matrix.png', dpi=300, bbox_inches='tight')
         plt.close()
@@ -1993,7 +1996,7 @@ class BayesianModelComparison:
                 sns.heatmap(cm, annot=True, fmt='.2f', cmap='Blues', cbar=False)
                 plt.xlabel('Predicted')
                 plt.ylabel('True')
-                plt.title(f'Confusion Matrix (normalized) - {model}')
+                plt.title(f'Confusion Matrix (normalised) - {model}')
                 plt.tight_layout()
                 plt.savefig(self.plots_dir / f'confusion_{model}.png', dpi=300, bbox_inches='tight')
                 plt.close()
@@ -2376,8 +2379,7 @@ class BayesianModelComparison:
             # Optionally append classic model(s) using fold summary metrics only (no per-class breakdown available)
             classic_models = []
             if getattr(self, 'classic_summaries', None):
-                for cname in self.classic_summaries.keys():
-                    classic_models.append(cname)
+                classic_models = ['ClassicEnsemble'] if any(self.classic_summaries.values()) else []
             # ACC (one-vs-rest) for deep models
             # ACC (one-vs-rest): accuracy of detecting class c vs others
             acc_by_model_class = {m: [] for m in models}
@@ -2392,8 +2394,10 @@ class BayesianModelComparison:
                     acc_by_model_class[m].append(accuracy_score(y_true, y_pred))
             # Append classic models with overall ACC only: replicate mean across classes as dotted markers
             for cname in classic_models:
-                folds = self.classic_summaries.get(cname, [])
-                acc_vals = [float(f['accuracy']) for f in folds if 'accuracy' in f]
+                # Pool across all classic dirs for the single display label
+                acc_vals = []
+                for folds in self.classic_summaries.values():
+                    acc_vals.extend([float(f['accuracy']) for f in folds if 'accuracy' in f])
                 mean_acc = float(np.mean(acc_vals)) if acc_vals else np.nan
                 acc_by_model_class[cname] = [mean_acc for _ in classes]
                 models.append(cname)
@@ -2415,7 +2419,7 @@ class BayesianModelComparison:
                 plt.plot(x, vals, marker='o', linestyle='-', color=colors[ci], label=class_names[ci])
             plt.ylabel('Accuracy (one-vs-rest)')
             plt.xlabel('Model')
-            plt.title('One-vs-rest ACC by model (mean bar, range whiskers, class markers)')
+            plt.title('One-vs-rest ACC by model')
             plt.xticks(rotation=20)
             # Dynamic y-limits with small margins
             ymin = max(0.0, float(np.nanmin(mins) - 0.02))
@@ -2434,8 +2438,9 @@ class BayesianModelComparison:
             auc_by_model_class = {m: [] for m in models}
             for m in models:
                 if m in classic_models:
-                    folds = self.classic_summaries.get(m, [])
-                    auc_vals = [float(f['auc']) for f in folds if 'auc' in f]
+                    auc_vals = []
+                    for folds in self.classic_summaries.values():
+                        auc_vals.extend([float(f['auc']) for f in folds if 'auc' in f])
                     mean_auc = float(np.mean(auc_vals)) if auc_vals else np.nan
                     auc_by_model_class[m] = [mean_auc for _ in classes]
                 else:
@@ -2459,7 +2464,7 @@ class BayesianModelComparison:
                 plt.plot(x, vals, marker='s', linestyle='--', color=colors[ci], label=class_names[ci])
             plt.ylabel('AUC (one-vs-rest)')
             plt.xlabel('Model')
-            plt.title('One-vs-rest AUC by model (mean bar, range whiskers, class markers)')
+            plt.title('One-vs-rest AUC by model')
             plt.xticks(rotation=20)
             ymin = max(0.0, float(np.nanmin(mins) - 0.02))
             ymax = min(1.0, float(np.nanmax(maxs) + 0.02))
