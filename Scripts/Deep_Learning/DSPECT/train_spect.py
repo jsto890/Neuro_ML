@@ -2504,6 +2504,14 @@ def main():
     parser.add_argument("--memory_efficient", action='store_true', default=False,
                         help="Enable memory-efficient training (gradient checkpointing, etc.)")
     
+    # Additional training arguments
+    parser.add_argument("--use_balanced_batches", action='store_true', default=False,
+                        help="Use balanced batches for training")
+    parser.add_argument("--cb_beta", type=float, default=0.999,
+                        help="Beta parameter for class-balanced loss")
+    parser.add_argument("--hard_mining_weight", type=float, default=3.0,
+                        help="Weight for hard negative mining")
+    
     args = parser.parse_args()
 
     # Define available models

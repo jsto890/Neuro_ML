@@ -10,9 +10,9 @@ import numpy as np
 
 class SPECTDataset(Dataset):
     """
-    PyTorch Dataset for loading single-channel SPECT volumes and labels (binary: CN=0, PD=1).
+    PyTorch Dataset for loading single-channel SPECT volumes and labels.
     Expects:
-      - A CSV file with columns 'subject_id' and 'label' (headered or headerless), where label ∈ {0,1}.
+      - A CSV file with columns 'subject_id' and 'label' (headered or headerless).
       - Preprocessed DSPECT directory structure under data_root:
             CN_SPECT_PPMI_postprocessed/Subject_*/6. postprocessed.nii.gz
             PD_SPECT_PPMI_postprocessed/Subject_*/6. postprocessed.nii.gz
@@ -39,16 +39,25 @@ class SPECTDataset(Dataset):
         # Convert label column to integer type
         df['label'] = df['label'].astype(int)
         
-        # Enforce binary labels (CN=0, PD=1)
+        # Get unique labels and create mapping for binary classification (0, 2 -> 0, 1)
         unique_labels = sorted(df['label'].unique())
-        invalid = [l for l in unique_labels if l not in [0, 1]]
-        if invalid:
-            raise ValueError(f"SPECT dataset expects binary labels 0 (CN) or 1 (PD). Found: {unique_labels}")
         print(f"[INFO] SPECT labels in dataset: {unique_labels}")
+        
+        # Validate that we have exactly 2 labels for binary classification
+        if len(unique_labels) != 2:
+            raise ValueError(f"SPECT dataset expects exactly 2 labels for binary classification. Found: {unique_labels}")
+        
+        # Create label mapping to convert labels to 0, 1 for binary classification
+        # This handles cases like (0, 2) -> (0, 1) or (1, 2) -> (0, 1)
+        self.label_mapping = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
+        print(f"[INFO] Label mapping: {self.label_mapping}")
+        
+        # Apply label mapping
+        df['mapped_label'] = df['label'].map(self.label_mapping)
 
         self.df = df
         self.subjects = df['subject_id'].tolist()
-        self.labels = df['label'].tolist()
+        self.labels = df['mapped_label'].tolist()
         self.data_root = data_root
         self.target_shape = target_shape
         self.transform = transform
@@ -99,9 +108,18 @@ class SPECTDataset(Dataset):
         sid = self.subjects[idx]
         label = torch.tensor(self.labels[idx], dtype=torch.long)
 
-        # Construct the path to the SPECT image based on label
-        # label: 0 -> CN, 1 -> PD
-        diagnosis_dir = 'CN_SPECT_PPMI_postprocessed' if label.item() == 0 else 'PD_SPECT_PPMI_postprocessed'
+        # Get the original label to determine directory
+        original_label = self.df.iloc[idx]['label']
+        
+        # Construct the path to the SPECT image based on original label
+        # Map original labels to directory names for SPECT binary classification
+        if original_label == 0:
+            diagnosis_dir = 'CN_SPECT_PPMI_postprocessed'
+        elif original_label == 2:
+            diagnosis_dir = 'PD_SPECT_PPMI_postprocessed'
+        else:
+            raise ValueError(f"SPECT dataset expects labels 0 (CN) or 2 (PD). Found: {original_label}")
+        
         # Required DSPECT filename
         candidate_path = os.path.join(self.data_root, diagnosis_dir, sid, '6. postprocessed.nii.gz')
         if not os.path.exists(candidate_path):
