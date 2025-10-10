@@ -2134,7 +2134,7 @@ class BayesianModelComparison:
                 ax1.set_title(f"{class_names[ci]} — Sensitivity")
                 ax1.set_xticks(positions); ax1.set_xticklabels(models, rotation=35, ha='right')
                 ax1.set_xlim(0.5, len(models) + 0.5)
-                ax1.set_ylim(0.5, 1)
+                ax1.set_ylim(0.4, 1)
                 ax1.grid(True, axis='y', alpha=0.3)
                 # Specificity
                 ax2 = axes[1, ci]
@@ -2145,7 +2145,7 @@ class BayesianModelComparison:
                 ax2.set_title(f"{class_names[ci]} — Specificity")
                 ax2.set_xticks(positions); ax2.set_xticklabels(models, rotation=35, ha='right')
                 ax2.set_xlim(0.5, len(models) + 0.5)
-                ax2.set_ylim(0.5, 1)
+                ax2.set_ylim(0.4, 1)
                 ax2.grid(True, axis='y', alpha=0.3)
             axes[0,0].set_ylabel('Sensitivity')
             axes[1,0].set_ylabel('Specificity')
