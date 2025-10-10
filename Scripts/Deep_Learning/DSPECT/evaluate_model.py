@@ -461,7 +461,17 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
             positive_probs = probabilities[:, 1]
         except Exception:
             positive_probs = probabilities
-        ax6.hist(positive_probs, bins=20, alpha=0.7, color='orange', edgecolor='black')
+        
+        # Calculate appropriate number of bins based on data
+        n_unique = len(np.unique(positive_probs))
+        n_bins = min(20, max(5, n_unique // 2))  # Between 5 and 20 bins
+        
+        try:
+            ax6.hist(positive_probs, bins=n_bins, alpha=0.7, color='orange', edgecolor='black')
+        except ValueError:
+            # Fallback to 'auto' if fixed bins still fails
+            ax6.hist(positive_probs, bins='auto', alpha=0.7, color='orange', edgecolor='black')
+        
         ax6.set_xlabel('Probability of Positive Class')
         ax6.set_ylabel('Count')
         ax6.set_title('Probability Distribution (Binary)')
@@ -469,7 +479,17 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     else:
         # For multi-class, show max probability distribution
         max_probs = np.max(probabilities, axis=1)
-        ax6.hist(max_probs, bins=20, alpha=0.7, color='orange', edgecolor='black')
+        
+        # Calculate appropriate number of bins based on data
+        n_unique = len(np.unique(max_probs))
+        n_bins = min(20, max(5, n_unique // 2))  # Between 5 and 20 bins
+        
+        try:
+            ax6.hist(max_probs, bins=n_bins, alpha=0.7, color='orange', edgecolor='black')
+        except ValueError:
+            # Fallback to 'auto' if fixed bins still fails
+            ax6.hist(max_probs, bins='auto', alpha=0.7, color='orange', edgecolor='black')
+        
         ax6.set_xlabel('Maximum Probability')
         ax6.set_ylabel('Count')
         ax6.set_title('Probability Distribution (Multiclass)')
