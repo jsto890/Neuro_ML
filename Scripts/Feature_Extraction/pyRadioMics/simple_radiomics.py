@@ -321,11 +321,17 @@ def find_spect_path(data_root, subject_id):
         from pathlib import Path
         base = Path(os.path.expanduser(data_root))
         if not base.exists():
+            logger.error(f"SPECT data root does not exist: {base}")
             return None
         
         # Check both CN and PD directories
         for disease_dir in ['CN_SPECT_PPMI_postprocessed', 'PD_SPECT_PPMI_postprocessed']:
-            subject_dir = base / disease_dir / subject_id
+            disease_path = base / disease_dir
+            if not disease_path.exists():
+                logger.debug(f"Disease directory does not exist: {disease_path}")
+                continue
+                
+            subject_dir = disease_path / subject_id
             if not subject_dir.exists():
                 continue
             
@@ -340,7 +346,8 @@ def find_spect_path(data_root, subject_id):
                 return str(image_path)
         
         return None
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error in find_spect_path for {subject_id}: {e}")
         return None
 
 def load_spect_image_and_mask(image_path: str):
@@ -363,6 +370,28 @@ def extract_spect_radiomics(config_path, labels_path, output_dir, force_reproces
 
     data_root = config['preprocessed_data']['spect_p']
     data_root = os.path.expanduser(data_root)
+    
+    # Verify data root exists
+    from pathlib import Path
+    data_root_path = Path(data_root)
+    if not data_root_path.exists():
+        logger.error(f"❌ SPECT data root does not exist: {data_root}")
+        logger.error(f"   Please check your config.yaml file and ensure the path is correct for your system")
+        return None
+    
+    logger.info(f"📂 SPECT data root: {data_root}")
+    
+    # Check for disease directories
+    cn_dir = data_root_path / 'CN_SPECT_PPMI_postprocessed'
+    pd_dir = data_root_path / 'PD_SPECT_PPMI_postprocessed'
+    if cn_dir.exists():
+        logger.info(f"✓ Found CN directory: {cn_dir}")
+    else:
+        logger.warning(f"⚠️ CN directory not found: {cn_dir}")
+    if pd_dir.exists():
+        logger.info(f"✓ Found PD directory: {pd_dir}")
+    else:
+        logger.warning(f"⚠️ PD directory not found: {pd_dir}")
 
     # Load labels
     subjects, labels = load_labels_simple(labels_path)
