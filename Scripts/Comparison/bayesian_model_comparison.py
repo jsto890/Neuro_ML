@@ -1282,19 +1282,19 @@ class BayesianModelComparison:
             try:
                 values_acc = self._prepare_metric_values(data_dict, 'acc')
                 if values_acc:
-                    self._plot_box_whisker_with_left_density(values_acc, 0.6, 1.0, 'Accuracy', 'box_acc.png')
+                    self._plot_box_whisker_with_left_density(values_acc, 0.5, 1.0, 'Accuracy', 'box_acc.png')
             except Exception as e:
                 print(f"Warning: failed ACC box plot: {e}")
             try:
                 values_auc = self._prepare_metric_values(data_dict, 'auc')
                 if values_auc:
-                    self._plot_box_whisker_with_left_density(values_auc, 0.8, 1.0, 'AUC', 'box_auc.png')
+                    self._plot_box_whisker_with_left_density(values_auc, 0.5, 1.0, 'AUC', 'box_auc.png')
             except Exception as e:
                 print(f"Warning: failed AUC box plot: {e}")
             try:
                 values_mcc = self._prepare_metric_values(data_dict, 'mcc')
                 if values_mcc:
-                    self._plot_box_whisker_with_left_density(values_mcc, 0.5, 1.0, 'MCC', 'box_mcc.png')
+                    self._plot_box_whisker_with_left_density(values_mcc, -0.2, 1.0, 'MCC', 'box_mcc.png')
             except Exception as e:
                 print(f"Warning: failed MCC box plot: {e}")
         except Exception as e:
@@ -2134,7 +2134,7 @@ class BayesianModelComparison:
                 ax1.set_title(f"{class_names[ci]} — Sensitivity")
                 ax1.set_xticks(positions); ax1.set_xticklabels(models, rotation=35, ha='right')
                 ax1.set_xlim(0.5, len(models) + 0.5)
-                ax1.set_ylim(0.6, 1)
+                ax1.set_ylim(0.5, 1)
                 ax1.grid(True, axis='y', alpha=0.3)
                 # Specificity
                 ax2 = axes[1, ci]
@@ -2145,7 +2145,7 @@ class BayesianModelComparison:
                 ax2.set_title(f"{class_names[ci]} — Specificity")
                 ax2.set_xticks(positions); ax2.set_xticklabels(models, rotation=35, ha='right')
                 ax2.set_xlim(0.5, len(models) + 0.5)
-                ax2.set_ylim(0.6, 1)
+                ax2.set_ylim(0.5, 1)
                 ax2.grid(True, axis='y', alpha=0.3)
             axes[0,0].set_ylabel('Sensitivity')
             axes[1,0].set_ylabel('Specificity')
