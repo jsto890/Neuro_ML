@@ -274,7 +274,7 @@ class SwinUNETRClassifier(nn.Module):
                  feature_size: int = 36,
                  drop_rate: float = 0.0,
                  attn_drop_rate: float = 0.0,
-                 dropout_path_rate: float = 0.0,
+                 drop_path_rate: float = 0.0,
                  use_checkpoint: bool = False,
                  spatial_dims: int = 3):
         
@@ -291,7 +291,7 @@ class SwinUNETRClassifier(nn.Module):
             feature_size=feature_size,
             drop_rate=drop_rate,
             attn_drop_rate=attn_drop_rate,
-            dropout_path_rate=dropout_path_rate,
+            dropout_path_rate=drop_path_rate,
             use_checkpoint=use_checkpoint
         )
         
@@ -405,7 +405,7 @@ class FullSwinUNETRClassifier(nn.Module):
                  feature_size: int = 36,
                  drop_rate: float = 0.0,
                  attn_drop_rate: float = 0.0,
-                 dropout_path_rate: float = 0.0,
+                 drop_path_rate: float = 0.0,
                  use_checkpoint: bool = False,
                  spatial_dims: int = 3):
         
@@ -422,7 +422,7 @@ class FullSwinUNETRClassifier(nn.Module):
             feature_size=feature_size,
             drop_rate=drop_rate,
             attn_drop_rate=attn_drop_rate,
-            dropout_path_rate=dropout_path_rate,
+            dropout_path_rate=drop_path_rate,
             use_checkpoint=use_checkpoint
         )
         
