@@ -23,6 +23,7 @@ import math
 
 from dataset import SPECTDataset
 from models_spect import Simple3DCNN, get_3d_model
+from transformer_models import get_transformer_model
 from evaluate_model import evaluate_model, calculate_metrics, create_evaluation_plots
 
 # Set style for plots
@@ -1634,14 +1635,30 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             label_mapping = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
             print(f"[INFO] Label mapping: {label_mapping}")
             
-            model = get_3d_model(
-                model_name,
-                num_classes=num_classes,
-                in_channels=1,
-                base_channels=args.base_channels,
-                use_pretrained=args.use_pretrained,
-                dropout_p=(args.cnn_drop_rate if model_name == "Simple3DCNN" else 0.0),
-            )
+            # Check if this is a transformer model
+            transformer_models = ['VisionTransformer3D', 'SwinUNETRClassifier', 'FullSwinUNETRClassifier']
+            if model_name in transformer_models:
+                # Use transformer model factory
+                model = get_transformer_model(
+                    model_name,
+                    num_classes=num_classes,
+                    in_channels=1,
+                    drop_rate=args.vit_drop_rate,
+                    attn_drop_rate=args.vit_attn_drop_rate,
+                    drop_path_rate=args.vit_drop_path_rate,
+                )
+                print(f"[INFO] Initialized {model_name} transformer model")
+            else:
+                # Use CNN model factory
+                model = get_3d_model(
+                    model_name,
+                    num_classes=num_classes,
+                    in_channels=1,
+                    base_channels=args.base_channels,
+                    use_pretrained=args.use_pretrained,
+                    dropout_p=(args.cnn_drop_rate if model_name == "Simple3DCNN" else 0.0),
+                )
+                print(f"[INFO] Initialized {model_name} CNN model")
             
             # Move model to device immediately after creation
             model = model.to(args.device)
@@ -2094,6 +2111,8 @@ def ensemble_evaluate_models(model_name, model_dir, test_loader, device, args, f
         state_dict = torch.load(model_path, map_location=device)
         
         # Initialize model with correct architecture
+        transformer_models = ['VisionTransformer3D', 'SwinUNETRClassifier', 'FullSwinUNETRClassifier']
+        
         if model_name == "Simple3DCNN":
             classifier_weight = state_dict['classifier.0.weight']
             actual_input_size = classifier_weight.shape[1]
@@ -2101,8 +2120,19 @@ def ensemble_evaluate_models(model_name, model_dir, test_loader, device, args, f
             model.classifier[0] = nn.Linear(actual_input_size, 256)
             model._initialized = True
             model.load_state_dict(state_dict)
-        # Drop unsupported transformer branches for DSPECT
+        elif model_name in transformer_models:
+            # Load transformer model
+            model = get_transformer_model(
+                model_name,
+                num_classes=len(args.labels),
+                in_channels=1,
+                drop_rate=args.vit_drop_rate,
+                attn_drop_rate=args.vit_attn_drop_rate,
+                drop_path_rate=args.vit_drop_path_rate,
+            )
+            model.load_state_dict(state_dict)
         else:
+            # Load CNN model
             model = get_3d_model(model_name, num_classes=len(args.labels), in_channels=1, base_channels=args.base_channels, use_pretrained=args.use_pretrained)
             model.load_state_dict(state_dict)
         
@@ -2413,7 +2443,8 @@ def main():
     parser.add_argument("--model", type=str, default=None,
                         help="Single model to train (alternative to --models)")
     parser.add_argument("--models", nargs='+', type=str, default=None,
-                        choices=['Simple3DCNN', 'ResNet18_3D', 'ResNet50_3D', 'EfficientNetB0_3D'],
+                        choices=['Simple3DCNN', 'ResNet18_3D', 'ResNet50_3D', 'DenseNet121_3D', 'EfficientNetB0_3D', 
+                                'VisionTransformer3D', 'SwinUNETRClassifier', 'FullSwinUNETRClassifier'],
                         help="List of models to train (alternative to --model)")
     parser.add_argument("--run_all", action='store_true', default=False,
                         help="Run all available models")
@@ -2515,7 +2546,8 @@ def main():
     args = parser.parse_args()
 
     # Define available models
-    available_models = ["Simple3DCNN", "ResNet18_3D", "ResNet50_3D", "EfficientNetB0_3D"]
+    available_models = ["Simple3DCNN", "ResNet18_3D", "ResNet50_3D", "DenseNet121_3D", "EfficientNetB0_3D",
+                        "VisionTransformer3D", "SwinUNETRClassifier", "FullSwinUNETRClassifier"]
     
     # Determine which models to run
     if args.model:

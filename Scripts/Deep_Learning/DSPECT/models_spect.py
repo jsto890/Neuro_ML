@@ -17,6 +17,12 @@ import torch.nn.functional as F
 from typing import Optional, Tuple, Dict, Any
 import logging
 
+# Import MONAI models
+try:
+    from monai.networks.nets import DenseNet121
+except ImportError:
+    DenseNet121 = None
+
 logger = logging.getLogger(__name__)
 
 class Simple3DCNN_SPECT(nn.Module):
@@ -459,9 +465,11 @@ def get_3d_model(model_name, num_classes: int = 2, in_channels: int = 1, base_ch
       - "Simple3DCNN"        -> Simple3DCNN_SPECT
       - "ResNet18_3D"        -> ResNet3D_SPECT
       - "ResNet50_3D"        -> ResNet3D_SPECT
+      - "DenseNet121_3D"     -> MONAI DenseNet121
       - "EfficientNetB0_3D"  -> EfficientNet3D_SPECT
+      - Transformer models   -> See transformer_models.py
 
-    Note: Transformer and DenseNet variants are not supported in DSPECT at present.
+    Note: DenseNet121 requires MONAI to be installed.
     """
     name = str(model_name).lower()
     if name == "simple3dcnn":
@@ -475,6 +483,18 @@ def get_3d_model(model_name, num_classes: int = 2, in_channels: int = 1, base_ch
             num_classes=num_classes,
             base_channels=max(base_channels, 32)
         )
+    if name == "densenet121_3d":
+        if DenseNet121 is None:
+            raise ImportError("MONAI is required for 3D DenseNet. Install with 'pip install monai'.")
+        
+        if use_pretrained:
+            print("Warning: DenseNet121_3D does not support pretrained weights for 3D spatial dimensions.")
+            print("Creating DenseNet121_3D from scratch...")
+            model = DenseNet121(pretrained=False, spatial_dims=3, in_channels=in_channels, out_channels=num_classes)
+        else:
+            print("Creating DenseNet121_3D from scratch...")
+            model = DenseNet121(pretrained=False, spatial_dims=3, in_channels=in_channels, out_channels=num_classes)
+        return model
     if name == "efficientnetb0_3d":
         return EfficientNet3D_SPECT(
             num_classes=num_classes,
