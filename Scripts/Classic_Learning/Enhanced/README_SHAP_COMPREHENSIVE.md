@@ -37,14 +37,16 @@ python run_shap_comprehensive.py \
 ```
 
 ### Available Models (8 total)
-1. **randomforest** - RandomForestClassifier
-2. **extratrees** - ExtraTreesClassifier
-3. **gradientboosting** - GradientBoostingClassifier
-4. **xgboost** - XGBClassifier
-5. **lightgbm** - LGBMClassifier
-6. **svm** - SVC (with calibration)
-7. **logisticregression** - LogisticRegression
-8. **knn** - KNeighborsClassifier
+1. **randomforest** - RandomForestClassifier ✅ Binary & Multi-class
+2. **extratrees** - ExtraTreesClassifier ✅ Binary & Multi-class
+3. **gradientboosting** - GradientBoostingClassifier ⚠️ Binary only (SHAP limitation)
+4. **xgboost** - XGBClassifier ✅ Binary & Multi-class
+5. **lightgbm** - LGBMClassifier ✅ Binary & Multi-class
+6. **svm** - SVC (with calibration) ✅ Binary & Multi-class (slow)
+7. **logisticregression** - LogisticRegression ✅ Binary & Multi-class
+8. **knn** - KNeighborsClassifier ✅ Binary & Multi-class (slow)
+
+**Note:** For multi-class (3+ classes), GradientBoosting will automatically use a slower fallback (KernelExplainer). For faster results, exclude it: `--model_types randomforest extratrees xgboost lightgbm`
 
 ---
 

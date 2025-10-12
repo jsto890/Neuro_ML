@@ -134,11 +134,26 @@ class SHAPInterpreter:
         
         try:
             # Tree-based models: use TreeExplainer (fast and exact)
-            if isinstance(self.model, (RandomForestClassifier, GradientBoostingClassifier, 
-                                      ExtraTreesClassifier)):
+            if isinstance(self.model, (RandomForestClassifier, ExtraTreesClassifier)):
                 self.explainer = shap.TreeExplainer(self.model)
                 self.explainer_type = "tree"
                 self.logger.info(f"Using TreeExplainer for {model_class}")
+            
+            # GradientBoosting: TreeExplainer only supports binary, use KernelExplainer for multi-class
+            elif isinstance(self.model, GradientBoostingClassifier):
+                try:
+                    self.explainer = shap.TreeExplainer(self.model)
+                    self.explainer_type = "tree"
+                    self.logger.info(f"Using TreeExplainer for {model_class}")
+                except Exception as e:
+                    # Fallback to KernelExplainer for multi-class
+                    self.logger.warning(f"TreeExplainer failed for GradientBoosting (likely multi-class): {e}")
+                    self.logger.info(f"Falling back to KernelExplainer (slower but supports multi-class)")
+                    background_size = min(100, len(self.X_train))
+                    background = shap.kmeans(self.X_train, background_size)
+                    self.explainer = shap.KernelExplainer(self.model.predict_proba, background)
+                    self.explainer_type = "kernel"
+                    self.logger.warning(f"KernelExplainer can be slow for large datasets")
             
             # XGBoost
             elif XGBOOST_AVAILABLE and isinstance(self.model, XGBClassifier):
