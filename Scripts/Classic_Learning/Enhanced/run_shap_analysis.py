@@ -65,10 +65,35 @@ def load_data(data_path: str, test_size: float = 0.2, random_state: int = 42) ->
     # Separate features and labels
     y = df[label_col].values
     
-    # Remove non-feature columns
-    exclude_cols = [label_col, 'subject_id', 'Subject_ID', 'SubjectID', 'ID', 'id']
+    # Remove non-feature columns (metadata, IDs, etc.)
+    exclude_cols = [
+        label_col, 'subject_id', 'Subject_ID', 'SubjectID', 'ID', 'id',
+        'Subject', 'subject', 'Patient', 'patient', 'PatientID', 'patient_id'
+    ]
+    
+    # Get potential feature columns
     feature_cols = [col for col in df.columns if col not in exclude_cols]
-    X = df[feature_cols].values
+    
+    # Filter to only numeric columns (exclude version strings, etc.)
+    numeric_cols = []
+    for col in feature_cols:
+        # Check if column is numeric
+        if pd.api.types.is_numeric_dtype(df[col]):
+            numeric_cols.append(col)
+        else:
+            # Try to detect if it's accidentally stored as object but is numeric
+            try:
+                pd.to_numeric(df[col], errors='raise')
+                numeric_cols.append(col)
+            except (ValueError, TypeError):
+                logger.warning(f"Skipping non-numeric column: {col} (example value: {df[col].iloc[0]})")
+    
+    feature_cols = numeric_cols
+    
+    if not feature_cols:
+        raise ValueError("No numeric feature columns found in CSV!")
+    
+    X = df[feature_cols].values.astype(np.float64)
     feature_names = feature_cols
     
     logger.info(f"Loaded {len(X)} samples with {len(feature_names)} features")
@@ -127,9 +152,18 @@ def find_model_files(model_dir: Path) -> List[Path]:
     """
     model_files = []
     
+    # Exclude non-model files
+    exclude_patterns = ['scaler', 'selector', 'imputer', 'encoder', 'preprocessor']
+    
     # Look for .pkl files
     for pattern in ['*.pkl', '*.pickle']:
-        model_files.extend(model_dir.glob(pattern))
+        for file_path in model_dir.glob(pattern):
+            # Skip non-model files
+            filename_lower = file_path.stem.lower()
+            if any(exclude in filename_lower for exclude in exclude_patterns):
+                logger.info(f"Skipping non-model file: {file_path.name}")
+                continue
+            model_files.append(file_path)
     
     logger.info(f"Found {len(model_files)} model files in {model_dir}")
     return sorted(model_files)

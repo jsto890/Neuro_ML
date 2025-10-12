@@ -62,6 +62,18 @@ python run_shap_analysis.py \
 
 📖 **See `README_SHAP.md` for complete documentation and usage guide.**
 
+**Multi-fold analysis (compare across CV folds):**
+```bash
+python run_shap_multifold.py \
+    --cv_dir /path/to/run_20251010_171321 \
+    --data /path/to/radiomics_data.csv \
+    --output shap_multifold_results \
+    --model_type randomforest \
+    --class_names CN PD
+```
+
+📋 **Troubleshooting? See `SHAP_TROUBLESHOOTING.md`**
+
 ## Troubleshooting
 - If convergence warnings occur, increase `max_iter` in config
 - For best results, ensure input data is clean and preprocessed
