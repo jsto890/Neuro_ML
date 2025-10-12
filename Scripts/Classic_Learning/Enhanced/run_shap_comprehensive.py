@@ -335,11 +335,17 @@ def aggregate_shap_across_folds(fold_results: List[Dict], model_type: str) -> Di
         }
 
 
-def create_per_class_comparison(model_aggregates: Dict[str, Dict], output_dir: Path):
+def create_per_class_comparison(model_aggregates: Dict[str, Dict], output_dir: Path, data: Dict):
     """
     Create per-class feature importance comparison for multi-class problems.
     
     Generates separate analysis for each class (e.g., CN, AD, PD).
+    Includes directionality analysis (group means/SDs).
+    
+    Args:
+        model_aggregates: Aggregated model results
+        output_dir: Output directory
+        data: Original data dictionary with X_test, y_test
     """
     # Check if this is multi-class
     is_multiclass = False
@@ -481,21 +487,163 @@ def create_per_class_comparison(model_aggregates: Dict[str, Dict], output_dir: P
     plt.close()
     logger.info("Created multi-class per-class comparison plot")
     
-    # Summary log
+    # Create directionality analysis (group means/SDs)
     logger.info("\n" + "=" * 80)
-    logger.info("Per-Class Feature Summary:")
+    logger.info("Computing Feature Directionality (Group Means/SDs)")
+    logger.info("=" * 80)
+    
+    # Get test data from first model's fold results
+    sample_model = next(iter(valid_models.values()))
+    if sample_model['fold_results']:
+        # Get features from data - need to map to selected features
+        sample_fold = sample_model['fold_results'][0]
+        X_test_selected = sample_fold['X_test']
+        y_test = sample_fold['y_test']
+        feature_names_selected = sample_fold['feature_names']
+        
+        # Compute per-class statistics for top 5 features of each class
+        directionality_results = {}
+        
+        for class_idx, class_name in enumerate(class_names):
+            logger.info(f"\nAnalyzing directionality for {class_name}...")
+            
+            # Get top 5 features for this class
+            comparison_data = {'feature': feature_names}
+            
+            for model_type, data_model in valid_models.items():
+                model_shap = []
+                for feat_name in feature_names:
+                    if feat_name in data_model['feature_names']:
+                        idx = data_model['feature_names'].index(feat_name)
+                        model_shap.append(data_model['per_class'][class_name]['mean_shap'][idx])
+                    else:
+                        model_shap.append(0.0)
+                comparison_data[f'{model_type}_mean'] = model_shap
+            
+            df_class = pd.DataFrame(comparison_data)
+            mean_cols = [col for col in df_class.columns if col.endswith('_mean')]
+            df_class['consensus'] = df_class[mean_cols].mean(axis=1)
+            df_class = df_class.sort_values('consensus', ascending=False)
+            
+            top_5_features = df_class.head(5)['feature'].tolist()
+            
+            # Compute group statistics for these features
+            directionality_data = []
+            
+            for feat_name in top_5_features:
+                if feat_name not in feature_names_selected:
+                    continue
+                
+                feat_idx = feature_names_selected.index(feat_name)
+                feature_values = X_test_selected[:, feat_idx]
+                
+                # Per-class statistics
+                class_stats = {'feature': feat_name}
+                
+                for cls_idx, cls_name in enumerate(class_names):
+                    class_mask = (y_test == cls_idx)
+                    class_values = feature_values[class_mask]
+                    
+                    if len(class_values) > 0:
+                        mean_val = np.mean(class_values)
+                        std_val = np.std(class_values)
+                        class_stats[f'{cls_name}_mean'] = mean_val
+                        class_stats[f'{cls_name}_std'] = std_val
+                        class_stats[f'{cls_name}_n'] = len(class_values)
+                    else:
+                        class_stats[f'{cls_name}_mean'] = np.nan
+                        class_stats[f'{cls_name}_std'] = np.nan
+                        class_stats[f'{cls_name}_n'] = 0
+                
+                directionality_data.append(class_stats)
+            
+            # Create DataFrame
+            dir_df = pd.DataFrame(directionality_data)
+            
+            # Save CSV
+            dir_csv = output_dir / f"class_{class_name}_directionality_top5.csv"
+            dir_df.to_csv(dir_csv, index=False)
+            logger.info(f"  Saved {class_name} directionality to {dir_csv.name}")
+            
+            directionality_results[class_name] = dir_df
+        
+        # Create combined directionality table for all classes' top 5 features
+        logger.info("\nCreating combined directionality table...")
+        all_top_features = set()
+        for class_name in class_names:
+            if class_name in directionality_results:
+                all_top_features.update(directionality_results[class_name]['feature'].tolist())
+        
+        # Create comprehensive table
+        combined_dir_data = []
+        for feat_name in sorted(all_top_features):
+            if feat_name not in feature_names_selected:
+                continue
+            
+            feat_idx = feature_names_selected.index(feat_name)
+            feature_values = X_test_selected[:, feat_idx]
+            
+            row = {'feature': feat_name}
+            
+            for cls_idx, cls_name in enumerate(class_names):
+                class_mask = (y_test == cls_idx)
+                class_values = feature_values[class_mask]
+                
+                if len(class_values) > 0:
+                    row[f'{cls_name}_mean'] = np.mean(class_values)
+                    row[f'{cls_name}_std'] = np.std(class_values)
+                    row[f'{cls_name}_n'] = len(class_values)
+                else:
+                    row[f'{cls_name}_mean'] = np.nan
+                    row[f'{cls_name}_std'] = np.nan
+                    row[f'{cls_name}_n'] = 0
+            
+            combined_dir_data.append(row)
+        
+        combined_dir_df = pd.DataFrame(combined_dir_data)
+        combined_csv = output_dir / "all_classes_directionality_top_features.csv"
+        combined_dir_df.to_csv(combined_csv, index=False)
+        logger.info(f"Saved combined directionality to {combined_csv.name}")
+        
+        # Log interpretable summary
+        logger.info("\n" + "=" * 80)
+        logger.info("Feature Directionality Summary (Mean ± SD):")
+        logger.info("=" * 80)
+        
+        for class_name in class_names:
+            if class_name not in directionality_results:
+                continue
+            
+            logger.info(f"\n{class_name} - Top 5 Features with Group Statistics:")
+            dir_df = directionality_results[class_name]
+            
+            for _, row in dir_df.iterrows():
+                feat = row['feature']
+                logger.info(f"\n  Feature: {feat}")
+                
+                for cls_name in class_names:
+                    mean_col = f'{cls_name}_mean'
+                    std_col = f'{cls_name}_std'
+                    n_col = f'{cls_name}_n'
+                    
+                    if mean_col in row and not pd.isna(row[mean_col]):
+                        logger.info(f"    {cls_name:3s}: {row[mean_col]:8.4f} ± {row[std_col]:7.4f} (n={int(row[n_col])})")
+    
+    # Summary log (original)
+    logger.info("\n" + "=" * 80)
+    logger.info("Per-Class Feature Summary (SHAP Importance):")
     logger.info("=" * 80)
     
     for class_name in class_names:
         logger.info(f"\n{class_name} - Top 5 Features:")
         comparison_data = {'feature': feature_names}
         
-        for model_type, data in valid_models.items():
+        for model_type, data_model in valid_models.items():
             model_shap = []
             for feat_name in feature_names:
-                if feat_name in data['feature_names']:
-                    idx = data['feature_names'].index(feat_name)
-                    model_shap.append(data['per_class'][class_name]['mean_shap'][idx])
+                if feat_name in data_model['feature_names']:
+                    idx = data_model['feature_names'].index(feat_name)
+                    model_shap.append(data_model['per_class'][class_name]['mean_shap'][idx])
                 else:
                     model_shap.append(0.0)
             comparison_data[f'{model_type}_mean'] = model_shap
@@ -1080,7 +1228,7 @@ def main():
     compare_models(model_aggregates, output_dir)
     
     # Per-class comparison for multi-class problems
-    create_per_class_comparison(model_aggregates, output_dir)
+    create_per_class_comparison(model_aggregates, output_dir, data)
     
     # Create ensemble importance
     create_ensemble_importance(model_aggregates, output_dir)
@@ -1106,11 +1254,13 @@ def main():
     if any(v and v.get('is_multiclass', False) for v in model_aggregates.values()):
         sample_data = next(v for v in model_aggregates.values() if v and v.get('is_multiclass', False))
         class_names = sample_data['class_names']
-        logger.info("\n  Multi-class specific files:")
-        logger.info("  - multiclass_per_class_comparison.png (side-by-side)")
+        logger.info("\n  Per-class analysis files:")
+        logger.info("  - multiclass_per_class_comparison.png (side-by-side CN vs AD vs PD)")
+        logger.info("  - all_classes_directionality_top_features.csv (group means/SDs)")
         for class_name in class_names:
-            logger.info(f"  - class_{class_name}_feature_importance.csv")
-            logger.info(f"  - class_{class_name}_top_features.png")
+            logger.info(f"  - class_{class_name}_feature_importance.csv (SHAP importance)")
+            logger.info(f"  - class_{class_name}_top_features.png (top 20 plot)")
+            logger.info(f"  - class_{class_name}_directionality_top5.csv (mean±SD per class)")
     
     logger.info("=" * 80)
 
