@@ -21,6 +21,7 @@ import pandas as pd
 import logging
 from typing import List, Dict, Optional
 import warnings
+import json
 
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent))
@@ -179,15 +180,31 @@ def load_selected_features(model_dir: Path) -> Optional[List[str]]:
     Returns:
         List of selected feature names, or None if not found
     """
-    # Look for feature importance CSV
+    # Try JSON summary file first (most reliable)
+    json_file = model_dir / "enhanced_results_summary.json"
+    
+    if json_file.exists():
+        try:
+            with open(json_file, 'r') as f:
+                summary = json.load(f)
+            
+            if 'feature_names' in summary:
+                features = summary['feature_names']
+                logger.info(f"Loaded {len(features)} selected features from {json_file.name}")
+                return features
+        except Exception as e:
+            logger.warning(f"Could not load features from {json_file}: {e}")
+    
+    # Fallback: Try feature importance CSV (contains all features from all models)
     feature_csv = model_dir / "feature_importance_comparison.csv"
     
     if feature_csv.exists():
         try:
             df = pd.read_csv(feature_csv)
             if 'feature' in df.columns:
-                features = df['feature'].tolist()
-                logger.info(f"Loaded {len(features)} selected features from {feature_csv.name}")
+                # Get unique features (since CSV has one row per feature per model)
+                features = df['feature'].unique().tolist()
+                logger.warning(f"Loaded {len(features)} features from CSV (may include all models' features)")
                 return features
         except Exception as e:
             logger.warning(f"Could not load features from {feature_csv}: {e}")
