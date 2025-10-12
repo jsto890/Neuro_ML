@@ -35,6 +35,33 @@ python3 run_enhanced.py
 - Compare model performance to select the best for your data
 - Use feature importance to guide further research
 
+## 🔬 SHAP Interpretability (NEW!)
+
+**Generate comprehensive SHAP explanations for your models:**
+
+```bash
+# Analyze a trained model
+python run_shap_analysis.py \
+    --model outputs/rf_model.pkl \
+    --data /path/to/radiomics_data.csv \
+    --output shap_results
+
+# Analyze all models at once
+python run_shap_analysis.py \
+    --model_dir outputs/ \
+    --data /path/to/radiomics_data.csv \
+    --output shap_results \
+    --all
+```
+
+**What you get:**
+- Summary plots showing most important features
+- Dependence plots revealing feature relationships
+- Individual prediction explanations (waterfall plots)
+- Exportable SHAP values for further analysis
+
+📖 **See `README_SHAP.md` for complete documentation and usage guide.**
+
 ## Troubleshooting
 - If convergence warnings occur, increase `max_iter` in config
 - For best results, ensure input data is clean and preprocessed
