@@ -37,42 +37,47 @@ python3 run_enhanced.py
 
 ## 🔬 SHAP Interpretability (NEW!)
 
-**Generate comprehensive SHAP explanations for your models:**
-
+### Quick Start - Single Fold
 ```bash
-# Analyze a trained model
+# Analyze all models in a single fold
 python run_shap_analysis.py \
-    --model outputs/rf_model.pkl \
-    --data /path/to/radiomics_data.csv \
-    --output shap_results
-
-# Analyze all models at once
-python run_shap_analysis.py \
-    --model_dir outputs/ \
+    --model_dir outputs/outercv_fold_5/ \
     --data /path/to/radiomics_data.csv \
     --output shap_results \
+    --class_names CN PD \
     --all
 ```
 
-**What you get:**
-- Summary plots showing most important features
-- Dependence plots revealing feature relationships
-- Individual prediction explanations (waterfall plots)
-- Exportable SHAP values for further analysis
-
-📖 **See `README_SHAP.md` for complete documentation and usage guide.**
-
-**Multi-fold analysis (compare across CV folds):**
+### Comprehensive Analysis - All Folds, All Models ⭐ RECOMMENDED
 ```bash
+# Complete analysis: all models × all folds + ensemble
+python run_shap_comprehensive.py \
+    --cv_dir /path/to/run_20251010_171321 \
+    --data /path/to/radiomics_data.csv \
+    --output shap_comprehensive \
+    --model_types randomforest gradientboosting xgboost lightgbm \
+    --class_names CN PD
+```
+
+**What you get:**
+- ✅ Per-model SHAP averaged across all folds
+- ✅ Cross-model comparison (which features do different models prioritize?)
+- ✅ Ensemble feature importance (voting + weighted strategies)
+- ✅ Consensus biomarkers (stable across models AND folds)
+- ✅ Comprehensive visualizations and rankings
+
+### Single Model Analysis (compare across folds)
+```bash
+# Deep dive into one model across all folds
 python run_shap_multifold.py \
     --cv_dir /path/to/run_20251010_171321 \
     --data /path/to/radiomics_data.csv \
-    --output shap_multifold_results \
+    --output shap_multifold_rf \
     --model_type randomforest \
     --class_names CN PD
 ```
 
-📋 **Troubleshooting? See `SHAP_TROUBLESHOOTING.md`**
+📖 **See `README_SHAP_COMPREHENSIVE.md` for complete documentation**
 
 ## Troubleshooting
 - If convergence warnings occur, increase `max_iter` in config
