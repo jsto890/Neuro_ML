@@ -14,12 +14,20 @@ It generates:
 4. Comprehensive visualizations and rankings
 
 Usage:
+    # Analyze all models (default)
+    python run_shap_comprehensive.py \
+        --cv_dir /path/to/enhanced_run_SPECT/run_20251010_171321 \
+        --data /path/to/radiomics_spect.csv \
+        --output /path/to/shap_comprehensive_results \
+        --class_names CN PD
+    
+    # Or specify specific models
     python run_shap_comprehensive.py \
         --cv_dir /path/to/enhanced_run_SPECT/run_20251010_171321 \
         --data /path/to/radiomics_spect.csv \
         --output /path/to/shap_comprehensive_results \
         --class_names CN PD \
-        --model_types randomforest gradientboosting xgboost lightgbm
+        --model_types randomforest xgboost
 """
 
 import argparse
@@ -149,17 +157,38 @@ def aggregate_shap_across_folds(fold_results: List[Dict], model_type: str) -> Di
     """
     Aggregate SHAP values across folds for a single model type.
     
+    Handles varying feature sets across folds by finding common features.
+    
     Returns:
         Dictionary with aggregated statistics
     """
     if not fold_results:
         return None
     
-    feature_names = fold_results[0]['feature_names']
     n_folds = len(fold_results)
     
-    # Stack mean absolute SHAP values
-    shap_matrix = np.array([r['mean_abs_shap'] for r in fold_results])
+    # Find common features across all folds
+    feature_sets = [set(r['feature_names']) for r in fold_results]
+    common_features = feature_sets[0].intersection(*feature_sets[1:])
+    
+    if not common_features:
+        logger.warning(f"{model_type}: No common features across all folds!")
+        return None
+    
+    common_features = sorted(list(common_features))
+    n_features = len(common_features)
+    
+    logger.info(f"  Using {n_features} common features (folds had {[len(r['feature_names']) for r in fold_results]} features)")
+    
+    # Build SHAP matrix using only common features
+    shap_matrix = np.zeros((n_folds, n_features))
+    
+    for fold_idx, result in enumerate(fold_results):
+        # Map common features to this fold's feature indices
+        for feat_idx, feat_name in enumerate(common_features):
+            if feat_name in result['feature_names']:
+                orig_idx = result['feature_names'].index(feat_name)
+                shap_matrix[fold_idx, feat_idx] = result['mean_abs_shap'][orig_idx]
     
     # Compute statistics
     mean_shap = shap_matrix.mean(axis=0)
@@ -168,16 +197,29 @@ def aggregate_shap_across_folds(fold_results: List[Dict], model_type: str) -> Di
     cv_shap = std_shap / (mean_shap + 1e-10)  # Coefficient of variation
     
     # Rank consistency: how often is each feature in top 10 across folds
-    top_10_counts = np.zeros(len(feature_names))
-    for r in fold_results:
-        top_10_indices = np.argsort(r['mean_abs_shap'])[-10:]
+    # (only among common features)
+    top_10_counts = np.zeros(n_features)
+    for result in fold_results:
+        # Get top 10 from this fold's common features
+        fold_common_shap = []
+        for feat_name in common_features:
+            if feat_name in result['feature_names']:
+                orig_idx = result['feature_names'].index(feat_name)
+                fold_common_shap.append(result['mean_abs_shap'][orig_idx])
+            else:
+                fold_common_shap.append(0.0)
+        
+        fold_common_shap = np.array(fold_common_shap)
+        top_10_indices = np.argsort(fold_common_shap)[-10:]
         top_10_counts[top_10_indices] += 1
+    
     top_10_frequency = top_10_counts / n_folds
     
     return {
         'model_type': model_type,
         'n_folds': n_folds,
-        'feature_names': feature_names,
+        'feature_names': common_features,
+        'n_common_features': n_features,
         'mean_shap': mean_shap,
         'std_shap': std_shap,
         'median_shap': median_shap,
@@ -191,35 +233,57 @@ def compare_models(model_aggregates: Dict[str, Dict], output_dir: Path):
     """
     Compare feature importance across different model types.
     
+    Finds common features across all models for fair comparison.
+    
     Creates comparison plots and rankings.
     """
     logger.info("=" * 80)
     logger.info("Comparing Feature Importance Across Models")
     logger.info("=" * 80)
     
-    # Get common feature names
-    feature_names = None
-    for model_data in model_aggregates.values():
-        if model_data is not None:
-            feature_names = model_data['feature_names']
-            break
+    # Find common features across ALL models
+    valid_models = {k: v for k, v in model_aggregates.items() if v is not None}
     
-    if feature_names is None:
+    if not valid_models:
         logger.error("No valid model data found")
         return
     
+    # Get intersection of features across all models
+    feature_sets = [set(v['feature_names']) for v in valid_models.values()]
+    common_features = feature_sets[0].intersection(*feature_sets[1:]) if len(feature_sets) > 1 else feature_sets[0]
+    feature_names = sorted(list(common_features))
     n_features = len(feature_names)
-    model_types = list(model_aggregates.keys())
     
-    # Create comparison DataFrame
+    logger.info(f"Using {n_features} features common to all models")
+    for model_type, data in valid_models.items():
+        logger.info(f"  {model_type}: {data['n_common_features']} features (across folds)")
+    model_types = list(valid_models.keys())
+    
+    # Create comparison DataFrame using only common features
     comparison_data = {'feature': feature_names}
     
     for model_type in model_types:
-        if model_aggregates[model_type] is not None:
-            data = model_aggregates[model_type]
-            comparison_data[f'{model_type}_mean'] = data['mean_shap']
-            comparison_data[f'{model_type}_cv'] = data['cv_shap']
-            comparison_data[f'{model_type}_top10_freq'] = data['top_10_frequency']
+        data = valid_models[model_type]
+        
+        # Map common features to this model's indices
+        model_mean_shap = []
+        model_cv = []
+        model_top10 = []
+        
+        for feat_name in feature_names:
+            if feat_name in data['feature_names']:
+                idx = data['feature_names'].index(feat_name)
+                model_mean_shap.append(data['mean_shap'][idx])
+                model_cv.append(data['cv_shap'][idx])
+                model_top10.append(data['top_10_frequency'][idx])
+            else:
+                model_mean_shap.append(0.0)
+                model_cv.append(1.0)
+                model_top10.append(0.0)
+        
+        comparison_data[f'{model_type}_mean'] = model_mean_shap
+        comparison_data[f'{model_type}_cv'] = model_cv
+        comparison_data[f'{model_type}_top10_freq'] = model_top10
     
     df = pd.DataFrame(comparison_data)
     
@@ -356,33 +420,45 @@ def create_ensemble_importance(model_aggregates: Dict[str, Dict], output_dir: Pa
     """
     Create ensemble-based feature importance by voting/averaging across all models and folds.
     
+    Uses common features across all models for fair comparison.
+    
     This simulates what an ensemble model would learn.
     """
     logger.info("=" * 80)
     logger.info("Computing Ensemble Feature Importance")
     logger.info("=" * 80)
     
-    # Get feature names
-    feature_names = None
-    for model_data in model_aggregates.values():
-        if model_data is not None:
-            feature_names = model_data['feature_names']
-            break
+    # Find common features across all models
+    valid_models = {k: v for k, v in model_aggregates.items() if v is not None}
     
-    if feature_names is None:
+    if not valid_models:
         logger.error("No valid model data found")
         return
     
+    # Get intersection of features
+    feature_sets = [set(v['feature_names']) for v in valid_models.values()]
+    common_features = feature_sets[0].intersection(*feature_sets[1:]) if len(feature_sets) > 1 else feature_sets[0]
+    feature_names = sorted(list(common_features))
     n_features = len(feature_names)
     
-    # Strategy 1: Simple average across models
+    logger.info(f"Using {n_features} features common to all models")
+    
+    # Strategy 1: Simple average across models (using common features)
     all_mean_shaps = []
     model_weights = {}
     
-    for model_type, data in model_aggregates.items():
-        if data is not None:
-            all_mean_shaps.append(data['mean_shap'])
-            model_weights[model_type] = 1.0  # Equal weighting
+    for model_type, data in valid_models.items():
+        # Map common features to this model's SHAP values
+        model_shap = []
+        for feat_name in feature_names:
+            if feat_name in data['feature_names']:
+                idx = data['feature_names'].index(feat_name)
+                model_shap.append(data['mean_shap'][idx])
+            else:
+                model_shap.append(0.0)
+        
+        all_mean_shaps.append(np.array(model_shap))
+        model_weights[model_type] = 1.0  # Equal weighting
     
     if not all_mean_shaps:
         logger.error("No model data available for ensemble")
@@ -395,14 +471,28 @@ def create_ensemble_importance(model_aggregates: Dict[str, Dict], output_dir: Pa
     weighted_shaps = []
     weights = []
     
-    for model_type, data in model_aggregates.items():
-        if data is not None:
-            # Weight inversely proportional to CV (more stable = higher weight)
-            cv_mean = data['cv_shap'].mean()
-            weight = 1.0 / (cv_mean + 0.1)  # Add small constant to avoid division by zero
-            weighted_shaps.append(data['mean_shap'] * weight)
-            weights.append(weight)
-            model_weights[model_type] = weight
+    for model_type, data in valid_models.items():
+        # Map common features
+        model_shap = []
+        model_cv = []
+        for feat_name in feature_names:
+            if feat_name in data['feature_names']:
+                idx = data['feature_names'].index(feat_name)
+                model_shap.append(data['mean_shap'][idx])
+                model_cv.append(data['cv_shap'][idx])
+            else:
+                model_shap.append(0.0)
+                model_cv.append(1.0)
+        
+        model_shap = np.array(model_shap)
+        model_cv = np.array(model_cv)
+        
+        # Weight inversely proportional to CV (more stable = higher weight)
+        cv_mean = model_cv.mean()
+        weight = 1.0 / (cv_mean + 0.1)  # Add small constant to avoid division by zero
+        weighted_shaps.append(model_shap * weight)
+        weights.append(weight)
+        model_weights[model_type] = weight
     
     weights = np.array(weights)
     ensemble_weighted = np.sum(weighted_shaps, axis=0) / weights.sum()
@@ -411,12 +501,21 @@ def create_ensemble_importance(model_aggregates: Dict[str, Dict], output_dir: Pa
     top_k = 20
     vote_counts = np.zeros(n_features)
     
-    for model_type, data in model_aggregates.items():
-        if data is not None:
-            top_k_indices = np.argsort(data['mean_shap'])[-top_k:]
-            vote_counts[top_k_indices] += 1
+    for model_type, data in valid_models.items():
+        # Map common features
+        model_shap = []
+        for feat_name in feature_names:
+            if feat_name in data['feature_names']:
+                idx = data['feature_names'].index(feat_name)
+                model_shap.append(data['mean_shap'][idx])
+            else:
+                model_shap.append(0.0)
+        
+        model_shap = np.array(model_shap)
+        top_k_indices = np.argsort(model_shap)[-top_k:]
+        vote_counts[top_k_indices] += 1
     
-    vote_frequency = vote_counts / len(model_aggregates)
+    vote_frequency = vote_counts / len(valid_models)
     
     # Create ensemble DataFrame
     ensemble_df = pd.DataFrame({
@@ -428,10 +527,21 @@ def create_ensemble_importance(model_aggregates: Dict[str, Dict], output_dir: Pa
     })
     
     # Add individual model importances
-    for model_type, data in model_aggregates.items():
-        if data is not None:
-            ensemble_df[f'{model_type}_importance'] = data['mean_shap']
-            ensemble_df[f'{model_type}_cv'] = data['cv_shap']
+    for model_type, data in valid_models.items():
+        # Map common features
+        model_shap = []
+        model_cv = []
+        for feat_name in feature_names:
+            if feat_name in data['feature_names']:
+                idx = data['feature_names'].index(feat_name)
+                model_shap.append(data['mean_shap'][idx])
+                model_cv.append(data['cv_shap'][idx])
+            else:
+                model_shap.append(0.0)
+                model_cv.append(1.0)
+        
+        ensemble_df[f'{model_type}_importance'] = model_shap
+        ensemble_df[f'{model_type}_cv'] = model_cv
     
     # Sort by ensemble importance
     ensemble_df = ensemble_df.sort_values('ensemble_weighted', ascending=False)
@@ -531,12 +641,13 @@ def create_ensemble_importance(model_aggregates: Dict[str, Dict], output_dir: Pa
     
     logger.info(f"\nTop 10 Ensemble Features (stability-weighted):")
     for i, row in ensemble_df.head(10).iterrows():
-        logger.info(f"  {row['feature']:50s} | Importance: {row['ensemble_weighted']:.4f} | Votes: {int(row['vote_count'])}/{len(model_aggregates)}")
+        logger.info(f"  {row['feature']:50s} | Importance: {row['ensemble_weighted']:.4f} | Votes: {int(row['vote_count'])}/{len(valid_models)}")
     
     # Save ensemble summary
     summary = {
         'ensemble_strategy': 'stability_weighted',
-        'n_models': len(model_aggregates),
+        'n_models': len(valid_models),
+        'n_common_features': n_features,
         'model_weights': model_weights,
         'top_10_features': ensemble_df.head(10)[['feature', 'ensemble_weighted', 'vote_frequency']].to_dict('records'),
         'top_20_by_voting': ensemble_df.nlargest(20, 'vote_frequency')[['feature', 'vote_frequency', 'vote_count']].to_dict('records')
@@ -562,8 +673,9 @@ def main():
     parser.add_argument('--output', type=str, required=True,
                        help='Output directory for comprehensive results')
     parser.add_argument('--model_types', nargs='+', type=str,
-                       default=['randomforest', 'gradientboosting', 'xgboost', 'lightgbm'],
-                       help='Model types to analyze (space-separated)')
+                       default=['randomforest', 'extratrees', 'gradientboosting', 
+                                'xgboost', 'lightgbm', 'svm', 'logisticregression', 'knn'],
+                       help='Model types to analyze (space-separated). Default: all 8 models')
     parser.add_argument('--class_names', nargs='+', type=str,
                        help='Class names (e.g., --class_names CN AD PD)')
     parser.add_argument('--test_size', type=float, default=0.2,

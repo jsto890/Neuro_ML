@@ -50,14 +50,18 @@ python run_shap_analysis.py \
 
 ### Comprehensive Analysis - All Folds, All Models ⭐ RECOMMENDED
 ```bash
-# Complete analysis: all models × all folds + ensemble
+# Complete analysis: ALL 8 models × all folds + ensemble
 python run_shap_comprehensive.py \
     --cv_dir /path/to/run_20251010_171321 \
     --data /path/to/radiomics_data.csv \
     --output shap_comprehensive \
-    --model_types randomforest gradientboosting xgboost lightgbm \
     --class_names CN PD
 ```
+
+**Analyzes all 8 models by default:**
+- RandomForest, ExtraTrees, GradientBoosting
+- XGBoost, LightGBM
+- SVM, LogisticRegression, KNN
 
 **What you get:**
 - ✅ Per-model SHAP averaged across all folds
@@ -65,6 +69,18 @@ python run_shap_comprehensive.py \
 - ✅ Ensemble feature importance (voting + weighted strategies)
 - ✅ Consensus biomarkers (stable across models AND folds)
 - ✅ Comprehensive visualizations and rankings
+
+**Speed options:**
+```bash
+# Fast: Tree models only (~10 min)
+--model_types randomforest extratrees gradientboosting xgboost lightgbm
+
+# Medium: Tree + Linear (~20 min)
+--model_types randomforest xgboost lightgbm logisticregression
+
+# Full: All 8 models (~30-40 min)
+# (no --model_types argument, uses default)
+```
 
 ### Single Model Analysis (compare across folds)
 ```bash

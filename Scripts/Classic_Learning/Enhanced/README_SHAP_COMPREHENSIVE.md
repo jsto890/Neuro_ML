@@ -20,13 +20,31 @@ It generates three levels of analysis:
 ```bash
 cd Scripts/Classic_Learning/Enhanced/
 
+# Analyze ALL 8 models (default - recommended!)
 python run_shap_comprehensive.py \
     --cv_dir ~/data/classic_results/enhanced_run_SPECT/run_20251010_171321 \
     --data ~/data/radiomics_spect.csv \
     --output ~/data/shap_comprehensive \
-    --model_types randomforest gradientboosting xgboost lightgbm \
+    --class_names CN PD
+
+# Or specify specific models
+python run_shap_comprehensive.py \
+    --cv_dir ~/data/classic_results/enhanced_run_SPECT/run_20251010_171321 \
+    --data ~/data/radiomics_spect.csv \
+    --output ~/data/shap_comprehensive_fast \
+    --model_types randomforest xgboost lightgbm \
     --class_names CN PD
 ```
+
+### Available Models (8 total)
+1. **randomforest** - RandomForestClassifier
+2. **extratrees** - ExtraTreesClassifier
+3. **gradientboosting** - GradientBoostingClassifier
+4. **xgboost** - XGBClassifier
+5. **lightgbm** - LGBMClassifier
+6. **svm** - SVC (with calibration)
+7. **logisticregression** - LogisticRegression
+8. **knn** - KNeighborsClassifier
 
 ---
 
@@ -182,13 +200,37 @@ Feature: original_shape_Elongation
 
 ### Examples
 
-**Analyze specific models:**
+**All 8 models (default - comprehensive):**
 ```bash
 python run_shap_comprehensive.py \
     --cv_dir ~/data/results/ \
     --data ~/data/features.csv \
-    --output ~/data/shap_rf_xgb \
-    --model_types randomforest xgboost
+    --output ~/data/shap_all \
+    --class_names CN PD
+# No --model_types = all 8 models
+# Expected time: 30-40 minutes for 5 folds
+```
+
+**Fast mode (tree models only):**
+```bash
+python run_shap_comprehensive.py \
+    --cv_dir ~/data/results/ \
+    --data ~/data/features.csv \
+    --output ~/data/shap_trees \
+    --model_types randomforest extratrees gradientboosting xgboost lightgbm \
+    --class_names CN PD
+# Expected time: 10-15 minutes for 5 folds
+```
+
+**Best models only:**
+```bash
+python run_shap_comprehensive.py \
+    --cv_dir ~/data/results/ \
+    --data ~/data/features.csv \
+    --output ~/data/shap_best \
+    --model_types randomforest xgboost lightgbm \
+    --class_names CN PD
+# Expected time: 6-10 minutes for 5 folds
 ```
 
 **Multi-class (3 classes):**
@@ -198,15 +240,7 @@ python run_shap_comprehensive.py \
     --data ~/data/features.csv \
     --output ~/data/shap_multiclass \
     --class_names CN AD PD
-```
-
-**All models:**
-```bash
-python run_shap_comprehensive.py \
-    --cv_dir ~/data/results/ \
-    --data ~/data/features.csv \
-    --output ~/data/shap_all \
-    --model_types randomforest extratrees gradientboosting xgboost lightgbm svm logisticregression knn
+# Handles 3-class automatically
 ```
 
 ---
@@ -323,23 +357,37 @@ Use `model_comparison_summary.json` to see which models:
 
 ### Computational Cost
 
-- **Time**: ~5-30 minutes depending on:
-  - Number of folds (typically 5)
-  - Number of models (4-8 typical)
-  - Dataset size
-  - Model types (tree models faster than KNN/SVM)
+**Time Estimates (5 folds × N models):**
 
-- **Memory**: ~2-8 GB depending on:
-  - Number of features
-  - Number of samples
-  - Number of models loaded simultaneously
+| Models | Combination | Time | Use Case |
+|--------|-------------|------|----------|
+| 3 | RF, XGB, LGB | 6-10 min | Quick analysis |
+| 5 | All tree models | 10-15 min | Tree-based ensemble |
+| 6 | Tree + Linear | 15-25 min | Balanced |
+| 8 | **All models (default)** | 30-40 min | **Full comprehensive** ⭐ |
+
+**Speed by model type:**
+- ⚡ **Very Fast** (~30s per fold): RandomForest, ExtraTrees, XGBoost, LightGBM, GradientBoosting
+- 🐢 **Slow** (~2-5 min per fold): SVM, KNN, LogisticRegression
+
+**Memory**: 2-8 GB depending on dataset size
 
 ### Optimization Tips
 
-1. **Start small**: Test with 2-3 models first
-2. **Parallel-friendly**: Could parallelize across folds (not implemented yet)
-3. **Caching**: Saves time on repeated analyses
-4. **Model selection**: Tree models (RF, XGB, LGB) are much faster than SVM/KNN
+1. **Start with tree models**: `--model_types randomforest xgboost lightgbm`
+2. **Test on 1-2 folds first**: Modify script or use single-fold analysis
+3. **Use best-performing models**: Check `enhanced_results_summary.json` for top models
+4. **Tree models are fastest**: RF, XGB, LGB, GB are 10-20× faster than SVM/KNN
+5. **For publication**: Use all 8 models for completeness
+
+**Recommended workflow:**
+```bash
+# 1. Fast test (3 models, ~10 min)
+python run_shap_comprehensive.py ... --model_types randomforest xgboost lightgbm
+
+# 2. If results look good, run full analysis (8 models, ~35 min)
+python run_shap_comprehensive.py ... # (no --model_types = all 8)
+```
 
 ---
 
