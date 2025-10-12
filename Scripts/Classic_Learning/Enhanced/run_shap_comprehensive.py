@@ -129,7 +129,7 @@ def get_shap_for_model_fold(fold_dir: Path, model_type: str, data: Dict,
         n_classes = len(class_names)
         
         # Handle different SHAP formats and extract per-class
-        if analyze_all_classes and n_classes > 2:
+        if analyze_all_classes and n_classes >= 2:
             # Multi-class: get SHAP for each class
             per_class_shap = {}
             per_class_mean_abs = {}
@@ -352,7 +352,12 @@ def create_per_class_comparison(model_aggregates: Dict[str, Dict], output_dir: P
             break
     
     if not is_multiclass:
-        logger.info("Binary classification detected, skipping per-class analysis")
+        logger.info("Skipping per-class analysis (not enabled)")
+        return
+    
+    # Also check if we actually have per-class data
+    if not class_names:
+        logger.info("No class names found, skipping per-class analysis")
         return
     
     logger.info("=" * 80)
