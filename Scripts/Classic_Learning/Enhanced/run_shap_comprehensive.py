@@ -66,9 +66,12 @@ def find_fold_directories(cv_dir: Path) -> List[Path]:
 
 
 def get_shap_for_model_fold(fold_dir: Path, model_type: str, data: Dict,
-                            class_names: List[str]) -> Optional[Dict]:
+                            class_names: List[str], analyze_all_classes: bool = True) -> Optional[Dict]:
     """
     Compute SHAP values for a single model in a single fold.
+    
+    Args:
+        analyze_all_classes: If True, return SHAP for all classes separately
     
     Returns:
         Dictionary with SHAP values and metadata, or None if failed
@@ -122,31 +125,72 @@ def get_shap_for_model_fold(fold_dir: Path, model_type: str, data: Dict,
         # Compute SHAP values
         shap_values = interpreter.compute_shap_values(current_data['X_test'])
         
-        # Handle different SHAP formats
-        if isinstance(shap_values, list):
-            # Multi-class: use class 1 (positive class for binary, or specific class)
-            shap_vals = shap_values[1] if len(shap_values) == 2 else shap_values[-1]
+        # Determine number of classes
+        n_classes = len(class_names)
+        
+        # Handle different SHAP formats and extract per-class
+        if analyze_all_classes and n_classes > 2:
+            # Multi-class: get SHAP for each class
+            per_class_shap = {}
+            per_class_mean_abs = {}
+            
+            if isinstance(shap_values, list):
+                # List of arrays, one per class
+                for class_idx, class_name in enumerate(class_names):
+                    shap_vals = shap_values[class_idx]
+                    if shap_vals.ndim == 3:
+                        shap_vals = shap_vals[:, :, class_idx]
+                    per_class_shap[class_name] = shap_vals
+                    per_class_mean_abs[class_name] = np.abs(shap_vals).mean(axis=0)
+            elif shap_values.ndim == 3:
+                # 3D array: (samples, features, classes)
+                for class_idx, class_name in enumerate(class_names):
+                    shap_vals = shap_values[:, :, class_idx]
+                    per_class_shap[class_name] = shap_vals
+                    per_class_mean_abs[class_name] = np.abs(shap_vals).mean(axis=0)
+            else:
+                # Fallback: use as-is for all classes
+                for class_name in class_names:
+                    per_class_shap[class_name] = shap_values
+                    per_class_mean_abs[class_name] = np.abs(shap_values).mean(axis=0)
+            
+            logger.info(f"✓ Fold {fold_num}, {model_type}: SHAP computed for {n_classes} classes")
+            
+            return {
+                'fold_num': fold_num,
+                'model_type': model_type,
+                'per_class_shap': per_class_shap,
+                'per_class_mean_abs': per_class_mean_abs,
+                'feature_names': current_data['feature_names'],
+                'X_test': current_data['X_test'],
+                'y_test': current_data['y_test'],
+                'is_multiclass': True,
+                'class_names': class_names
+            }
         else:
-            shap_vals = shap_values
-        
-        # Handle 3D arrays
-        if shap_vals.ndim == 3:
-            shap_vals = shap_vals[:, :, 1]  # Use class 1
-        
-        # Compute mean absolute SHAP
-        mean_abs_shap = np.abs(shap_vals).mean(axis=0)
-        
-        logger.info(f"✓ Fold {fold_num}, {model_type}: SHAP computed successfully")
-        
-        return {
-            'fold_num': fold_num,
-            'model_type': model_type,
-            'shap_values': shap_vals,
-            'mean_abs_shap': mean_abs_shap,
-            'feature_names': current_data['feature_names'],
-            'X_test': current_data['X_test'],
-            'y_test': current_data['y_test']
-        }
+            # Binary or single class analysis
+            if isinstance(shap_values, list):
+                shap_vals = shap_values[1] if len(shap_values) == 2 else shap_values[-1]
+            else:
+                shap_vals = shap_values
+            
+            if shap_vals.ndim == 3:
+                shap_vals = shap_vals[:, :, 1]
+            
+            mean_abs_shap = np.abs(shap_vals).mean(axis=0)
+            
+            logger.info(f"✓ Fold {fold_num}, {model_type}: SHAP computed successfully")
+            
+            return {
+                'fold_num': fold_num,
+                'model_type': model_type,
+                'shap_values': shap_vals,
+                'mean_abs_shap': mean_abs_shap,
+                'feature_names': current_data['feature_names'],
+                'X_test': current_data['X_test'],
+                'y_test': current_data['y_test'],
+                'is_multiclass': False
+            }
     
     except Exception as e:
         logger.error(f"✗ Fold {fold_num}, {model_type}: {e}")
@@ -158,6 +202,7 @@ def aggregate_shap_across_folds(fold_results: List[Dict], model_type: str) -> Di
     Aggregate SHAP values across folds for a single model type.
     
     Handles varying feature sets across folds by finding common features.
+    Supports multi-class by aggregating per-class SHAP values.
     
     Returns:
         Dictionary with aggregated statistics
@@ -166,6 +211,7 @@ def aggregate_shap_across_folds(fold_results: List[Dict], model_type: str) -> Di
         return None
     
     n_folds = len(fold_results)
+    is_multiclass = fold_results[0].get('is_multiclass', False)
     
     # Find common features across all folds
     feature_sets = [set(r['feature_names']) for r in fold_results]
@@ -180,53 +226,282 @@ def aggregate_shap_across_folds(fold_results: List[Dict], model_type: str) -> Di
     
     logger.info(f"  Using {n_features} common features (folds had {[len(r['feature_names']) for r in fold_results]} features)")
     
-    # Build SHAP matrix using only common features
-    shap_matrix = np.zeros((n_folds, n_features))
-    
-    for fold_idx, result in enumerate(fold_results):
-        # Map common features to this fold's feature indices
-        for feat_idx, feat_name in enumerate(common_features):
-            if feat_name in result['feature_names']:
-                orig_idx = result['feature_names'].index(feat_name)
-                shap_matrix[fold_idx, feat_idx] = result['mean_abs_shap'][orig_idx]
-    
-    # Compute statistics
-    mean_shap = shap_matrix.mean(axis=0)
-    std_shap = shap_matrix.std(axis=0)
-    median_shap = np.median(shap_matrix, axis=0)
-    cv_shap = std_shap / (mean_shap + 1e-10)  # Coefficient of variation
-    
-    # Rank consistency: how often is each feature in top 10 across folds
-    # (only among common features)
-    top_10_counts = np.zeros(n_features)
-    for result in fold_results:
-        # Get top 10 from this fold's common features
-        fold_common_shap = []
-        for feat_name in common_features:
-            if feat_name in result['feature_names']:
-                orig_idx = result['feature_names'].index(feat_name)
-                fold_common_shap.append(result['mean_abs_shap'][orig_idx])
-            else:
-                fold_common_shap.append(0.0)
+    if is_multiclass:
+        # Multi-class: aggregate per class
+        class_names = fold_results[0]['class_names']
+        per_class_aggregates = {}
         
-        fold_common_shap = np.array(fold_common_shap)
-        top_10_indices = np.argsort(fold_common_shap)[-10:]
-        top_10_counts[top_10_indices] += 1
+        for class_name in class_names:
+            # Build SHAP matrix for this class
+            shap_matrix = np.zeros((n_folds, n_features))
+            
+            for fold_idx, result in enumerate(fold_results):
+                for feat_idx, feat_name in enumerate(common_features):
+                    if feat_name in result['feature_names']:
+                        orig_idx = result['feature_names'].index(feat_name)
+                        shap_matrix[fold_idx, feat_idx] = result['per_class_mean_abs'][class_name][orig_idx]
+            
+            # Compute statistics for this class
+            mean_shap = shap_matrix.mean(axis=0)
+            std_shap = shap_matrix.std(axis=0)
+            median_shap = np.median(shap_matrix, axis=0)
+            cv_shap = std_shap / (mean_shap + 1e-10)
+            
+            # Top 10 frequency
+            top_10_counts = np.zeros(n_features)
+            for result in fold_results:
+                fold_common_shap = []
+                for feat_name in common_features:
+                    if feat_name in result['feature_names']:
+                        orig_idx = result['feature_names'].index(feat_name)
+                        fold_common_shap.append(result['per_class_mean_abs'][class_name][orig_idx])
+                    else:
+                        fold_common_shap.append(0.0)
+                
+                fold_common_shap = np.array(fold_common_shap)
+                top_10_indices = np.argsort(fold_common_shap)[-10:]
+                top_10_counts[top_10_indices] += 1
+            
+            top_10_frequency = top_10_counts / n_folds
+            
+            per_class_aggregates[class_name] = {
+                'mean_shap': mean_shap,
+                'std_shap': std_shap,
+                'median_shap': median_shap,
+                'cv_shap': cv_shap,
+                'top_10_frequency': top_10_frequency
+            }
+        
+        return {
+            'model_type': model_type,
+            'n_folds': n_folds,
+            'feature_names': common_features,
+            'n_common_features': n_features,
+            'is_multiclass': True,
+            'class_names': class_names,
+            'per_class': per_class_aggregates,
+            'fold_results': fold_results
+        }
     
-    top_10_frequency = top_10_counts / n_folds
+    else:
+        # Binary classification
+        # Build SHAP matrix using only common features
+        shap_matrix = np.zeros((n_folds, n_features))
+        
+        for fold_idx, result in enumerate(fold_results):
+            # Map common features to this fold's feature indices
+            for feat_idx, feat_name in enumerate(common_features):
+                if feat_name in result['feature_names']:
+                    orig_idx = result['feature_names'].index(feat_name)
+                    shap_matrix[fold_idx, feat_idx] = result['mean_abs_shap'][orig_idx]
     
-    return {
-        'model_type': model_type,
-        'n_folds': n_folds,
-        'feature_names': common_features,
-        'n_common_features': n_features,
-        'mean_shap': mean_shap,
-        'std_shap': std_shap,
-        'median_shap': median_shap,
-        'cv_shap': cv_shap,
-        'top_10_frequency': top_10_frequency,
-        'fold_results': fold_results
-    }
+        # Compute statistics
+        mean_shap = shap_matrix.mean(axis=0)
+        std_shap = shap_matrix.std(axis=0)
+        median_shap = np.median(shap_matrix, axis=0)
+        cv_shap = std_shap / (mean_shap + 1e-10)  # Coefficient of variation
+        
+        # Rank consistency: how often is each feature in top 10 across folds
+        # (only among common features)
+        top_10_counts = np.zeros(n_features)
+        for result in fold_results:
+            # Get top 10 from this fold's common features
+            fold_common_shap = []
+            for feat_name in common_features:
+                if feat_name in result['feature_names']:
+                    orig_idx = result['feature_names'].index(feat_name)
+                    fold_common_shap.append(result['mean_abs_shap'][orig_idx])
+                else:
+                    fold_common_shap.append(0.0)
+            
+            fold_common_shap = np.array(fold_common_shap)
+            top_10_indices = np.argsort(fold_common_shap)[-10:]
+            top_10_counts[top_10_indices] += 1
+        
+        top_10_frequency = top_10_counts / n_folds
+        
+        return {
+            'model_type': model_type,
+            'n_folds': n_folds,
+            'feature_names': common_features,
+            'n_common_features': n_features,
+            'mean_shap': mean_shap,
+            'std_shap': std_shap,
+            'median_shap': median_shap,
+            'cv_shap': cv_shap,
+            'top_10_frequency': top_10_frequency,
+            'is_multiclass': False,
+            'fold_results': fold_results
+        }
+
+
+def create_per_class_comparison(model_aggregates: Dict[str, Dict], output_dir: Path):
+    """
+    Create per-class feature importance comparison for multi-class problems.
+    
+    Generates separate analysis for each class (e.g., CN, AD, PD).
+    """
+    # Check if this is multi-class
+    is_multiclass = False
+    class_names = []
+    
+    for model_data in model_aggregates.values():
+        if model_data and model_data.get('is_multiclass', False):
+            is_multiclass = True
+            class_names = model_data['class_names']
+            break
+    
+    if not is_multiclass:
+        logger.info("Binary classification detected, skipping per-class analysis")
+        return
+    
+    logger.info("=" * 80)
+    logger.info(f"Creating Per-Class Comparison for {len(class_names)} Classes")
+    logger.info("=" * 80)
+    
+    # Get valid models
+    valid_models = {k: v for k, v in model_aggregates.items() if v is not None and v.get('is_multiclass', False)}
+    
+    if not valid_models:
+        logger.error("No valid multi-class model data found")
+        return
+    
+    # For each class, create comparison
+    for class_idx, class_name in enumerate(class_names):
+        logger.info(f"\nAnalyzing class: {class_name}")
+        
+        # Get common features
+        feature_sets = [set(v['feature_names']) for v in valid_models.values()]
+        common_features = feature_sets[0].intersection(*feature_sets[1:]) if len(feature_sets) > 1 else feature_sets[0]
+        feature_names = sorted(list(common_features))
+        n_features = len(feature_names)
+        
+        # Build comparison DataFrame for this class
+        comparison_data = {'feature': feature_names}
+        
+        for model_type, data in valid_models.items():
+            model_shap = []
+            for feat_name in feature_names:
+                if feat_name in data['feature_names']:
+                    idx = data['feature_names'].index(feat_name)
+                    model_shap.append(data['per_class'][class_name]['mean_shap'][idx])
+                else:
+                    model_shap.append(0.0)
+            comparison_data[f'{model_type}_mean'] = model_shap
+        
+        df_class = pd.DataFrame(comparison_data)
+        
+        # Compute consensus for this class
+        mean_cols = [col for col in df_class.columns if col.endswith('_mean')]
+        df_class['consensus'] = df_class[mean_cols].mean(axis=1)
+        df_class = df_class.sort_values('consensus', ascending=False)
+        
+        # Save CSV
+        csv_path = output_dir / f"class_{class_name}_feature_importance.csv"
+        df_class.to_csv(csv_path, index=False)
+        logger.info(f"  Saved {class_name} features to {csv_path.name}")
+        
+        # Plot: Top features for this class (grouped by model)
+        plt.figure(figsize=(14, 10))
+        top_n = 20
+        top_features = df_class.head(top_n)
+        
+        x = np.arange(len(top_features))
+        width = 0.8 / len(valid_models)
+        
+        for i, model_type in enumerate(valid_models.keys()):
+            col_name = f'{model_type}_mean'
+            offset = width * (i - len(valid_models)/2 + 0.5)
+            plt.bar(x + offset, top_features[col_name], width, 
+                   label=model_type.title(), alpha=0.8)
+        
+        plt.xlabel('Feature', fontsize=12)
+        plt.ylabel('Mean Absolute SHAP Value', fontsize=12)
+        plt.title(f'Top {top_n} Features for Predicting: {class_name}\n(Averaged across {len(valid_models)} models and 5 folds)',
+                 fontsize=14, fontweight='bold')
+        plt.xticks(x, top_features['feature'], rotation=90, ha='right')
+        plt.legend()
+        plt.grid(axis='y', alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / f"class_{class_name}_top_features.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        logger.info(f"  Created plot for {class_name}")
+    
+    # Create side-by-side comparison of top 15 features per class
+    fig, axes = plt.subplots(1, len(class_names), figsize=(6*len(class_names), 10))
+    
+    if len(class_names) == 1:
+        axes = [axes]
+    
+    for class_idx, class_name in enumerate(class_names):
+        # Get consensus features for this class
+        comparison_data = {'feature': feature_names}
+        
+        for model_type, data in valid_models.items():
+            model_shap = []
+            for feat_name in feature_names:
+                if feat_name in data['feature_names']:
+                    idx = data['feature_names'].index(feat_name)
+                    model_shap.append(data['per_class'][class_name]['mean_shap'][idx])
+                else:
+                    model_shap.append(0.0)
+            comparison_data[f'{model_type}_mean'] = model_shap
+        
+        df_class = pd.DataFrame(comparison_data)
+        mean_cols = [col for col in df_class.columns if col.endswith('_mean')]
+        df_class['consensus'] = df_class[mean_cols].mean(axis=1)
+        df_class = df_class.sort_values('consensus', ascending=False)
+        
+        # Plot top 15
+        top_15 = df_class.head(15)
+        y_pos = np.arange(len(top_15))
+        
+        # Color based on class
+        colors = ['#3498db', '#e74c3c', '#2ecc71']  # Blue, Red, Green
+        color = colors[class_idx % len(colors)]
+        
+        axes[class_idx].barh(y_pos, top_15['consensus'], color=color, alpha=0.8)
+        axes[class_idx].set_yticks(y_pos)
+        axes[class_idx].set_yticklabels(top_15['feature'])
+        axes[class_idx].set_xlabel('Mean SHAP Importance')
+        axes[class_idx].set_title(f'{class_name}\n(n={len(class_names)} classes)', fontweight='bold')
+        axes[class_idx].invert_yaxis()
+        axes[class_idx].grid(axis='x', alpha=0.3)
+    
+    plt.suptitle('Top 15 Features by Class: Multi-Class SHAP Comparison\n(Ensemble consensus across all models and folds)',
+                 fontsize=16, fontweight='bold', y=0.995)
+    plt.tight_layout()
+    plt.savefig(output_dir / "multiclass_per_class_comparison.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    logger.info("Created multi-class per-class comparison plot")
+    
+    # Summary log
+    logger.info("\n" + "=" * 80)
+    logger.info("Per-Class Feature Summary:")
+    logger.info("=" * 80)
+    
+    for class_name in class_names:
+        logger.info(f"\n{class_name} - Top 5 Features:")
+        comparison_data = {'feature': feature_names}
+        
+        for model_type, data in valid_models.items():
+            model_shap = []
+            for feat_name in feature_names:
+                if feat_name in data['feature_names']:
+                    idx = data['feature_names'].index(feat_name)
+                    model_shap.append(data['per_class'][class_name]['mean_shap'][idx])
+                else:
+                    model_shap.append(0.0)
+            comparison_data[f'{model_type}_mean'] = model_shap
+        
+        df_class = pd.DataFrame(comparison_data)
+        mean_cols = [col for col in df_class.columns if col.endswith('_mean')]
+        df_class['consensus'] = df_class[mean_cols].mean(axis=1)
+        df_class = df_class.sort_values('consensus', ascending=False)
+        
+        for i, row in df_class.head(5).iterrows():
+            logger.info(f"  {row['feature']:50s} | Importance: {row['consensus']:.4f}")
 
 
 def compare_models(model_aggregates: Dict[str, Dict], output_dir: Path):
@@ -270,16 +545,37 @@ def compare_models(model_aggregates: Dict[str, Dict], output_dir: Path):
         model_cv = []
         model_top10 = []
         
-        for feat_name in feature_names:
-            if feat_name in data['feature_names']:
-                idx = data['feature_names'].index(feat_name)
-                model_mean_shap.append(data['mean_shap'][idx])
-                model_cv.append(data['cv_shap'][idx])
-                model_top10.append(data['top_10_frequency'][idx])
-            else:
-                model_mean_shap.append(0.0)
-                model_cv.append(1.0)
-                model_top10.append(0.0)
+        if data.get('is_multiclass', False):
+            # For multi-class, average across all classes
+            class_names_model = data['class_names']
+            for feat_name in feature_names:
+                if feat_name in data['feature_names']:
+                    idx = data['feature_names'].index(feat_name)
+                    # Average SHAP across all classes
+                    class_shaps = [data['per_class'][cn]['mean_shap'][idx] for cn in class_names_model]
+                    model_mean_shap.append(np.mean(class_shaps))
+                    # Average CV across classes
+                    class_cvs = [data['per_class'][cn]['cv_shap'][idx] for cn in class_names_model]
+                    model_cv.append(np.mean(class_cvs))
+                    # Average top10 frequency
+                    class_top10s = [data['per_class'][cn]['top_10_frequency'][idx] for cn in class_names_model]
+                    model_top10.append(np.mean(class_top10s))
+                else:
+                    model_mean_shap.append(0.0)
+                    model_cv.append(1.0)
+                    model_top10.append(0.0)
+        else:
+            # Binary classification
+            for feat_name in feature_names:
+                if feat_name in data['feature_names']:
+                    idx = data['feature_names'].index(feat_name)
+                    model_mean_shap.append(data['mean_shap'][idx])
+                    model_cv.append(data['cv_shap'][idx])
+                    model_top10.append(data['top_10_frequency'][idx])
+                else:
+                    model_mean_shap.append(0.0)
+                    model_cv.append(1.0)
+                    model_top10.append(0.0)
         
         comparison_data[f'{model_type}_mean'] = model_mean_shap
         comparison_data[f'{model_type}_cv'] = model_cv
@@ -453,7 +749,12 @@ def create_ensemble_importance(model_aggregates: Dict[str, Dict], output_dir: Pa
         for feat_name in feature_names:
             if feat_name in data['feature_names']:
                 idx = data['feature_names'].index(feat_name)
-                model_shap.append(data['mean_shap'][idx])
+                # For multi-class, average across all classes
+                if data.get('is_multiclass', False):
+                    class_shaps = [data['per_class'][cn]['mean_shap'][idx] for cn in data['class_names']]
+                    model_shap.append(np.mean(class_shaps))
+                else:
+                    model_shap.append(data['mean_shap'][idx])
             else:
                 model_shap.append(0.0)
         
@@ -478,8 +779,15 @@ def create_ensemble_importance(model_aggregates: Dict[str, Dict], output_dir: Pa
         for feat_name in feature_names:
             if feat_name in data['feature_names']:
                 idx = data['feature_names'].index(feat_name)
-                model_shap.append(data['mean_shap'][idx])
-                model_cv.append(data['cv_shap'][idx])
+                # For multi-class, average across all classes
+                if data.get('is_multiclass', False):
+                    class_shaps = [data['per_class'][cn]['mean_shap'][idx] for cn in data['class_names']]
+                    model_shap.append(np.mean(class_shaps))
+                    class_cvs = [data['per_class'][cn]['cv_shap'][idx] for cn in data['class_names']]
+                    model_cv.append(np.mean(class_cvs))
+                else:
+                    model_shap.append(data['mean_shap'][idx])
+                    model_cv.append(data['cv_shap'][idx])
             else:
                 model_shap.append(0.0)
                 model_cv.append(1.0)
@@ -507,7 +815,12 @@ def create_ensemble_importance(model_aggregates: Dict[str, Dict], output_dir: Pa
         for feat_name in feature_names:
             if feat_name in data['feature_names']:
                 idx = data['feature_names'].index(feat_name)
-                model_shap.append(data['mean_shap'][idx])
+                # For multi-class, average across all classes
+                if data.get('is_multiclass', False):
+                    class_shaps = [data['per_class'][cn]['mean_shap'][idx] for cn in data['class_names']]
+                    model_shap.append(np.mean(class_shaps))
+                else:
+                    model_shap.append(data['mean_shap'][idx])
             else:
                 model_shap.append(0.0)
         
@@ -534,8 +847,15 @@ def create_ensemble_importance(model_aggregates: Dict[str, Dict], output_dir: Pa
         for feat_name in feature_names:
             if feat_name in data['feature_names']:
                 idx = data['feature_names'].index(feat_name)
-                model_shap.append(data['mean_shap'][idx])
-                model_cv.append(data['cv_shap'][idx])
+                # For multi-class, average across all classes
+                if data.get('is_multiclass', False):
+                    class_shaps = [data['per_class'][cn]['mean_shap'][idx] for cn in data['class_names']]
+                    model_shap.append(np.mean(class_shaps))
+                    class_cvs = [data['per_class'][cn]['cv_shap'][idx] for cn in data['class_names']]
+                    model_cv.append(np.mean(class_cvs))
+                else:
+                    model_shap.append(data['mean_shap'][idx])
+                    model_cv.append(data['cv_shap'][idx])
             else:
                 model_shap.append(0.0)
                 model_cv.append(1.0)
@@ -751,8 +1071,11 @@ def main():
             logger.warning(f"No results for {model_type}")
             model_aggregates[model_type] = None
     
-    # Compare models
+    # Compare models (overall average for multi-class)
     compare_models(model_aggregates, output_dir)
+    
+    # Per-class comparison for multi-class problems
+    create_per_class_comparison(model_aggregates, output_dir)
     
     # Create ensemble importance
     create_ensemble_importance(model_aggregates, output_dir)
@@ -773,6 +1096,17 @@ def main():
     logger.info("  - ensemble_strategy_comparison.png")
     logger.info("  - model_comparison_summary.json")
     logger.info("  - ensemble_summary.json")
+    
+    # Check if multi-class and log additional files
+    if any(v and v.get('is_multiclass', False) for v in model_aggregates.values()):
+        sample_data = next(v for v in model_aggregates.values() if v and v.get('is_multiclass', False))
+        class_names = sample_data['class_names']
+        logger.info("\n  Multi-class specific files:")
+        logger.info("  - multiclass_per_class_comparison.png (side-by-side)")
+        for class_name in class_names:
+            logger.info(f"  - class_{class_name}_feature_importance.csv")
+            logger.info(f"  - class_{class_name}_top_features.png")
+    
     logger.info("=" * 80)
 
 
