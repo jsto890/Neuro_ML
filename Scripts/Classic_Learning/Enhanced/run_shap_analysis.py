@@ -169,8 +169,77 @@ def find_model_files(model_dir: Path) -> List[Path]:
     return sorted(model_files)
 
 
+def load_selected_features(model_dir: Path) -> Optional[List[str]]:
+    """
+    Load the list of selected features used during training.
+    
+    Args:
+        model_dir: Directory containing the model and feature importance files
+    
+    Returns:
+        List of selected feature names, or None if not found
+    """
+    # Look for feature importance CSV
+    feature_csv = model_dir / "feature_importance_comparison.csv"
+    
+    if feature_csv.exists():
+        try:
+            df = pd.read_csv(feature_csv)
+            if 'feature' in df.columns:
+                features = df['feature'].tolist()
+                logger.info(f"Loaded {len(features)} selected features from {feature_csv.name}")
+                return features
+        except Exception as e:
+            logger.warning(f"Could not load features from {feature_csv}: {e}")
+    
+    return None
+
+
+def filter_data_to_selected_features(data: Dict, selected_features: List[str]) -> Dict:
+    """
+    Filter data to only include selected features.
+    
+    Args:
+        data: Dictionary with X_train, X_test, feature_names
+        selected_features: List of features to keep
+    
+    Returns:
+        Filtered data dictionary
+    """
+    all_feature_names = data['feature_names']
+    
+    # Find indices of selected features
+    feature_indices = []
+    found_features = []
+    
+    for feat in selected_features:
+        if feat in all_feature_names:
+            idx = all_feature_names.index(feat)
+            feature_indices.append(idx)
+            found_features.append(feat)
+        else:
+            logger.warning(f"Selected feature '{feat}' not found in data")
+    
+    if not feature_indices:
+        raise ValueError("No selected features found in data!")
+    
+    logger.info(f"Filtering data from {len(all_feature_names)} to {len(feature_indices)} features")
+    
+    # Filter data
+    filtered_data = {
+        'X_train': data['X_train'][:, feature_indices],
+        'X_test': data['X_test'][:, feature_indices],
+        'y_train': data['y_train'],
+        'y_test': data['y_test'],
+        'feature_names': found_features
+    }
+    
+    return filtered_data
+
+
 def run_shap_for_model(model_path: Path, data: Dict, output_dir: Path, 
-                       class_names: Optional[List[str]] = None):
+                       class_names: Optional[List[str]] = None,
+                       model_dir: Optional[Path] = None):
     """
     Run SHAP analysis for a single model.
     
@@ -179,6 +248,7 @@ def run_shap_for_model(model_path: Path, data: Dict, output_dir: Path,
         data: Dictionary with train/test data
         output_dir: Output directory
         class_names: Class names (optional)
+        model_dir: Directory containing model (for finding selected features)
     """
     model_name = model_path.stem
     logger.info("=" * 80)
@@ -195,19 +265,48 @@ def run_shap_for_model(model_path: Path, data: Dict, output_dir: Path,
         with open(model_path, 'rb') as f:
             model = pickle.load(f)
         
-        # Get feature names
+        # Determine model's expected feature count
+        expected_features = None
+        if hasattr(model, 'n_features_in_'):
+            expected_features = model.n_features_in_
+        elif hasattr(model, 'coef_'):
+            expected_features = model.coef_.shape[1] if model.coef_.ndim > 1 else model.coef_.shape[0]
+        
+        # Get data
+        current_data = data.copy()
         feature_names = data.get('feature_names')
+        
         if feature_names is None:
-            # Generate default feature names
             n_features = data['X_train'].shape[1]
             feature_names = [f"feature_{i}" for i in range(n_features)]
+            current_data['feature_names'] = feature_names
             logger.warning("No feature names found, using default names")
+        
+        # Check for feature mismatch
+        data_features = current_data['X_train'].shape[1]
+        
+        if expected_features is not None and data_features != expected_features:
+            logger.warning(f"Feature mismatch: model expects {expected_features}, data has {data_features}")
+            logger.info("Attempting to load selected features from training...")
+            
+            # Try to load selected features
+            if model_dir is None:
+                model_dir = model_path.parent
+            
+            selected_features = load_selected_features(model_dir)
+            
+            if selected_features and len(selected_features) == expected_features:
+                logger.info(f"✓ Found matching selected features ({len(selected_features)})")
+                current_data = filter_data_to_selected_features(current_data, selected_features)
+            else:
+                logger.error(f"✗ Could not resolve feature mismatch. Skipping {model_name}.")
+                return False
         
         # Create interpreter
         interpreter = SHAPInterpreter(
             model=model,
-            X_train=data['X_train'],
-            feature_names=feature_names,
+            X_train=current_data['X_train'],
+            feature_names=current_data['feature_names'],
             output_dir=model_output_dir,
             model_name=model_name,
             class_names=class_names
@@ -215,8 +314,8 @@ def run_shap_for_model(model_path: Path, data: Dict, output_dir: Path,
         
         # Generate comprehensive report
         interpreter.generate_comprehensive_report(
-            X_test=data['X_test'],
-            y_test=data['y_test'],
+            X_test=current_data['X_test'],
+            y_test=current_data['y_test'],
             max_display=20,
             top_features=5
         )
@@ -312,13 +411,20 @@ Examples:
     # Run SHAP analysis
     logger.info(f"Starting SHAP analysis for {len(model_files)} model(s)...")
     
+    # Determine model directory (for finding selected features)
+    if args.model:
+        model_dir = Path(args.model).parent
+    else:
+        model_dir = Path(args.model_dir)
+    
     success_count = 0
     for model_file in model_files:
         success = run_shap_for_model(
             model_path=model_file,
             data=data,
             output_dir=output_dir,
-            class_names=args.class_names
+            class_names=args.class_names,
+            model_dir=model_dir
         )
         if success:
             success_count += 1

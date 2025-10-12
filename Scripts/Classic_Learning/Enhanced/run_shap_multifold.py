@@ -29,7 +29,7 @@ import json
 sys.path.append(str(Path(__file__).parent))
 
 from shap_interpretability import SHAPInterpreter, SHAP_AVAILABLE
-from run_shap_analysis import load_data
+from run_shap_analysis import load_data, load_selected_features, filter_data_to_selected_features
 
 # Setup logging
 logging.basicConfig(
@@ -86,6 +86,31 @@ def run_shap_for_fold(fold_dir: Path, model_type: str, data: Dict,
         with open(model_path, 'rb') as f:
             model = pickle.load(f)
         
+        # Determine model's expected feature count
+        expected_features = None
+        if hasattr(model, 'n_features_in_'):
+            expected_features = model.n_features_in_
+        elif hasattr(model, 'coef_'):
+            expected_features = model.coef_.shape[1] if model.coef_.ndim > 1 else model.coef_.shape[0]
+        
+        # Prepare data
+        current_data = data.copy()
+        data_features = current_data['X_train'].shape[1]
+        
+        # Check for feature mismatch and filter if needed
+        if expected_features is not None and data_features != expected_features:
+            logger.warning(f"Fold {fold_num}: Feature mismatch - model expects {expected_features}, data has {data_features}")
+            logger.info(f"Fold {fold_num}: Loading selected features...")
+            
+            selected_features = load_selected_features(fold_dir)
+            
+            if selected_features and len(selected_features) == expected_features:
+                logger.info(f"Fold {fold_num}: ✓ Found {len(selected_features)} selected features")
+                current_data = filter_data_to_selected_features(current_data, selected_features)
+            else:
+                logger.error(f"Fold {fold_num}: ✗ Could not resolve feature mismatch")
+                return None
+        
         # Create fold-specific output directory
         fold_output_dir = output_dir / f"fold_{fold_num}"
         fold_output_dir.mkdir(parents=True, exist_ok=True)
@@ -93,28 +118,32 @@ def run_shap_for_fold(fold_dir: Path, model_type: str, data: Dict,
         # Create interpreter
         interpreter = SHAPInterpreter(
             model=model,
-            X_train=data['X_train'],
-            feature_names=data['feature_names'],
+            X_train=current_data['X_train'],
+            feature_names=current_data['feature_names'],
             output_dir=fold_output_dir,
             model_name=f"{model_type}_fold{fold_num}",
             class_names=class_names
         )
         
         # Compute SHAP values
-        shap_values = interpreter.compute_shap_values(data['X_test'])
+        shap_values = interpreter.compute_shap_values(current_data['X_test'])
         
         # Create basic plots
-        interpreter.plot_summary(data['X_test'], max_display=20)
-        interpreter.plot_bar(data['X_test'], max_display=20)
+        interpreter.plot_summary(current_data['X_test'], max_display=20)
+        interpreter.plot_bar(current_data['X_test'], max_display=20)
         
         # Export SHAP values
-        shap_df = interpreter.export_shap_values(data['X_test'], data['y_test'])
+        shap_df = interpreter.export_shap_values(current_data['X_test'], current_data['y_test'])
         
         # Get mean absolute SHAP values for feature importance
         if isinstance(shap_values, list):
             shap_vals = shap_values[1] if len(shap_values) == 2 else shap_values[0]
         else:
             shap_vals = shap_values
+        
+        # Handle 3D arrays (samples, features, classes)
+        if shap_vals.ndim == 3:
+            shap_vals = shap_vals[:, :, 1]  # Use class 1
         
         mean_abs_shap = np.abs(shap_vals).mean(axis=0)
         

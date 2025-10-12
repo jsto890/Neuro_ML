@@ -500,6 +500,11 @@ class SHAPInterpreter:
             else:
                 shap_vals = self.shap_values
             
+            # Handle 3D arrays (samples, features, classes) - take last class
+            if shap_vals.ndim == 3:
+                self.logger.info(f"Multi-class SHAP values detected (shape: {shap_vals.shape}), using class 1")
+                shap_vals = shap_vals[:, :, 1]  # Use class 1 (positive class)
+            
             # Create DataFrame
             shap_df = pd.DataFrame(shap_vals, columns=self.feature_names)
             
@@ -557,13 +562,18 @@ class SHAPInterpreter:
         else:
             shap_vals = self.shap_values
         
+        # Handle 3D arrays (samples, features, classes)
+        if shap_vals.ndim == 3:
+            shap_vals = shap_vals[:, :, 1]  # Use class 1 (positive class)
+        
         mean_abs_shap = np.abs(shap_vals).mean(axis=0)
         top_indices = np.argsort(mean_abs_shap)[-top_features:][::-1]
         
         for idx in top_indices:
-            feature_name = self.feature_names[idx]
+            idx_int = int(idx)  # Ensure it's a Python int, not numpy int
+            feature_name = self.feature_names[idx_int]
             self.logger.info(f"  Creating dependence plot for {feature_name}...")
-            self.plot_dependence(X_test, idx)
+            self.plot_dependence(X_test, idx_int)
         
         # 5. Waterfall plot for first sample
         self.logger.info("Creating waterfall plot for sample 0...")
