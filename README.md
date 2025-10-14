@@ -80,16 +80,6 @@ python generate_pet_labels.py
 python generate_spect_labels.py
 ```
 
-### 4. Run Complete Pipeline
-
-```bash
-# Navigate to Classic Learning directory
-cd Scripts/Classic_Learning
-
-# Run complete radiomics workflow
-python complete_workflow.py --input ~/path/to/radiomics_features.csv --output ~/path/to/results/
-```
-
 ## 🔄 Complete Workflow
 
 ### 1. Data Preprocessing
