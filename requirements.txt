@@ -1,73 +1,68 @@
-# =============================================================================
-# P4P - Early Detection of Neurodegenerative Diseases
-# Comprehensive Requirements File
-# =============================================================================
+# P4P (Parkinson's Disease Detection Pipeline) Requirements
+# Core dependencies for neurodegenerative disease detection using MRI, PET, and SPECT data
 
-# =============================================================================
-# CORE SCIENTIFIC COMPUTING
-# =============================================================================
-numpy>=1.21.0,<1.25.0  # PyRadiomics compatibility
-scipy>=1.7.0,<1.11.0
+# Core Scientific Computing
+numpy>=1.21.0
+scipy>=1.7.0
 pandas>=1.3.0
+matplotlib>=3.4.0
+seaborn>=0.11.0
 
-# =============================================================================
-# MEDICAL IMAGING & NEUROIMAGING
-# =============================================================================
+# Medical Imaging
 nibabel>=3.2.0
 SimpleITK>=2.1.0
+pydicom>=2.3.0
 
-pyradiomics==3.0.1  # Use stable version instead of >=3.0.0
-nilearn>=0.8.0
-pydicom>=2.0.0
-
-# =============================================================================
-# DEEP LEARNING
-# =============================================================================
+# Machine Learning
+scikit-learn>=0.24.0
 torch>=1.9.0
 torchvision>=0.10.0
 
-# =============================================================================
-# MACHINE LEARNING & CLASSICAL ML
-# =============================================================================
-scikit-learn>=1.0.0
+# Deep Learning & Interpretability
+transformers>=4.0.0
+shap>=0.40.0
+captum>=0.5.0
+
+# Bayesian Analysis
+pymc>=4.0.0
+arviz>=0.12.0
+bambi>=0.9.0
+
+# Feature Extraction
+radiomics>=3.0.0
+
+# Advanced ML Libraries (Optional)
 xgboost>=1.5.0
-lightgbm>=3.3.0
-scikit-optimize>=0.9.0  # Bayesian optimization
+lightgbm>=3.2.0
 
-# Interpretability & Explainability
-shap>=0.41.0  # SHAP values for classical model interpretability
-
-# =============================================================================
-# VISUALIZATION
-# =============================================================================
-matplotlib>=3.4.0
-pillow>=9.0.0
-seaborn>=0.11.0
-ipywidgets>=7.6.0
-
-# =============================================================================
-# UTILITIES & DATA HANDLING
-# =============================================================================
+# Data Processing & Visualization
 tqdm>=4.62.0
-PyYAML>=5.4.0
-pathlib>=1.0.1
-psutil>=5.8.0  # System monitoring
-joblib>=1.1.0  # Parallel processing
-threadpoolctl>=3.0.0  # Thread control
+ipywidgets>=7.6.0
+plotly>=5.0.0
 
-# =============================================================================
-# DEVELOPMENT & TESTING
-# =============================================================================
+# Configuration & Utilities
+pyyaml>=5.4.0
+pathlib2>=2.3.0
+
+# Statistical Analysis
+statsmodels>=0.13.0
+xarray>=0.20.0
+
+# Development & Testing
 pytest>=6.2.0
 black>=21.5b2
 flake8>=3.9.0
 
-# =============================================================================
-# OPTIONAL DEPENDENCIES
-# =============================================================================
-plotly>=5.0.0  # Interactive plotting
-bokeh>=2.4.0   # Interactive visualization
-tensorboard>=2.8.0  # Training monitoring
-wandb>=0.12.0  # Experiment tracking
-optuna>=3.0.0  # Advanced hyperparameter optimization
-hyperopt>=0.2.7  # Alternative hyperparameter optimization 
+# Optional: Web Interface (if needed)
+# streamlit>=1.0.0
+# dash>=2.0.0
+
+# Optional: Additional Medical Imaging (if needed)
+# nilearn>=0.9.0
+# ants>=0.3.0
+
+# System Requirements
+# - Python 3.8+
+# - CUDA 11.0+ (for GPU acceleration)
+# - At least 16GB RAM (32GB+ recommended)
+# - External tools: dcm2niix, gdcmsan (for DICOM conversion)

@@ -1,258 +1,296 @@
-# P4P Research Project: Early Detection of Neurodegenerative Diseases
+# P4P: Parkinson's Disease Detection Pipeline
 
-## 🧠 Project Overview
-This research project focuses on developing machine learning models for early detection of Alzheimer's Disease (AD) and Parkinson's Disease (PD) using multimodal medical imaging data. The project leverages PET, MRI, and DaTSPECT scans to identify early biomarkers of these neurodegenerative conditions through both classical machine learning and deep learning approaches.
+A comprehensive machine learning pipeline for neurodegenerative disease detection using structural MRI (sMRI), PET, and SPECT imaging data. The P4P project provides both classical machine learning (radiomics-based) and deep learning approaches for classifying patients with Cognitive Normal (CN), Alzheimer's Disease (AD), and Parkinson's Disease (PD).
 
-## 📋 Key Features
-- **Multimodal Data Processing**: Integrated pipeline for PET, MRI, and DaTSPECT image processing
-- **Standardized Preprocessing**: Automated data standardization and quality control
-- **Radiomics Feature Extraction**: Advanced feature extraction using pyRadiomics
-- **Classical Machine Learning**: Multiple pipelines (Classic, Enhanced, Optimised) with comprehensive evaluation
-- **Deep Learning Pipeline**: CNN-based models for neuroimaging classification
-- **Quality Control**: Comprehensive QC reports and validation metrics
-- **Reproducible Research**: Complete pipeline with configuration management
+## 🎯 Project Overview
+
+The P4P pipeline is designed to:
+- **Preprocess** medical imaging data (DICOM → NIfTI → ML-ready format)
+- **Extract features** using radiomics analysis
+- **Train models** using both classical ML and deep learning approaches
+- **Deploy models** for clinical prediction and interpretability
+- **Compare approaches** using Bayesian statistical methods
 
 ## 📁 Project Structure
+
 ```
 P4P/
-├── Scripts/                    # Main processing scripts
-│   ├── Preprocessing/          # Data preprocessing pipelines
-│   │   ├── 01_DCM_TO_NIFTI/   # DICOM to NIfTI conversion
-│   │   ├── MRI/                # MRI preprocessing (smriprep)
-│   │   └── PET/                # PET preprocessing and standardization
-│   ├── Feature_Extraction/     # Feature extraction using pyRadiomics
-│   │   └── pyRadioMics/        # Radiomics extraction scripts
-│   │       ├── simple_radiomics.py      # Working MRI radiomics extractor
-│   │       ├── radiomics_extractor.py   # Multi-modality extractor
-│   │       ├── test_paths.py            # Path validation tool
-│   │       └── debug_paths.py           # Path debugging tool
-│   ├── Classic_Learning/       # Classical machine learning pipelines
-│   │   ├── Classic/            # Basic Random Forest pipeline
-│   │   │   ├── radiomics_classifier.py  # Main Random Forest pipeline
-│   │   │   ├── preprocessing.py         # Data preprocessing utilities
-│   │   │   ├── run_classical.py         # Simple runner script
-│   │   │   └── config_classical.yaml    # Classical learning configuration
-│   │   ├── Enhanced/           # Enhanced pipeline with multiple algorithms
-│   │   │   ├── enhanced_classifier.py   # Multi-algorithm classifier
-│   │   │   ├── run_enhanced.py          # Enhanced runner script
-│   │   │   └── config_enhanced.yaml     # Enhanced configuration
-│   │   └── Optimised/          # Optimized pipeline with advanced features
-│   │       ├── optimized_classifier.py  # Advanced classifier with Bayesian optimization
-│   │       ├── run_optimized.py         # Optimized runner script
-│   │       ├── config_optimized.yaml    # Optimized configuration
-│   │       ├── requirements_advanced.txt # Advanced dependencies
-│   │       └── install_advanced_deps.py # Dependency installer
-│   ├── Deep_Learning/          # Deep learning models and training
-│   │   ├── MRI/                # MRI-specific deep learning
-│   │   │   ├── dataset.py              # PyTorch dataset for MRI
-│   │   │   ├── models_smri.py          # CNN model architectures
-│   │   │   ├── train_smri.py           # Training script
-│   │   │   ├── gradcam.py              # Grad-CAM visualization
-│   │   │   └── visualise_gradcam.py    # Grad-CAM plotting
-│   │   ├── PET/                # PET-specific deep learning
-│   │   └── SPECT/              # SPECT-specific deep learning
-│   └── Visualise/              # Visualization tools
-│       ├── interactive_visualise.py    # Interactive visualization
-│       └── visualise_middle_slice.py   # Slice visualization
-├── Script_Bin/                 # Utility scripts and tools
-│   ├── convert_draft.py        # DaTSPECT preprocessing
-│   ├── pet_standardise.py      # PET standardization
-│   ├── DCM_to_NIfTI_SPECT.py   # SPECT DICOM conversion
-│   └── testers/                # Testing utilities
-├── Templates/                  # Reference templates
-│   ├── PET/                    # PET templates and masks
-│   ├── MRI/                    # MRI templates (MNI152)
-│   └── SPECT/                  # SPECT templates
-├── Labels/                     # Label files for training
-│   ├── train_labels.csv        # Training set labels
-│   └── val_labels.csv          # Validation set labels
-├── requirements.txt            # Python package requirements
-├── environment.yml             # Conda environment configuration
-├── config.yaml                 # Global configuration file
-└── generate_mri_labels.py      # Label generation script
+├── config.yaml                    # Main configuration file
+├── environment.yml                 # Conda environment specification
+├── requirements.txt               # Python dependencies
+├── README.md                      # This file
+├── generate_mri_labels.py         # Generate MRI subject labels
+├── generate_pet_labels.py         # Generate PET subject labels
+├── generate_spect_labels.py       # Generate SPECT subject labels
+├── Templates/                     # Template images and masks
+│   ├── README.md                  # Template documentation
+│   ├── MRI/                       # MRI templates and masks
+│   ├── PET/                       # PET templates and masks
+│   └── SPECT/                     # SPECT templates and masks
+└── Scripts/                       # Main pipeline scripts
+    ├── README.md                  # Scripts documentation
+    ├── Preprocessing/             # Data preprocessing pipelines
+    ├── Feature_Extraction/        # Radiomics feature extraction
+    ├── Classic_Learning/          # Classical ML approaches
+    ├── Deep_Learning/             # Deep learning approaches
+    ├── Clinical_Deploy/           # Clinical deployment tools
+    ├── Comparison/                # Model comparison methods
+    └── Visualise/                 # Visualization tools
 ```
 
-## 🚀 Quick Start Guide
+## 🚀 Quick Start
 
-### Prerequisites
-- Python 3.8 or higher
-- Git
-- (Optional) Virtual environment manager (conda/venv)
+### 1. Environment Setup
 
-### Installation
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/Jackson-Schofield/P4P.git
-   cd P4P
-   ```
-
-2. Choose your preferred installation method:
-
-   #### Option 1: Using pip (requirements.txt)
-   ```bash
-   # Create and activate virtual environment (recommended)
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-   # Install dependencies
-   pip install -r requirements.txt
-   ```
-
-   #### Option 2: Using conda (environment.yml)
-   ```bash
-   # Create and activate conda environment
-   conda env create -f environment.yml
-   conda activate p4p
-   ```
-
-### 🎯 Complete Workflow
-
-#### 1. Extract Radiomics Features (MRI)
 ```bash
-cd Scripts/Feature_Extraction/pyRadioMics/
-python3 simple_radiomics.py --labels ~/reseng202500013-ndd-ml/data/mri_labels.csv --output-dir ~/reseng202500013-ndd-ml/data/ --config ~/reseng202500013-ndd-ml/P4P/config.yaml
+# Clone the repository
+git clone <repository-url>
+cd P4P
+
+# Create conda environment
+conda env create -f environment.yml
+conda activate p4p
+
+# Or install with pip
+pip install -r requirements.txt
 ```
 
-#### 2. Run Classical Learning Pipeline (Choose one)
+### 2. Configuration
+
+Edit `config.yaml` to specify your data paths:
+
+```yaml
+raw_data:
+  smri: ~/path/to/raw/MRI
+  pet: ~/path/to/raw/PET
+  spect: ~/path/to/raw/SPECT
+
+preprocessed_data:
+  smri_p: ~/path/to/preprocessed/MRI
+  pet_p: ~/path/to/preprocessed/PET
+  spect_p: ~/path/to/preprocessed/SPECT
+```
+
+### 3. Generate Labels
+
 ```bash
-# Basic Random Forest pipeline
-cd Scripts/Classic_Learning/Classic/
-python3 run_classical.py
-
-# Enhanced pipeline with multiple algorithms
-cd Scripts/Classic_Learning/Enhanced/
-python3 run_enhanced.py
-
-# Optimized pipeline with advanced features
-cd Scripts/Classic_Learning/Optimised/
-python3 install_advanced_deps.py  # Install advanced dependencies first
-python3 run_optimized.py
+# Generate labels for each modality
+python generate_mri_labels.py
+python generate_pet_labels.py
+python generate_spect_labels.py
 ```
 
-#### 3. Train Deep Learning Model (MRI)
+### 4. Run Complete Pipeline
+
 ```bash
-cd Scripts/Deep_Learning/MRI/
-python3 train_smri.py
+# Navigate to Classic Learning directory
+cd Scripts/Classic_Learning
+
+# Run complete radiomics workflow
+python complete_workflow.py --input ~/path/to/radiomics_features.csv --output ~/path/to/results/
 ```
 
-## 📊 Data Processing Pipeline
+## 🔄 Complete Workflow
 
-### 1. Preprocessing
-- **DICOM to NIfTI**: Automated conversion with quality checks
-- **MRI Processing**: smriprep-based preprocessing pipeline
-- **PET Standardization**: Motion correction, intensity normalization, SUVR calculation
-- **Quality Control**: Comprehensive QC reports and validation metrics
+### 1. Data Preprocessing
+
+#### DICOM to NIfTI Conversion
+```bash
+cd Scripts/Preprocessing/01_DCM_TO_NIFTI
+python ultimate_converter_fixed.py --input ~/path/to/dicom --output ~/path/to/nifti
+```
+
+#### SPECT Preprocessing Pipeline
+```bash
+cd Scripts/Preprocessing/DSPECT
+python run_pipeline.py --diagnosis CN  # or PD
+```
+
+#### PET Preprocessing
+```bash
+cd Scripts/Preprocessing/PET
+python 02_norm_stand.py --input ~/path/to/pet --output ~/path/to/processed
+```
+
+#### MRI Preprocessing
+```bash
+cd Scripts/Preprocessing/MRI
+python 02_smriprep_run.py --input ~/path/to/mri --output ~/path/to/processed
+```
 
 ### 2. Feature Extraction
-- **Radiomics Features**: ~1000+ features using pyRadiomics
-  - First Order: Intensity statistics
-  - Shape: 3D morphological features
-  - Texture: GLCM, GLRLM, GLSZM, GLDM, NGTDM
-- **Feature Selection**: Automated selection of most informative features
-- **Feature Validation**: Cross-validation and stability analysis
 
-### 3. Classical Machine Learning
-- **Random Forest Pipeline**: Complete training and evaluation
-- **Hyperparameter Tuning**: Grid search with cross-validation
-- **Performance Metrics**: ROC AUC, accuracy, precision, recall, F1-score
-- **Feature Importance**: Automated identification of key biomarkers
-- **Model Interpretation**: SHAP values and feature rankings
+#### Radiomics Feature Extraction
+```bash
+cd Scripts/Feature_Extraction/pyRadioMics
+python radiomics_extractor.py --input ~/path/to/images --output ~/path/to/features
+```
 
-### 4. Deep Learning
-- **CNN Architectures**: Custom 3D CNN models for neuroimaging
-- **Transfer Learning**: Pre-trained model adaptation
-- **Grad-CAM Visualization**: Model interpretability
-- **Multi-class Classification**: AD, PD, and control classification
+### 3. Model Training
+
+#### Classical Machine Learning
+```bash
+cd Scripts/Classic_Learning
+python complete_workflow.py --input ~/path/to/radiomics.csv --output ~/path/to/results
+```
+
+#### Deep Learning
+```bash
+# MRI
+cd Scripts/Deep_Learning/MRI
+python train_smri.py --config config_hardware_optimized.yaml
+
+# PET
+cd Scripts/Deep_Learning/PET
+python train_pet.py --config config_hardware_optimized.yaml
+
+# SPECT
+cd Scripts/Deep_Learning/DSPECT
+python train_spect.py --config config_hardware_optimized.yaml
+```
+
+### 4. Model Evaluation and Comparison
+
+#### Bayesian Model Comparison
+```bash
+cd Scripts/Comparison
+python run_bayesian_analysis.py --input ~/path/to/results --output ~/path/to/comparison
+```
+
+### 5. Clinical Deployment
+
+#### Classical Model Prediction
+```bash
+cd Scripts/Clinical_Deploy/Classic
+python predict_clinical.py --model ~/path/to/model.pkl --input ~/path/to/features.csv
+```
+
+#### Deep Model Prediction
+```bash
+cd Scripts/Clinical_Deploy/Deep
+python predict_clinical_deep.py --model ~/path/to/model.pth --input ~/path/to/image.nii.gz
+```
+
+## 🧠 Supported Modalities
+
+### Structural MRI (sMRI)
+- **Preprocessing**: sMRIprep pipeline, skull stripping, z-score normalization
+- **Features**: Radiomics features, deep learning features
+- **Models**: 3D CNN, Vision Transformers, classical ML
+
+### PET Imaging
+- **Preprocessing**: SUVR normalization, skull stripping, registration
+- **Features**: Radiomics features, deep learning features
+- **Models**: 3D CNN, Vision Transformers, classical ML
+
+### SPECT Imaging
+- **Preprocessing**: Reorientation, normalization, registration, masking
+- **Features**: Radiomics features, deep learning features
+- **Models**: 3D CNN, Vision Transformers, classical ML
+
+## 📊 Model Performance
+
+The pipeline supports multiple evaluation metrics:
+- **Accuracy, Precision, Recall, F1-Score**
+- **ROC-AUC, PR-AUC**
+- **Matthews Correlation Coefficient**
+- **Confusion Matrix Analysis**
+- **Calibration Analysis**
+
+## 🔍 Interpretability
+
+### SHAP Analysis (Classical ML)
+```bash
+cd Scripts/Clinical_Deploy/Classic
+python run_shap_analysis.py --model ~/path/to/model.pkl --data ~/path/to/features.csv
+```
+
+### Grad-CAM (Deep Learning)
+```bash
+cd Scripts/Deep_Learning/MRI
+python visualise_gradcam.py --model ~/path/to/model.pth --input ~/path/to/image.nii.gz
+```
+
+## 🎨 Visualization Tools
+
+```bash
+# Interactive visualization
+cd Scripts/Visualise
+python interactive_visualise.py --input ~/path/to/image.nii.gz
+
+# Middle slice visualization
+python visualise_middle_slice.py --input ~/path/to/image.nii.gz --output ~/path/to/plot.png
+
+# Grad-CAM animation
+python animate_gradcam_overlay.py --input ~/path/to/image.nii.gz --gradcam ~/path/to/gradcam.nii.gz
+```
 
 ## 🔧 Configuration
 
-The project uses a centralized configuration system:
+The pipeline uses YAML configuration files for flexible parameter tuning:
 
-### Global Configuration (`config.yaml`)
-```yaml
-# Data paths
-raw_data:
-  smri: /path/to/raw/MRI
-  pet: /path/to/raw/PET
-  spect: /path/to/raw/SPECT
+- `config.yaml`: Main project configuration
+- `config_hardware_optimized.yaml`: Hardware-optimized settings
+- `config_transformers.yaml`: Transformer-specific settings
+- `config_enhanced.yaml`: Enhanced classifier settings
 
-preprocessed_data:
-  smri_p: /path/to/preprocessed/MRI/smriprep
-  pet_p: /path/to/preprocessed/PET
-  spect_p: /path/to/preprocessed/SPECT
+## 📈 Output Structure
 
-# Template paths
-templates:
-  MRI_brain_mask: /path/to/templates/MRI/MNI152_T1_1mm_brain.nii.gz
-  PET_template: /path/to/templates/PET/FDG-PET-template_padded.nii.gz
+Results are organized as follows:
+```
+results/
+├── models/                    # Trained models (.pkl, .pth)
+├── plots/                     # Visualization plots (.png)
+├── metrics/                   # Performance metrics (.json)
+├── features/                  # Extracted features (.csv)
+├── logs/                      # Training logs (.log)
+└── reports/                   # Summary reports (.txt, .json)
 ```
 
-### Classical Learning Configuration (`Scripts/Classic_Learning/config_classical.yaml`)
-- Preprocessing parameters
-- Model hyperparameters
-- Evaluation settings
-- Output configurations
+## 🚨 System Requirements
 
-## 📈 Expected Results
+- **Python**: 3.8+
+- **RAM**: 16GB+ (32GB+ recommended)
+- **GPU**: CUDA-compatible (recommended for deep learning)
+- **Storage**: 1TB+ for preprocessing and results
+- **External Tools**: dcm2niix, smriprep, gdcmsan (for DICOM conversion)
 
-### Radiomics Extraction
-- **Processing Time**: 10-30 minutes for 474 subjects
-- **Features**: ~1000+ radiomics features per subject
-- **Output**: CSV file with features and labels
+## 🤝 Contributing
 
-### Classical Learning
-- **Training Time**: 5-15 minutes
-- **Performance**: 70-85% accuracy, 0.75-0.90 ROC AUC
-- **Output**: Trained model, feature importance, evaluation plots
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
 
-### Deep Learning
-- **Training Time**: 1-4 hours (depending on hardware)
-- **Performance**: 75-90% accuracy
-- **Output**: Trained model, training curves, Grad-CAM visualizations
+## 📄 License
 
-## 🐛 Troubleshooting
-
-### Common Issues
-
-1. **NumPy Compatibility (PyRadiomics)**
-   ```bash
-   conda install numpy=1.24.3 -y
-   ```
-
-2. **Missing Data Paths**
-   - Check `config.yaml` for correct paths
-   - Use `test_paths.py` to validate paths
-
-3. **Memory Issues**
-   - Reduce batch size in deep learning
-   - Use feature selection in classical learning
-
-### Debug Tools
-- `Scripts/Feature_Extraction/pyRadioMics/test_paths.py` - Path validation
-- `Scripts/Feature_Extraction/pyRadioMics/debug_paths.py` - Path debugging
-- Comprehensive logging in all pipelines
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## 📚 Documentation
 
-- **Feature Extraction**: `Scripts/Feature_Extraction/pyRadioMics/README.md`
-- **Classical Learning**: `Scripts/Classic_Learning/README.md`
-- **Deep Learning**: `Scripts/Deep_Learning/MRI/README.md`
+- [Templates Documentation](Templates/README.md)
+- [Scripts Documentation](Scripts/README.md)
+- [Preprocessing Guide](Scripts/Preprocessing/README.md)
+- [Classical Learning Guide](Scripts/Classic_Learning/README.md)
+- [Deep Learning Guide](Scripts/Deep_Learning/README.md)
+
+## 🆘 Support
+
+For questions and support:
+- Check the documentation in each subdirectory
+- Review the example scripts and configurations
+- Open an issue on the repository
 
 ## 🔬 Research Applications
 
-This pipeline is designed for:
-- **Early Disease Detection**: Identifying biomarkers before clinical symptoms
-- **Differential Diagnosis**: Distinguishing between AD, PD, and controls
-- **Prognostic Modeling**: Predicting disease progression
-- **Biomarker Discovery**: Finding novel imaging biomarkers
+This pipeline has been designed for research applications in:
+- Neurodegenerative disease detection
+- Medical imaging analysis
+- Radiomics research
+- Deep learning in medical imaging
+- Model interpretability studies
 
-## 👥 Collaborators
-- **Joseph Storey**
-- **Jackson Schofield**
+## ⚠️ Clinical Disclaimer
 
-## 📞 Support
-For questions and support, please open an issue in the GitHub repository.
-
-## 📄 License
-This project is licensed under the MIT License - see the LICENSE file for details.
+This software is intended for research purposes only. It should not be used for clinical diagnosis or treatment decisions without proper validation and regulatory approval.
