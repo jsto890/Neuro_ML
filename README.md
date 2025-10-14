@@ -1,4 +1,4 @@
-# P4P: Parkinson's Disease Detection Pipeline
+# P4P: Neurodegenerative Disease Detection Pipeline
 
 A comprehensive machine learning pipeline for neurodegenerative disease detection using structural MRI (sMRI), PET, and SPECT imaging data. The P4P project provides both classical machine learning (radiomics-based) and deep learning approaches for classifying patients with Cognitive Normal (CN), Alzheimer's Disease (AD), and Parkinson's Disease (PD).
 
