@@ -18,7 +18,7 @@ P4P/
 ├── config.yaml                    # Main configuration file
 ├── environment.yml                 # Conda environment specification
 ├── requirements.txt               # Python dependencies
-├── README.md                      # This file
+├── README.md                      
 ├── generate_mri_labels.py         # Generate MRI subject labels
 ├── generate_pet_labels.py         # Generate PET subject labels
 ├── generate_spect_labels.py       # Generate SPECT subject labels
