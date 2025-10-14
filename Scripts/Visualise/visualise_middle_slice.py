@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import pandas as pd
 import glob
+from nibabel.orientations import OrientationError
 
 # Detect runthrough early to control initial printing
 _rt_parser = argparse.ArgumentParser(add_help=False)
@@ -27,11 +28,98 @@ def _resolve_nii_path() -> str:
     # Fallback to previous default path (edit if desired)
     return "/Volumes/reseng202500013-ndd-ml/data/preprocessed/PET/PD/sub-I1518677_PPMI_PET_PD/sub-I1518677_PPMI_PET_PD_SUVR_s2_brain_soft4.nii.gz"
 
-# Load the NIfTI file
+# Affine safety helpers (adapted from PET step 02)
+def _is_affine_degenerate(affine: np.ndarray) -> bool:
+    try:
+        if affine is None or not np.all(np.isfinite(affine)):
+            return True
+        A = np.asarray(affine)[:3, :3]
+        col_norms = np.linalg.norm(A, axis=0)
+        if np.any(col_norms < 1e-6) or not np.all(np.isfinite(col_norms)):
+            return True
+        detA = float(np.linalg.det(A))
+        if not np.isfinite(detA) or abs(detA) < 1e-6:
+            return True
+        return False
+    except Exception:
+        return True
+
+def _repair_affine_image(img: nib.Nifti1Image) -> nib.Nifti1Image:
+    if not _is_affine_degenerate(img.affine):
+        return img
+    try:
+        zooms = img.header.get_zooms()[:3]
+    except Exception:
+        zooms = (2.0, 2.0, 2.0)
+    safe_vx = np.array(zooms, dtype=float)
+    safe_vx[~np.isfinite(safe_vx)] = 2.0
+    safe_vx = np.maximum(np.abs(safe_vx), 0.5)
+
+    original = np.asarray(img.affine)
+    diag = np.diag(original[:3, :3])
+    signs = np.sign(diag)
+    signs[signs == 0] = 1.0
+
+    new_affine = np.eye(4, dtype=float)
+    new_affine[0, 0] = signs[0] * safe_vx[0]
+    new_affine[1, 1] = signs[1] * safe_vx[1]
+    new_affine[2, 2] = signs[2] * safe_vx[2]
+    new_affine[:3, 3] = original[:3, 3]
+
+    repaired = nib.Nifti1Image(img.get_fdata(dtype=np.float32), new_affine, img.header)
+    try:
+        repaired.set_sform(new_affine, code=1)
+        repaired.set_qform(new_affine, code=1)
+    except Exception:
+        pass
+    return repaired
+
+# Load helpers: reduce 4D → 3D BEFORE canonical reorientation (match PET step 02)
+def _load_reduced_image(path: str, reduce: str = "mean", frame: int = 0):
+    """
+    Load a NIfTI image. If 4D, collapse to 3D per `reduce` before calling
+    nib.as_closest_canonical. Returns (img_3d_canonical, data_3d).
+    """
+    raw = nib.load(os.path.expanduser(path))
+    arr = raw.get_fdata()
+    if arr.ndim == 4:
+        if reduce == "mean":
+            arr3 = arr.mean(axis=3)
+        elif reduce == "first":
+            arr3 = arr[..., 0]
+        elif reduce == "last":
+            arr3 = arr[..., -1]
+        elif reduce == "frame":
+            fi = max(0, min(int(frame), arr.shape[3] - 1))
+            arr3 = arr[..., fi]
+        else:
+            arr3 = arr.mean(axis=3)
+    else:
+        arr3 = arr
+    # Ensure header shape matches 3D data shape
+    hdr = raw.header.copy()
+    try:
+        hdr.set_data_shape(arr3.shape)
+    except Exception:
+        pass
+    img3 = nib.Nifti1Image(arr3.astype(np.float32), raw.affine, hdr)
+    # Keep original orientation/dimensions; only average frames. Repair degenerate affine if needed.
+    if _is_affine_degenerate(img3.affine):
+        img3 = _repair_affine_image(img3)
+    return img3, img3.get_fdata()
+
+# Load the NIfTI file and parse reduction args
 nii_file = _resolve_nii_path()
 
-img = nib.as_closest_canonical(nib.load(nii_file))
-data = img.get_fdata()
+# Reduction args (shared by initial load and runthrough updates)
+_r_parser = argparse.ArgumentParser(add_help=False)
+_r_parser.add_argument("--reduce", type=str, default="mean", choices=["mean", "first", "last", "frame"],
+                    help="How to reduce a 4D volume to 3D for display")
+_r_parser.add_argument("--frame", type=int, default=0, help="Frame index when --reduce=frame")
+_rargs, _ = _r_parser.parse_known_args()
+
+# Use the robust loader that collapses 4D first, then canonicalizes
+img, data = _load_reduced_image(nii_file, reduce=_rargs.reduce, frame=_rargs.frame)
 
 def _robust_vrange(vol: np.ndarray) -> tuple[float, float]:
     arr = vol.astype(np.float32)
@@ -45,22 +133,7 @@ def _robust_vrange(vol: np.ndarray) -> tuple[float, float]:
         lo, hi = 0.0, 1.0
     return float(lo), float(hi)
 
-# If 4D (e.g., dynamic PET), reduce to 3D for display
-_parser = argparse.ArgumentParser(add_help=False)
-_parser.add_argument("--reduce", type=str, default="mean", choices=["mean", "first", "last", "frame"],
-                    help="How to reduce a 4D volume to 3D for display")
-_parser.add_argument("--frame", type=int, default=0, help="Frame index when --reduce=frame")
-_args, _ = _parser.parse_known_args()
-if data.ndim == 4:
-    if _args.reduce == "mean":
-        data = data.mean(axis=-1)
-    elif _args.reduce == "first":
-        data = data[..., 0]
-    elif _args.reduce == "last":
-        data = data[..., -1]
-    elif _args.reduce == "frame":
-        fi = max(0, min(_args.frame, data.shape[-1] - 1))
-        data = data[..., fi]
+# (No-op: reduction already applied in _load_reduced_image)
 
 if not _is_runthrough:
     print("  shape:", img.shape)
@@ -238,8 +311,7 @@ if _nav_args.runthrough:
             def _update_to(path: str):
                 global img, data, init_axial, init_coronal, init_sagittal, metadata
                 try:
-                    img = nib.as_closest_canonical(nib.load(path))
-                    data = img.get_fdata()
+                    img, data = _load_reduced_image(path, reduce=_rargs.reduce, frame=_rargs.frame)
                 except Exception as e:
                     print(f"Failed to load {path}: {e}")
                     return

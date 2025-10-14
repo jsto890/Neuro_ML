@@ -1655,6 +1655,14 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
             label_mapping = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
             print(f"[INFO] Label mapping: {label_mapping}")
             
+            # Auto-find optimal base_channels if requested
+            if hasattr(args, 'auto_base_channels') and args.auto_base_channels:
+                optimal_base_channels = auto_find_base_channels(
+                    model_name, num_classes, args.device, args, test_batch_size=args.batch_size
+                )
+                print(f"[MEMORY] Using optimal base_channels: {optimal_base_channels}")
+                args.base_channels = optimal_base_channels
+            
             if model_name == "VisionTransformer3D":
                 model = get_3d_model(
                     model_name,
@@ -2277,6 +2285,106 @@ def print_memory_status(device, prefix="[MEMORY]"):
         print(f"{prefix} {memory_info['error']}")
 
 
+def auto_find_base_channels(model_name, num_classes, device, args, test_batch_size=8):
+    """
+    Automatically find the largest base_channels that fits in GPU memory.
+    
+    Args:
+        model_name: Name of the model to test
+        num_classes: Number of output classes
+        device: Device to test on
+        args: Training arguments
+        test_batch_size: Batch size to use for testing (default 8)
+    
+    Returns:
+        int: Working base_channels value
+    """
+    # Test different base_channels from largest to smallest
+    # For Simple3DCNN: test 256, 192, 160, 128, 96, 64
+    test_channels = [256, 192, 160, 128, 96, 64, 48, 32]
+    
+    print(f"[MEMORY] Finding optimal base_channels for {model_name}...")
+    print(f"[MEMORY] Testing with batch_size={test_batch_size} on {device}")
+    
+    for base_channels in test_channels:
+        try:
+            print(f"[MEMORY] Testing base_channels={base_channels}...")
+            
+            # Create model with current base_channels
+            if model_name == "VisionTransformer3D":
+                test_model = get_3d_model(
+                    model_name,
+                    num_classes=num_classes,
+                    in_channels=1,
+                    base_channels=base_channels,
+                    use_pretrained=args.use_pretrained,
+                    dropout_p=0.0,
+                    vit_drop_rate=args.vit_drop_rate,
+                    vit_attn_drop_rate=args.vit_attn_drop_rate,
+                    vit_drop_path_rate=args.vit_drop_path_rate,
+                )
+            else:
+                test_model = get_3d_model(
+                    model_name,
+                    num_classes=num_classes,
+                    in_channels=1,
+                    base_channels=base_channels,
+                    use_pretrained=args.use_pretrained,
+                    dropout_p=(args.cnn_drop_rate if model_name == "Simple3DCNN" else 0.0),
+                )
+            
+            # Move to device
+            test_model = test_model.to(device)
+            
+            # Create dummy input (MRI size: 96, 128, 96)
+            dummy_input = torch.randn(test_batch_size, 1, 96, 128, 96, device=device)
+            
+            # Test forward + backward pass
+            logits = test_model(dummy_input)
+            dummy_loss = logits.sum()
+            dummy_loss.backward()
+            
+            # If we get here, it worked!
+            print(f"[MEMORY] ✅ base_channels={base_channels} works!")
+            
+            # Clean up
+            del test_model, dummy_input, logits, dummy_loss
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            return base_channels
+            
+        except torch.cuda.OutOfMemoryError as e:
+            print(f"[MEMORY] ❌ base_channels={base_channels} failed (OOM)")
+            
+            # Clean up
+            if 'test_model' in locals():
+                del test_model
+            if 'dummy_input' in locals():
+                del dummy_input
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            # Continue to next smaller value
+            continue
+            
+        except Exception as e:
+            print(f"[MEMORY] ❌ base_channels={base_channels} failed: {e}")
+            
+            # Clean up
+            if 'test_model' in locals():
+                del test_model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            # Continue to next smaller value
+            continue
+    
+    # If nothing worked, return minimum
+    print(f"[MEMORY] ⚠️  All base_channels tests failed, using minimum: 32")
+    return 32
+
+
 def auto_reduce_batch_size(model, initial_batch_size, min_batch_size, device, args):
     """
     Automatically reduce batch size if CUDA out of memory occurs.
@@ -2487,6 +2595,8 @@ def main():
     parser.add_argument("--k_folds", type=int, default=5, help="Number of k-folds for cross-validation")
     parser.add_argument("--random_seed", type=int, default=42, help="Random seed for reproducibility")
     parser.add_argument("--base_channels", type=int, default=64, help="Base number of channels for CNN models")
+    parser.add_argument("--auto_base_channels", action='store_true', default=False,
+                        help="Automatically find largest base_channels that fits in GPU memory (overrides --base_channels)")
     parser.add_argument("--num_workers", type=int, default=4, help="Number of data loader workers")
     
     # Data split arguments

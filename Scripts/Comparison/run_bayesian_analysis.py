@@ -112,6 +112,18 @@ Examples:
         "--auto-find", action="store_true", default=True,
         help="Automatically find model output directories (default: True)"
     )
+    parser.add_argument(
+        "--classic-dirs", nargs="*",
+        help="Optional: one or more Classic results directories (each containing outercv_fold_* and enhanced_results_summary.json)."
+    )
+    parser.add_argument(
+        "--skip-bayes", action="store_true", default=False,
+        help="Skip Bayesian sampling (hierarchical accuracy and skill model) to save time."
+    )
+    parser.add_argument(
+        "--reuse-from", default=None,
+        help="Optional: path to a previous Bayesian output directory to reuse saved data/results."
+    )
     
     args = parser.parse_args()
     
@@ -160,7 +172,10 @@ Examples:
         
         results = comparator.run_complete_analysis(
             run_dirs=run_dirs,
-            models=args.models
+            models=args.models,
+            classic_dirs=args.classic_dirs,
+            skip_bayes=args.skip_bayes,
+            reuse_from_dir=args.reuse_from
         )
         
         print(f"\n✅ Analysis complete!")

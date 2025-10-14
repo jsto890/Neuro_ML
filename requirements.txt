@@ -34,6 +34,9 @@ xgboost>=1.5.0
 lightgbm>=3.3.0
 scikit-optimize>=0.9.0  # Bayesian optimization
 
+# Interpretability & Explainability
+shap>=0.41.0  # SHAP values for classical model interpretability
+
 # =============================================================================
 # VISUALIZATION
 # =============================================================================

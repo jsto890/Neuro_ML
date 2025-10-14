@@ -9,7 +9,7 @@ raw_data:
 preprocessed_data:
   smri_p: ~/reseng202500013-ndd-ml/data/preprocessed/MRI/smriprep
   pet_p: ~/reseng202500013-ndd-ml/data/preprocessed/PET
-  spect_p: /Volumes/reseng202500013-ndd-ml/data/preprocessed/SPECT
+  spect_p: ~/reseng202500013-ndd-ml/data/preprocessed/SPECT
 
 # Template paths (sourced online and modified):
 templates:
