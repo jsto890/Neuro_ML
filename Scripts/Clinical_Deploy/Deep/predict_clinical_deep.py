@@ -846,30 +846,51 @@ def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title:
     D, H, W = anat.shape
     za, ya, xa = D // 2, H // 2, W // 2
     
-    fig, axs = plt.subplots(1, 3, figsize=(12, 4))
+    # Find the best slice for each view by looking for the slice with most non-zero voxels
+    # This helps ensure we're showing the most informative slice
+    def find_best_slice(volume, axis):
+        """Find the slice with the most non-zero voxels along the given axis"""
+        if axis == 0:  # sagittal (x-axis)
+            slice_scores = [np.sum(volume[i, :, :] > 0) for i in range(volume.shape[0])]
+        elif axis == 1:  # coronal (y-axis)
+            slice_scores = [np.sum(volume[:, i, :] > 0) for i in range(volume.shape[1])]
+        else:  # axial (z-axis)
+            slice_scores = [np.sum(volume[:, :, i] > 0) for i in range(volume.shape[2])]
+        
+        if max(slice_scores) > 0:
+            return np.argmax(slice_scores)
+        else:
+            return volume.shape[axis] // 2
     
-    # Axial view (z-axis)
+    # Use the best slices instead of middle slices
+    za = find_best_slice(anat, 0)  # sagittal
+    ya = find_best_slice(anat, 1)  # coronal  
+    xa = find_best_slice(anat, 2)  # axial
+    
+    fig, axs = plt.subplots(1, 3, figsize=(15, 5))  # Slightly larger figure
+    
+    # Axial view (z-axis) - top-down view
     slice_data = anat_n[:, :, xa].T
     heat_slice = heat_n[:, :, xa].T
-    axs[0].imshow(slice_data, cmap="gray", origin="lower")
-    axs[0].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower")
-    axs[0].set_title('Axial')
+    axs[0].imshow(slice_data, cmap="gray", origin="lower", aspect='auto')
+    axs[0].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower", aspect='auto')
+    axs[0].set_title(f'Axial (slice {xa})')
     axs[0].axis('off')
     
-    # Coronal view (y-axis)
+    # Coronal view (y-axis) - front-back view
     slice_data = anat_n[:, ya, :].T
     heat_slice = heat_n[:, ya, :].T
-    axs[1].imshow(slice_data, cmap="gray", origin="lower")
-    axs[1].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower")
-    axs[1].set_title('Coronal')
+    axs[1].imshow(slice_data, cmap="gray", origin="lower", aspect='auto')
+    axs[1].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower", aspect='auto')
+    axs[1].set_title(f'Coronal (slice {ya})')
     axs[1].axis('off')
     
-    # Sagittal view (x-axis)
+    # Sagittal view (x-axis) - left-right view
     slice_data = anat_n[za, :, :].T
     heat_slice = heat_n[za, :, :].T
-    axs[2].imshow(slice_data, cmap="gray", origin="lower")
-    axs[2].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower")
-    axs[2].set_title('Sagittal')
+    axs[2].imshow(slice_data, cmap="gray", origin="lower", aspect='auto')
+    axs[2].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower", aspect='auto')
+    axs[2].set_title(f'Sagittal (slice {za})')
     axs[2].axis('off')
     
     fig.suptitle(title)
