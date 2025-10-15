@@ -154,10 +154,8 @@ def load_model(arch: str, num_classes: int, in_channels: int, weights_path: str,
         base_model.to(device)
         base_model.eval()
 
-        # If classifier input size is known from checkpoint, set it before loading
-        if classifier_in is not None:
-            base_model.classifier[0] = nn.Linear(classifier_in, 256).to(device)
-            base_model._initialized = True  # skip lazy init
+        # Let the model auto-initialize the classifier based on actual input size
+        # Don't force the classifier size as it may not match the checkpoint
 
         if clean_sd is not None:
             base_model.load_state_dict(clean_sd, strict=False)
