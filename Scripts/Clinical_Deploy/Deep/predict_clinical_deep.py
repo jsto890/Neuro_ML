@@ -864,8 +864,8 @@ def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title:
         y_min, y_max = coords[1].min(), coords[1].max()
         x_min, x_max = coords[2].min(), coords[2].max()
         
-        # Add some padding
-        padding = 5
+        # Add more padding to ensure brain is fully visible
+        padding = 15  # Increased padding
         z_min = max(0, z_min - padding)
         z_max = min(D, z_max + padding)
         y_min = max(0, y_min - padding)
@@ -909,30 +909,34 @@ def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title:
     
     fig, axs = plt.subplots(1, 3, figsize=(18, 6))
     
-    # Axial view (z-axis) - top-down view
+    # Try different slice orientations to find the best view
+    # For SPECT data, we need to experiment with different orientations
+    
+    # Axial view (z-axis) - try different orientations
     slice_data = anat_cropped[:, :, xa]
     heat_slice = heat_cropped[:, :, xa]
     print(f"Axial slice shape: {slice_data.shape}")
-    axs[0].imshow(slice_data, cmap="gray", origin="lower", aspect='equal')
-    axs[0].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower", aspect='equal')
+    axs[0].imshow(slice_data, cmap="gray", origin="lower", aspect='auto')
+    axs[0].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower", aspect='auto')
     axs[0].set_title(f'Axial (slice {xa})')
     axs[0].axis('off')
     
-    # Coronal view (y-axis) - front-back view
+    # Coronal view (y-axis) - try different orientations
+    # The "long line" issue suggests we need to try different slice orientations
     slice_data = anat_cropped[:, ya, :]
     heat_slice = heat_cropped[:, ya, :]
     print(f"Coronal slice shape: {slice_data.shape}")
-    axs[1].imshow(slice_data, cmap="gray", origin="lower", aspect='equal')
-    axs[1].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower", aspect='equal')
+    axs[1].imshow(slice_data, cmap="gray", origin="lower", aspect='auto')
+    axs[1].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower", aspect='auto')
     axs[1].set_title(f'Coronal (slice {ya})')
     axs[1].axis('off')
     
-    # Sagittal view (x-axis) - left-right view
+    # Sagittal view (x-axis) - try different orientations
     slice_data = anat_cropped[za, :, :]
     heat_slice = heat_cropped[za, :, :]
     print(f"Sagittal slice shape: {slice_data.shape}")
-    axs[2].imshow(slice_data, cmap="gray", origin="lower", aspect='equal')
-    axs[2].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower", aspect='equal')
+    axs[2].imshow(slice_data, cmap="gray", origin="lower", aspect='auto')
+    axs[2].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower", aspect='auto')
     axs[2].set_title(f'Sagittal (slice {za})')
     axs[2].axis('off')
     
