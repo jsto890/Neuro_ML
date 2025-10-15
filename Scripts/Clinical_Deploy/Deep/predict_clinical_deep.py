@@ -158,7 +158,9 @@ def load_model(arch: str, num_classes: int, in_channels: int, weights_path: str,
         # Don't force the classifier size as it may not match the checkpoint
 
         if clean_sd is not None:
-            base_model.load_state_dict(clean_sd, strict=False)
+            # Filter out classifier weights to avoid dimension mismatch
+            filtered_sd = {k: v for k, v in clean_sd.items() if not k.startswith('classifier.')}
+            base_model.load_state_dict(filtered_sd, strict=False)
 
         # Wrap to expose feature maps for Grad-CAM
         class GradCAMWrapper(nn.Module):
