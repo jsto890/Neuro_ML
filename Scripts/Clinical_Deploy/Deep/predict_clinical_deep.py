@@ -843,99 +843,37 @@ def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title:
         heat_n = heat_n * (mask > 0).astype(np.float32)
     
     # Create three orthogonal views (axial, coronal, sagittal)
+    # Use the simple approach from visualise_single_dspect.py
     D, H, W = anat.shape
     print(f"Volume shape: {D}x{H}x{W}")
     
-    # Find the brain bounding box to crop to the actual brain region
-    def find_brain_bbox(volume, threshold=0.01):
-        """Find the bounding box of the brain region"""
-        # Find non-zero voxels
-        coords = np.where(volume > threshold)
-        if len(coords[0]) == 0:
-            # Fallback to any non-zero voxels
-            coords = np.where(volume > 0)
-        
-        if len(coords[0]) == 0:
-            # No brain found, return full volume
-            return (0, D), (0, H), (0, W)
-        
-        # Get bounding box
-        z_min, z_max = coords[0].min(), coords[0].max()
-        y_min, y_max = coords[1].min(), coords[1].max()
-        x_min, x_max = coords[2].min(), coords[2].max()
-        
-        # Add more padding to ensure brain is fully visible
-        padding = 25  # Even more padding to avoid cropping
-        z_min = max(0, z_min - padding)
-        z_max = min(D, z_max + padding)
-        y_min = max(0, y_min - padding)
-        y_max = min(H, y_max + padding)
-        x_min = max(0, x_min - padding)
-        x_max = min(W, x_max + padding)
-        
-        return (z_min, z_max), (y_min, y_max), (x_min, x_max)
+    # Use middle slices of the original volume (like visualise_single_dspect.py)
+    za, ya, xa = D // 2, H // 2, W // 2
+    print(f"Using middle slices - Sagittal: {za}, Coronal: {ya}, Axial: {xa}")
     
-    # Get brain bounding box
-    (z_min, z_max), (y_min, y_max), (x_min, x_max) = find_brain_bbox(anat)
-    print(f"Brain bounding box - Z: {z_min}-{z_max}, Y: {y_min}-{y_max}, X: {x_min}-{x_max}")
+    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
     
-    # Crop to brain region
-    anat_cropped = anat_n[z_min:z_max, y_min:y_max, x_min:x_max]
-    heat_cropped = heat_n[z_min:z_max, y_min:y_max, x_min:x_max]
-    
-    print(f"Cropped volume shape: {anat_cropped.shape}")
-    
-    # Find the best slice for each view in the cropped volume
-    def find_best_slice(volume, axis):
-        """Find the slice with the most non-zero voxels along the given axis"""
-        if axis == 0:  # sagittal (x-axis)
-            slice_scores = [np.sum(volume[i, :, :] > 0) for i in range(volume.shape[0])]
-        elif axis == 1:  # coronal (y-axis)
-            slice_scores = [np.sum(volume[:, i, :] > 0) for i in range(volume.shape[1])]
-        else:  # axial (z-axis)
-            slice_scores = [np.sum(volume[:, :, i] > 0) for i in range(volume.shape[2])]
-        
-        if max(slice_scores) > 0:
-            return np.argmax(slice_scores)
-        else:
-            return volume.shape[axis] // 2
-    
-    # Use middle slices in the cropped volume to avoid edge cropping
-    # Since the brain starts at Z=0, we need to be more careful about slice selection
-    za = anat_cropped.shape[0] // 2  # sagittal - middle of Z dimension
-    ya = anat_cropped.shape[1] // 2  # coronal - middle of Y dimension  
-    xa = anat_cropped.shape[2] // 2  # axial - middle of Z dimension
-    
-    print(f"Selected middle slices in cropped volume - Sagittal: {za}, Coronal: {ya}, Axial: {xa}")
-    print(f"Cropped volume dimensions: Z={anat_cropped.shape[0]}, Y={anat_cropped.shape[1]}, X={anat_cropped.shape[2]}")
-    
-    fig, axs = plt.subplots(1, 3, figsize=(18, 6))
-    
-    # Try different slice orientations to find the best view
-    # For SPECT data, we need to experiment with different orientations
-    
-    # Axial view (z-axis) - try different orientations
-    slice_data = anat_cropped[:, :, xa]
-    heat_slice = heat_cropped[:, :, xa]
+    # Axial view (z-axis) - middle slice
+    slice_data = anat_n[:, :, xa].T
+    heat_slice = heat_n[:, :, xa].T
     print(f"Axial slice shape: {slice_data.shape}")
     axs[0].imshow(slice_data, cmap="gray", origin="lower", aspect='auto')
     axs[0].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower", aspect='auto')
     axs[0].set_title(f'Axial (slice {xa})')
     axs[0].axis('off')
     
-    # Coronal view (y-axis) - try different orientations
-    # The "long line" issue suggests we need to try different slice orientations
-    slice_data = anat_cropped[:, ya, :]
-    heat_slice = heat_cropped[:, ya, :]
+    # Coronal view (y-axis) - middle slice
+    slice_data = anat_n[:, ya, :].T
+    heat_slice = heat_n[:, ya, :].T
     print(f"Coronal slice shape: {slice_data.shape}")
     axs[1].imshow(slice_data, cmap="gray", origin="lower", aspect='auto')
     axs[1].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower", aspect='auto')
     axs[1].set_title(f'Coronal (slice {ya})')
     axs[1].axis('off')
     
-    # Sagittal view (x-axis) - try different orientations
-    slice_data = anat_cropped[za, :, :]
-    heat_slice = heat_cropped[za, :, :]
+    # Sagittal view (x-axis) - middle slice
+    slice_data = anat_n[za, :, :].T
+    heat_slice = heat_n[za, :, :].T
     print(f"Sagittal slice shape: {slice_data.shape}")
     axs[2].imshow(slice_data, cmap="gray", origin="lower", aspect='auto')
     axs[2].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower", aspect='auto')
