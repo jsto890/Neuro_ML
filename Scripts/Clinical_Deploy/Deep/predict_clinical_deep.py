@@ -875,6 +875,8 @@ def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title:
     slice_data = anat_n[za, :, :].T
     heat_slice = heat_n[za, :, :].T
     print(f"Sagittal slice shape: {slice_data.shape}")
+    print(f"Sagittal slice data range: {slice_data.min():.3f} to {slice_data.max():.3f}")
+    print(f"Sagittal slice non-zero voxels: {np.sum(slice_data > 0)} out of {slice_data.size}")
     axs[2].imshow(slice_data, cmap="gray", origin="lower", aspect='auto')
     axs[2].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower", aspect='auto')
     axs[2].set_title(f'Sagittal (slice {za})')
