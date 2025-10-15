@@ -780,37 +780,98 @@ def save_nifti(volume: np.ndarray, affine: np.ndarray, header, out_path: Path):
 def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title: str = "", mask: Optional[np.ndarray] = None, alpha: float = 0.4, zero_outside: bool = False):
     """
     Save quick axial/coronal/sagittal overlays for visual sanity check.
+    Uses the same visualization approach as visualise_single_dspect.py
     """
     anat = anat.astype(np.float32)
-    # Robust normalize anat and heat for visibility
-    a_lo, a_hi = np.percentile(anat, 2.0), np.percentile(anat, 98.0)
-    if a_hi - a_lo < 1e-6:
-        anat_n = anat
+    
+    # === Basic sanity checks (from visualise_single_dspect.py) ===
+    flat = anat.ravel()
+    total_voxels = flat.size
+    
+    # Check for excessive zeros
+    zero_count = np.sum(flat == 0)
+    zero_pct = zero_count / total_voxels * 100
+    if zero_pct > 90:
+        print(f"Warning: {zero_pct:.2f}% of voxels are zero in anatomical image.")
+    
+    # Check for NaNs and Infs
+    nan_count = np.isnan(flat).sum()
+    if nan_count > 0:
+        print(f"Warning: {nan_count} NaN voxels detected in anatomical image.")
+    
+    inf_count = np.isinf(flat).sum()
+    if inf_count > 0:
+        print(f"Warning: {inf_count} infinite voxels detected in anatomical image.")
+    
+    # Check for unexpected negative values
+    neg_count = np.sum(flat < 0)
+    if neg_count > 0:
+        print(f"Warning: {neg_count} negative voxels detected in anatomical image (min={flat.min():.2f}).")
+    
+    # Robust normalize anat and heat for visibility (using percentile approach from visualise_single_dspect.py)
+    # For anatomical image - use 5th and 95th percentiles of non-zero voxels
+    anat_nonzero = anat[anat > 0]
+    if len(anat_nonzero) > 0:
+        vmin, vmax = np.percentile(anat_nonzero, [5, 95])
+        if vmax - vmin > 1e-6:
+            anat_n = np.clip((anat - vmin) / (vmax - vmin), 0.0, 1.0)
+        else:
+            anat_n = anat
     else:
-        anat_n = np.clip((anat - a_lo) / (a_hi - a_lo), 0.0, 1.0)
+        anat_n = anat
+    
+    # For heatmap - use same approach
     if mask is not None and np.any(mask > 0):
         sel = heat[mask > 0]
-        h_lo, h_hi = np.percentile(sel, 90.0), np.percentile(sel, 99.5)
+        if len(sel) > 0:
+            h_lo, h_hi = np.percentile(sel, [5, 95])
+        else:
+            h_lo, h_hi = np.percentile(heat[heat > 0], [5, 95]) if np.any(heat > 0) else (0, 1)
     else:
-        h_lo, h_hi = np.percentile(heat, 90.0), np.percentile(heat, 99.5)
-    heat = np.clip((heat - h_lo) / (h_hi - h_lo + 1e-8), 0.0, 1.0)
+        heat_nonzero = heat[heat > 0]
+        if len(heat_nonzero) > 0:
+            h_lo, h_hi = np.percentile(heat_nonzero, [5, 95])
+        else:
+            h_lo, h_hi = (0, 1)
+    
+    if h_hi - h_lo > 1e-6:
+        heat_n = np.clip((heat - h_lo) / (h_hi - h_lo), 0.0, 1.0)
+    else:
+        heat_n = heat
+    
     if bool(zero_outside) and mask is not None:
-        heat = heat * (mask > 0).astype(np.float32)
+        heat_n = heat_n * (mask > 0).astype(np.float32)
+    
+    # Create three orthogonal views (axial, coronal, sagittal)
     D, H, W = anat.shape
     za, ya, xa = D // 2, H // 2, W // 2
+    
     fig, axs = plt.subplots(1, 3, figsize=(12, 4))
-    axs[0].imshow(anat_n[za].T, cmap='gray', origin='lower')
-    axs[0].imshow(heat[za].T, cmap='hot', alpha=float(alpha), origin='lower')
-    axs[0].set_title('Sagittal')
+    
+    # Axial view (z-axis)
+    slice_data = anat_n[:, :, xa].T
+    heat_slice = heat_n[:, :, xa].T
+    axs[0].imshow(slice_data, cmap="gray", origin="lower")
+    axs[0].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower")
+    axs[0].set_title('Axial')
     axs[0].axis('off')
-    axs[1].imshow(anat_n[:, ya, :].T, cmap='gray', origin='lower')
-    axs[1].imshow(heat[:, ya, :].T, cmap='hot', alpha=float(alpha), origin='lower')
+    
+    # Coronal view (y-axis)
+    slice_data = anat_n[:, ya, :].T
+    heat_slice = heat_n[:, ya, :].T
+    axs[1].imshow(slice_data, cmap="gray", origin="lower")
+    axs[1].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower")
     axs[1].set_title('Coronal')
     axs[1].axis('off')
-    axs[2].imshow(anat_n[:, :, xa].T, cmap='gray', origin='lower')
-    axs[2].imshow(heat[:, :, xa].T, cmap='hot', alpha=float(alpha), origin='lower')
-    axs[2].set_title('Axial')
+    
+    # Sagittal view (x-axis)
+    slice_data = anat_n[za, :, :].T
+    heat_slice = heat_n[za, :, :].T
+    axs[2].imshow(slice_data, cmap="gray", origin="lower")
+    axs[2].imshow(heat_slice, cmap="hot", alpha=float(alpha), origin="lower")
+    axs[2].set_title('Sagittal')
     axs[2].axis('off')
+    
     fig.suptitle(title)
     fig.tight_layout()
     plt.savefig(str(out_path), dpi=150, bbox_inches='tight')
