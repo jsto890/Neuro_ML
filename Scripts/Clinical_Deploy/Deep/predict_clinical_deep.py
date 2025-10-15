@@ -162,6 +162,11 @@ def load_model(arch: str, num_classes: int, in_channels: int, weights_path: str,
             filtered_sd = {k: v for k, v in clean_sd.items() if not k.startswith('classifier.')}
             base_model.load_state_dict(filtered_sd, strict=False)
 
+        # Initialize the classifier with a dummy forward pass to get correct dimensions
+        with torch.no_grad():
+            dummy_input = torch.randn(1, in_channels, 96, 96, 112).to(device)
+            _ = base_model(dummy_input)  # This triggers _initialize_classifier
+
         # Wrap to expose feature maps for Grad-CAM
         class GradCAMWrapper(nn.Module):
             def __init__(self, model: nn.Module):
