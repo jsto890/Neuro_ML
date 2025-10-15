@@ -865,7 +865,7 @@ def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title:
         x_min, x_max = coords[2].min(), coords[2].max()
         
         # Add more padding to ensure brain is fully visible
-        padding = 15  # Increased padding
+        padding = 25  # Even more padding to avoid cropping
         z_min = max(0, z_min - padding)
         z_max = min(D, z_max + padding)
         y_min = max(0, y_min - padding)
@@ -900,12 +900,14 @@ def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title:
         else:
             return volume.shape[axis] // 2
     
-    # Use the best slices in the cropped volume
-    za = find_best_slice(anat_cropped, 0)  # sagittal
-    ya = find_best_slice(anat_cropped, 1)  # coronal  
-    xa = find_best_slice(anat_cropped, 2)  # axial
+    # Use middle slices in the cropped volume to avoid edge cropping
+    # Since the brain starts at Z=0, we need to be more careful about slice selection
+    za = anat_cropped.shape[0] // 2  # sagittal - middle of Z dimension
+    ya = anat_cropped.shape[1] // 2  # coronal - middle of Y dimension  
+    xa = anat_cropped.shape[2] // 2  # axial - middle of Z dimension
     
-    print(f"Selected slices in cropped volume - Sagittal: {za}, Coronal: {ya}, Axial: {xa}")
+    print(f"Selected middle slices in cropped volume - Sagittal: {za}, Coronal: {ya}, Axial: {xa}")
+    print(f"Cropped volume dimensions: Z={anat_cropped.shape[0]}, Y={anat_cropped.shape[1]}, X={anat_cropped.shape[2]}")
     
     fig, axs = plt.subplots(1, 3, figsize=(18, 6))
     
