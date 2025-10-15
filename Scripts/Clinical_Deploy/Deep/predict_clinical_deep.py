@@ -847,9 +847,31 @@ def save_overlay_pngs(anat: np.ndarray, heat: np.ndarray, out_path: Path, title:
     D, H, W = anat.shape
     print(f"Volume shape: {D}x{H}x{W}")
     
-    # Use middle slices of the original volume (like visualise_single_dspect.py)
-    za, ya, xa = D // 2, H // 2, W // 2
-    print(f"Using middle slices - Sagittal: {za}, Coronal: {ya}, Axial: {xa}")
+    # Find slices with actual brain data instead of just middle slices
+    def find_best_slice_with_data(volume, axis):
+        """Find the slice with the most non-zero voxels along the given axis"""
+        if axis == 0:  # sagittal (z-axis)
+            slice_scores = [np.sum(volume[i, :, :] > 0) for i in range(volume.shape[0])]
+        elif axis == 1:  # coronal (y-axis)
+            slice_scores = [np.sum(volume[:, i, :] > 0) for i in range(volume.shape[1])]
+        else:  # axial (z-axis)
+            slice_scores = [np.sum(volume[:, :, i] > 0) for i in range(volume.shape[2])]
+        
+        if max(slice_scores) > 0:
+            best_slice = np.argmax(slice_scores)
+            print(f"Best slice for axis {axis}: {best_slice} with {max(slice_scores)} non-zero voxels")
+            return best_slice
+        else:
+            middle = volume.shape[axis] // 2
+            print(f"No data found for axis {axis}, using middle slice: {middle}")
+            return middle
+    
+    # Find slices with actual brain data
+    za = find_best_slice_with_data(anat_n, 0)  # sagittal
+    ya = find_best_slice_with_data(anat_n, 1)  # coronal  
+    xa = find_best_slice_with_data(anat_n, 2)  # axial
+    
+    print(f"Using data-rich slices - Sagittal: {za}, Coronal: {ya}, Axial: {xa}")
     
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
     
