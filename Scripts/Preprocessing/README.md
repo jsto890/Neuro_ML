@@ -221,7 +221,7 @@ python validate_pipeline.py --diagnosis CN
 python 1_test.py  # Test reorientation
 python 2_test.py  # Test normalization
 python 3_test.py  # Test registration
-python 4_test_visulise.py  # Test masking
+python 4_test_visualise.py  # Test masking
 python 5_test.py  # Test padding
 python 6_test.py  # Test postprocessing
 ```

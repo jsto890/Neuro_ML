@@ -8,7 +8,7 @@ This directory contains deep learning approaches for neurodegenerative disease d
 Deep_Learning/
 ├── README.md                     # This file
 ├── MRI/                          # MRI deep learning
-│   ├── config_hardware_optimized.yaml
+│   ├── config_hardware_optimised.yaml
 │   ├── config_transformers.yaml
 │   ├── dataset.py
 │   ├── models_smri.py
@@ -22,7 +22,7 @@ Deep_Learning/
 │   ├── regenerate_fold_csv.py
 │   └── show_pretrained_info.py
 ├── PET/                          # PET deep learning
-│   ├── config_hardware_optimized.yaml
+│   ├── config_hardware_optimised.yaml
 │   ├── config_transformers.yaml
 │   ├── dataset.py
 │   ├── models_pet.py
@@ -36,7 +36,7 @@ Deep_Learning/
 │   ├── regenerate_plots.py
 │   └── show_pretrained_info.py
 └── DSPECT/                       # SPECT deep learning
-    ├── config_hardware_optimized.yaml
+    ├── config_hardware_optimised.yaml
     ├── config_transformers.yaml
     ├── dataset.py
     ├── models_spect.py
@@ -128,15 +128,15 @@ Complete training pipeline with data loading, model training, and evaluation.
 ```bash
 # MRI training
 cd MRI
-python train_smri.py --config config_hardware_optimized.yaml
+python train_smri.py --config config_hardware_optimised.yaml
 
 # PET training
 cd PET
-python train_pet.py --config config_hardware_optimized.yaml
+python train_pet.py --config config_hardware_optimised.yaml
 
 # SPECT training
 cd DSPECT
-python train_spect.py --config config_hardware_optimized.yaml
+python train_spect.py --config config_hardware_optimised.yaml
 ```
 
 #### Features
@@ -262,7 +262,7 @@ python regenerate_plots.py \
 
 ## 🔧 Configuration
 
-### Hardware Optimization (`config_hardware_optimized.yaml`)
+### Hardware Optimization (`config_hardware_optimised.yaml`)
 
 #### GPU Configuration
 ```yaml
