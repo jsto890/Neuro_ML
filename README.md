@@ -128,15 +128,15 @@ python complete_workflow.py --input ~/path/to/radiomics.csv --output ~/path/to/r
 ```bash
 # MRI
 cd Scripts/Deep_Learning/MRI
-python train_smri.py --config config_hardware_optimized.yaml
+python train_smri.py --config config_hardware_optimised.yaml
 
 # PET
 cd Scripts/Deep_Learning/PET
-python train_pet.py --config config_hardware_optimized.yaml
+python train_pet.py --config config_hardware_optimised.yaml
 
 # SPECT
 cd Scripts/Deep_Learning/DSPECT
-python train_spect.py --config config_hardware_optimized.yaml
+python train_spect.py --config config_hardware_optimised.yaml
 ```
 
 ### 4. Model Evaluation and Comparison
@@ -204,11 +204,11 @@ python visualise_gradcam.py --model ~/path/to/model.pth --input ~/path/to/image.
 ## 🎨 Visualization Tools
 
 ```bash
-# Interactive visualization
+# Interactive visualisation
 cd Scripts/Visualise
 python interactive_visualise.py --input ~/path/to/image.nii.gz
 
-# Middle slice visualization
+# Middle slice visualisation
 python visualise_middle_slice.py --input ~/path/to/image.nii.gz --output ~/path/to/plot.png
 
 # Grad-CAM animation
@@ -220,13 +220,13 @@ python animate_gradcam_overlay.py --input ~/path/to/image.nii.gz --gradcam ~/pat
 The pipeline uses YAML configuration files for flexible parameter tuning:
 
 - `config.yaml`: Main project configuration
-- `config_hardware_optimized.yaml`: Hardware-optimized settings
+- `config_hardware_optimised.yaml`: Hardware-optimised settings
 - `config_transformers.yaml`: Transformer-specific settings
 - `config_enhanced.yaml`: Enhanced classifier settings
 
 ## 📈 Output Structure
 
-Results are organized as follows:
+Results are organised as follows:
 ```
 results/
 ├── models/                    # Trained models (.pkl, .pth)

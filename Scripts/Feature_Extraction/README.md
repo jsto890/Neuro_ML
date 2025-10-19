@@ -343,7 +343,7 @@ sub-002,0.234,0.567,0.890,...
 - **h5py**: HDF5 file support
 - **scikit-learn**: Feature selection and analysis
 - **matplotlib**: Visualization
-- **seaborn**: Statistical visualization
+- **seaborn**: Statistical visualisation
 
 ## 🚀 Performance Optimization
 
@@ -362,7 +362,7 @@ sub-002,0.234,0.567,0.890,...
 ### Storage Optimization
 - **Compression**: Use compressed output formats
 - **Efficient formats**: Choose appropriate file formats
-- **Metadata optimization**: Optimize metadata storage
+- **Metadata optimisation**: Optimize metadata storage
 - **Cleanup**: Remove temporary files
 
 ## 📞 Support

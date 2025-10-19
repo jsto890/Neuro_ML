@@ -46,9 +46,9 @@ python complete_workflow.py \
 #### Features
 - **Complete pipeline**: End-to-end radiomics classification
 - **Feature engineering**: Advanced feature selection and engineering
-- **Model optimization**: Bayesian optimization for hyperparameters
+- **Model optimisation**: Bayesian optimisation for hyperparameters
 - **Ensemble methods**: Stacking and voting ensembles
-- **Comprehensive evaluation**: Multiple metrics and visualizations
+- **Comprehensive evaluation**: Multiple metrics and visualisations
 - **Clinical interpretability**: SHAP analysis and feature importance
 
 #### Output Structure
@@ -126,7 +126,7 @@ Advanced machine learning classifiers with multiple algorithms and ensemble meth
 #### Features
 - **Multiple algorithms**: Support for various ML algorithms
 - **Feature engineering**: Advanced feature selection and engineering
-- **Hyperparameter optimization**: Grid search and random search
+- **Hyperparameter optimisation**: Grid search and random search
 - **Ensemble methods**: Voting and stacking ensembles
 - **Cross-validation**: Stratified k-fold cross-validation
 - **Calibration**: Probability calibration for better predictions
@@ -192,7 +192,7 @@ models:
 ### Model Selection
 - **Grid Search**: Exhaustive hyperparameter search
 - **Random Search**: Randomized hyperparameter search
-- **Bayesian Optimization**: Efficient hyperparameter optimization
+- **Bayesian Optimization**: Efficient hyperparameter optimisation
 
 ## 🔍 Feature Engineering
 
@@ -206,7 +206,7 @@ models:
 - **Polynomial Features**: Generate polynomial interactions
 - **Statistical Features**: Mean, std, skewness, kurtosis
 - **Outlier Detection**: IQR-based outlier removal
-- **Normalization**: Robust scaling and standardization
+- **Normalization**: Robust scaling and standardisation
 
 ### Feature Validation
 - **Data Leakage Prevention**: Proper train/test splitting
@@ -244,8 +244,8 @@ models:
 ### Model Comparison
 - **Performance Comparison**: Side-by-side model comparison
 - **Statistical Testing**: Significance testing between models
-- **Effect Size**: Effect size visualization
-- **Bias Analysis**: Bias detection and visualization
+- **Effect Size**: Effect size visualisation
+- **Bias Analysis**: Bias detection and visualisation
 
 ## 🔧 Configuration
 
@@ -311,7 +311,7 @@ models:
 ### Model Issues
 1. **Overfitting**: Use regularization and cross-validation
 2. **Underfitting**: Increase model complexity
-3. **Convergence**: Check optimization convergence
+3. **Convergence**: Check optimisation convergence
 4. **Memory issues**: Use batch processing for large datasets
 
 ### Feature Issues
@@ -347,7 +347,7 @@ models:
 
 ### Optional Libraries
 - **shap**: Model interpretability
-- **optuna**: Hyperparameter optimization
+- **optuna**: Hyperparameter optimisation
 - **imbalanced-learn**: Imbalanced data handling
 
 ## 🚀 Performance Optimization

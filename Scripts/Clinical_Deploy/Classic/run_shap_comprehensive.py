@@ -11,7 +11,7 @@ It generates:
 1. Per-model cross-fold averaged SHAP values
 2. Cross-model comparison of feature importance
 3. Ensemble-based feature importance
-4. Comprehensive visualizations and rankings
+4. Comprehensive visualisations and rankings
 
 Usage:
     # Analyze all models (default)
@@ -66,12 +66,12 @@ def find_fold_directories(cv_dir: Path) -> List[Path]:
 
 
 def get_shap_for_model_fold(fold_dir: Path, model_type: str, data: Dict,
-                            class_names: List[str], analyze_all_classes: bool = True) -> Optional[Dict]:
+                            class_names: List[str], analyse_all_classes: bool = True) -> Optional[Dict]:
     """
     Compute SHAP values for a single model in a single fold.
     
     Args:
-        analyze_all_classes: If True, return SHAP for all classes separately
+        analyse_all_classes: If True, return SHAP for all classes separately
     
     Returns:
         Dictionary with SHAP values and metadata, or None if failed
@@ -129,7 +129,7 @@ def get_shap_for_model_fold(fold_dir: Path, model_type: str, data: Dict,
         n_classes = len(class_names)
         
         # Handle different SHAP formats and extract per-class
-        if analyze_all_classes and n_classes >= 2:
+        if analyse_all_classes and n_classes >= 2:
             # Multi-class: get SHAP for each class
             per_class_shap = {}
             per_class_mean_abs = {}
@@ -759,7 +759,7 @@ def compare_models(model_aggregates: Dict[str, Dict], output_dir: Path):
     
     heatmap_data = top_features[mean_cols].values
     
-    # Normalize for visualization
+    # Normalize for visualisation
     heatmap_norm = (heatmap_data - heatmap_data.min(axis=0)) / \
                    (heatmap_data.max(axis=0) - heatmap_data.min(axis=0) + 1e-10)
     
@@ -1148,7 +1148,7 @@ def main():
     parser.add_argument('--model_types', nargs='+', type=str,
                        default=['randomforest', 'extratrees', 'gradientboosting', 
                                 'xgboost', 'lightgbm', 'svm', 'logisticregression', 'knn'],
-                       help='Model types to analyze (space-separated). Default: all 8 models')
+                       help='Model types to analyse (space-separated). Default: all 8 models')
     parser.add_argument('--class_names', nargs='+', type=str,
                        help='Class names (e.g., --class_names CN AD PD)')
     parser.add_argument('--test_size', type=float, default=0.2,

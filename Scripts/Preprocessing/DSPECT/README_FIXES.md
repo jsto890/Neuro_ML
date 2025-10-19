@@ -3,7 +3,7 @@
 ## 🚀 **NEW: ML-Ready Features**
 
 ### **Enhanced ML Readiness**
-- **Consistent Shapes**: All images standardized to [91, 109, 91] for CNN compatibility
+- **Consistent Shapes**: All images standardised to [91, 109, 91] for CNN compatibility
 - **Intensity Validation**: Automatic checks for negative values, outliers, and normalization quality
 - **Data Integrity**: Comprehensive validation of brain coverage, intensity ranges, and artifacts
 - **ML Validation**: Dedicated ML readiness checks in final validation step
@@ -91,7 +91,7 @@ python testing/4_test_visulise.py --isHasel
 ## 📊 **ML Readiness Features**
 
 ### **Automatic Quality Checks**
-- ✅ **Shape Consistency**: All images standardized to target dimensions
+- ✅ **Shape Consistency**: All images standardised to target dimensions
 - ✅ **Intensity Validation**: No negative values, reasonable ranges
 - ✅ **Brain Coverage**: Appropriate SPECT coverage (5-50%)
 - ✅ **Normalization Quality**: Z-score validation (~0 mean, ~1 std)
@@ -99,7 +99,7 @@ python testing/4_test_visulise.py --isHasel
 
 ### **ML Model Compatibility**
 - **CNN/Deep Learning**: Fixed input shapes, normalized intensities
-- **Traditional ML**: Consistent features, standardized ranges
+- **Traditional ML**: Consistent features, standardised ranges
 - **Statistical Analysis**: Proper normalization, outlier detection
 
 ## 🎯 **Expected Results**

@@ -24,7 +24,7 @@ import json
 from pathlib import Path
 import pandas as pd
 from sklearn.calibration import calibration_curve
-from scipy.optimize import minimize_scalar
+from scipy.optimise import minimize_scalar
 
 from dataset import SPECTDataset
 from models_spect import Simple3DCNN, get_3d_model
@@ -53,7 +53,7 @@ def find_optimal_temperature(logits, labels, max_iter=1000):
     Args:
         logits: Raw model outputs [N, num_classes]
         labels: Ground truth labels [N]
-        max_iter: Maximum iterations for optimization
+        max_iter: Maximum iterations for optimisation
     
     Returns:
         optimal_temperature: Optimal temperature value
@@ -74,7 +74,7 @@ def find_optimal_temperature(logits, labels, max_iter=1000):
         
         return nll
     
-    # Find optimal temperature using scipy optimization
+    # Find optimal temperature using scipy optimisation
     result = minimize_scalar(objective, bounds=(0.1, 10.0), method='bounded', options={'maxiter': max_iter})
     
     if result.success:
@@ -82,7 +82,7 @@ def find_optimal_temperature(logits, labels, max_iter=1000):
         calibrated_probs = temperature_scaling(torch.from_numpy(logits), optimal_temperature).numpy()
         return optimal_temperature, calibrated_probs
     else:
-        print(f"Warning: Temperature optimization failed. Using default temperature 1.0")
+        print(f"Warning: Temperature optimisation failed. Using default temperature 1.0")
         return 1.0, nn.Softmax(dim=1)(torch.from_numpy(logits)).numpy()
 
 def evaluate_model_with_temperature_scaling(model, test_loader, device, val_loader=None, label_mapping=None, threshold: float | None = None):

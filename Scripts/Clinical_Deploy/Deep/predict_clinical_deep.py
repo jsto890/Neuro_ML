@@ -154,7 +154,7 @@ def load_model(arch: str, num_classes: int, in_channels: int, weights_path: str,
         base_model.to(device)
         base_model.eval()
 
-        # Let the model auto-initialize the classifier based on actual input size
+        # Let the model auto-initialise the classifier based on actual input size
         # Don't force the classifier size as it may not match the checkpoint
 
         if clean_sd is not None:
@@ -1537,7 +1537,7 @@ def main():
                         if g is not None:
                             g_list.append(g)
                         else:
-                            interpret_errors['gradientshap'].append("Captum not available or initialization failed for one model.")
+                            interpret_errors['gradientshap'].append("Captum not available or initialisation failed for one model.")
                     except Exception as _e:
                         # Skip models that fail attribution but continue with others
                         warn = f"GradientSHAP warning (one model skipped): {_e}"

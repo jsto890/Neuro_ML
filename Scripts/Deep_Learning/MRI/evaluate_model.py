@@ -25,7 +25,7 @@ import json
 from pathlib import Path
 import pandas as pd
 from sklearn.calibration import calibration_curve
-from scipy.optimize import minimize_scalar
+from scipy.optimise import minimize_scalar
 
 from dataset import SMRIDataset
 from models_smri import Simple3DCNN
@@ -54,7 +54,7 @@ def find_optimal_temperature(logits, labels, max_iter=1000):
     Args:
         logits: Raw model outputs [N, num_classes]
         labels: Ground truth labels [N]
-        max_iter: Maximum iterations for optimization
+        max_iter: Maximum iterations for optimisation
     
     Returns:
         optimal_temperature: Optimal temperature value
@@ -75,7 +75,7 @@ def find_optimal_temperature(logits, labels, max_iter=1000):
         
         return nll
     
-    # Find optimal temperature using scipy optimization
+    # Find optimal temperature using scipy optimisation
     result = minimize_scalar(objective, bounds=(0.1, 10.0), method='bounded', options={'maxiter': max_iter})
     
     if result.success:
@@ -83,7 +83,7 @@ def find_optimal_temperature(logits, labels, max_iter=1000):
         calibrated_probs = temperature_scaling(torch.from_numpy(logits), optimal_temperature).numpy()
         return optimal_temperature, calibrated_probs
     else:
-        print(f"Warning: Temperature optimization failed. Using default temperature 1.0")
+        print(f"Warning: Temperature optimisation failed. Using default temperature 1.0")
         return 1.0, nn.Softmax(dim=1)(torch.from_numpy(logits)).numpy()
 
 def evaluate_model_with_temperature_scaling(model, test_loader, device, val_loader=None, label_mapping=None, threshold: float | None = None):
@@ -330,7 +330,7 @@ def calculate_metrics(predictions, probabilities, labels):
     }
 
 def create_evaluation_plots(predictions, probabilities, labels, metrics, output_dir, model_name="Unknown", image_type="sMRI"):
-    """Create comprehensive evaluation plots optimized for journal publications."""
+    """Create comprehensive evaluation plots optimised for journal publications."""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
@@ -390,8 +390,8 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         except Exception:
             pos_probs = probabilities
         fpr, tpr, _ = sk_roc_curve(labels, pos_probs)
-        ax1.plot(fpr, tpr, color='blue', lw=2, label=f'ROC Curve (AUC = {metrics["auc"]:.3f})')
-        ax1.plot([0, 1], [0, 1], color='red', lw=1, linestyle='--', alpha=0.8)
+        ax1.plot(fpr, tpr, colour='blue', lw=2, label=f'ROC Curve (AUC = {metrics["auc"]:.3f})')
+        ax1.plot([0, 1], [0, 1], colour='red', lw=1, linestyle='--', alpha=0.8)
         ax1.set_xlabel('False Positive Rate')
         ax1.set_ylabel('True Positive Rate')
         ax1.set_title('ROC Curve (Binary)')
@@ -399,7 +399,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         ax1.grid(True, alpha=0.3)
     else:
         # Multiclass: One-vs-Rest ROC curves
-        colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown']
+        colours = ['blue', 'red', 'green', 'orange', 'purple', 'brown']
         
         for i in range(n_classes):
             # One-vs-rest: class i vs all others
@@ -407,10 +407,10 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
             fpr, tpr, _ = sk_roc_curve(y_true_binary, probabilities[:, i])
             roc_auc = auc(fpr, tpr)
             
-            ax1.plot(fpr, tpr, color=colors[i % len(colors)], lw=2, 
+            ax1.plot(fpr, tpr, colour=colours[i % len(colours)], lw=2, 
                     label=f'{disease_names[i]} vs Rest (AUC = {roc_auc:.3f})')
         
-        ax1.plot([0, 1], [0, 1], color='black', lw=1, linestyle='--', alpha=0.8)
+        ax1.plot([0, 1], [0, 1], colour='black', lw=1, linestyle='--', alpha=0.8)
         ax1.set_xlabel('False Positive Rate')
         ax1.set_ylabel('True Positive Rate')
         ax1.set_title('ROC Curves (One-vs-Rest)')
@@ -426,7 +426,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         except Exception:
             pos_probs = probabilities
         precision_curve, recall_curve, _ = precision_recall_curve(labels, pos_probs)
-        ax2.plot(recall_curve, precision_curve, color='green', lw=2)
+        ax2.plot(recall_curve, precision_curve, colour='green', lw=2)
         ax2.set_xlabel('Recall')
         ax2.set_ylabel('Precision')
         ax2.set_title('Precision-Recall Curve (Binary)')
@@ -439,7 +439,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
             precision_curve, recall_curve, _ = precision_recall_curve(y_true_binary, probabilities[:, i])
             avg_precision = average_precision_score(y_true_binary, probabilities[:, i])
             
-            ax2.plot(recall_curve, precision_curve, color=colors[i % len(colors)], lw=2,
+            ax2.plot(recall_curve, precision_curve, colour=colours[i % len(colours)], lw=2,
                     label=f'{disease_names[i]} vs Rest (AP = {avg_precision:.3f})')
         
         ax2.set_xlabel('Recall')
@@ -469,7 +469,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     
     # Create box plot data - for single values, create a simple bar plot with error bars
     bars = ax4.bar(range(len(metric_names)), metric_values, 
-                   color='lightblue', alpha=0.7, width=0.6)
+                   colour='lightblue', alpha=0.7, width=0.6)
     
     # Add value annotations on top of bars
     for i, (bar, value) in enumerate(zip(bars, metric_values)):
@@ -497,7 +497,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
     
     # Create bar plot for prediction counts
     bars = ax5.bar(range(len(unique_labels)), counts, 
-                   color='lightcoral', alpha=0.7, width=0.6)
+                   colour='lightcoral', alpha=0.7, width=0.6)
     
     # Add count annotations on top of bars
     for i, (bar, count) in enumerate(zip(bars, counts)):
@@ -523,8 +523,8 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         # For binary classification, show probability distribution
         positive_probs = probabilities[:, 1]
         ax6.boxplot([positive_probs], patch_artist=True, 
-                   boxprops=dict(facecolor='orange', alpha=0.7),
-                   medianprops=dict(color='black', linewidth=2))
+                   boxprops=dict(facecolour='orange', alpha=0.7),
+                   medianprops=dict(colour='black', linewidth=2))
         ax6.set_xlabel('Probability of Positive Class')
         ax6.set_ylabel('Probability')
         ax6.set_title('Probability Distribution (Binary)')
@@ -536,13 +536,13 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         std_prob = np.std(positive_probs)
         ax6.text(0.02, 0.98, f'Mean: {mean_prob:.3f}\nStd: {std_prob:.3f}', 
                 transform=ax6.transAxes, verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=8)
+                bbox=dict(boxstyle='round', facecolour='white', alpha=0.8), fontsize=8)
     else:
         # For multi-class, show max probability distribution
         max_probs = np.max(probabilities, axis=1)
         ax6.boxplot([max_probs], patch_artist=True,
-                   boxprops=dict(facecolor='orange', alpha=0.7),
-                   medianprops=dict(color='black', linewidth=2))
+                   boxprops=dict(facecolour='orange', alpha=0.7),
+                   medianprops=dict(colour='black', linewidth=2))
         ax6.set_xlabel('Maximum Probability')
         ax6.set_ylabel('Probability')
         ax6.set_title('Probability Distribution (Multiclass)')
@@ -554,7 +554,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         std_prob = np.std(max_probs)
         ax6.text(0.02, 0.98, f'Mean: {mean_prob:.3f}\nStd: {std_prob:.3f}', 
                 transform=ax6.transAxes, verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=8)
+                bbox=dict(boxstyle='round', facecolour='white', alpha=0.8), fontsize=8)
     
     # 7. Per-class Performance Box Plot (only for multiclass)
     if n_classes > 2:
@@ -572,12 +572,12 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         # Create box plot
         bp = ax7.boxplot(metric_data, labels=metric_labels, patch_artist=True,
                         boxprops=dict(alpha=0.7),
-                        medianprops=dict(color='black', linewidth=2))
+                        medianprops=dict(colour='black', linewidth=2))
         
         # Color the boxes
-        colors = ['lightblue', 'lightgreen', 'lightcoral']
-        for patch, color in zip(bp['boxes'], colors):
-            patch.set_facecolor(color)
+        colours = ['lightblue', 'lightgreen', 'lightcoral']
+        for patch, colour in zip(bp['boxes'], colours):
+            patch.set_facecolour(colour)
         
         ax7.set_xlabel('Metrics')
         ax7.set_ylabel('Score')
@@ -591,7 +591,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
             std_val = np.std(data)
             ax7.text(i+1, 0.95, f'μ={mean_val:.3f}\nσ={std_val:.3f}', 
                     ha='center', va='top', fontsize=8,
-                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                    bbox=dict(boxstyle='round', facecolour='white', alpha=0.8))
         
         # 8. Class Balance Analysis Box Plot
         ax8 = axes[2, 1]
@@ -600,8 +600,8 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         
         # Create box plot for class counts
         bp = ax8.boxplot([counts_actual], patch_artist=True,
-                        boxprops=dict(facecolor='lightgreen', alpha=0.7),
-                        medianprops=dict(color='black', linewidth=2))
+                        boxprops=dict(facecolour='lightgreen', alpha=0.7),
+                        medianprops=dict(colour='black', linewidth=2))
         
         ax8.set_xlabel('Class Distribution')
         ax8.set_ylabel('Count')
@@ -613,7 +613,7 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         std_count = np.std(counts_actual)
         ax8.text(0.02, 0.98, f'Mean: {mean_count:.1f}\nStd: {std_count:.1f}\nTotal: {np.sum(counts_actual)}', 
                 transform=ax8.transAxes, verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=8)
+                bbox=dict(boxstyle='round', facecolour='white', alpha=0.8), fontsize=8)
         
         ax8.grid(True, alpha=0.3)
         
@@ -630,12 +630,12 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
         
         # Create box plot for class-wise probabilities
         bp = ax9.boxplot(class_prob_data, labels=class_labels, patch_artist=True,
-                        medianprops=dict(color='black', linewidth=2))
+                        medianprops=dict(colour='black', linewidth=2))
         
         # Color the boxes
-        colors = ['lightblue', 'lightcoral', 'lightgreen', 'lightyellow', 'lightpink', 'lightgray']
-        for patch, color in zip(bp['boxes'], colors[:len(class_labels)]):
-            patch.set_facecolor(color)
+        colours = ['lightblue', 'lightcoral', 'lightgreen', 'lightyellow', 'lightpink', 'lightgray']
+        for patch, colour in zip(bp['boxes'], colours[:len(class_labels)]):
+            patch.set_facecolour(colour)
             patch.set_alpha(0.7)
         
         ax9.set_xlabel('Classes')
@@ -649,11 +649,11 @@ def create_evaluation_plots(predictions, probabilities, labels, metrics, output_
             std_prob = np.std(data)
             ax9.text(i+1, 0.95, f'μ={mean_prob:.3f}\nσ={std_prob:.3f}', 
                     ha='center', va='top', fontsize=7,
-                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                    bbox=dict(boxstyle='round', facecolour='white', alpha=0.8))
     
     plt.tight_layout()
     plot_path = output_path / 'model_evaluation_analysis.png'
-    plt.savefig(plot_path, dpi=300, bbox_inches='tight', facecolor='white', edgecolor='none')
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight', facecolour='white', edgecolour='none')
     plt.close()
     
     # Reset matplotlib rcParams to default

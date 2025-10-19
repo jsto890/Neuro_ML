@@ -102,7 +102,7 @@ def group_dicom_files(dicom_files):
     return grouped
 
 def create_output_structure(base_output_path, subject_id, scan_date, modality):
-    """Create organized output folder structure"""
+    """Create organised output folder structure"""
     subject_folder = base_output_path / f"Subject_{subject_id}"
     subject_folder.mkdir(parents=True, exist_ok=True)
     
@@ -367,7 +367,7 @@ def main():
         print("⚠️  Below target: Consider investigating failed conversions")
     
     if successful_conversions > 0:
-        print("\nFiles have been organized by:")
+        print("\nFiles have been organised by:")
         print("- Subject ID")
         print("- Scan date")
         print("- Modality")

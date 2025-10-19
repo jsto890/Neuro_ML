@@ -7,7 +7,7 @@ This module implements comprehensive Bayesian analysis for model comparison incl
 2. Trial-level skill models with Bambi for model comparison  
 3. Bayesian calibration analysis for multiclass predictions
 4. Bayesian AUC estimation and stacking ensemble methods
-5. Comprehensive reporting and visualization
+5. Comprehensive reporting and visualisation
 
 Author: P4P Team
 Date: 2025
@@ -521,7 +521,7 @@ class BayesianModelComparison:
 
         Expects per-fold JSON files with per-subject predictions are not available; we synthesize
         per-fold accuracy and MCC using available summary, and approximate labels/preds if needed
-        for downstream AUC/MCC visualizations at fold level.
+        for downstream AUC/MCC visualisations at fold level.
         """
         out: List[ModelFoldData] = []
         for cdir in classic_dirs:
@@ -1218,9 +1218,9 @@ class BayesianModelComparison:
         
         return {}
     
-    def create_visualizations(self, results: BayesianResults, data_dict: Dict[str, pd.DataFrame]):
-        """Create comprehensive visualizations for all analyses."""
-        print("Creating visualizations...")
+    def create_visualisations(self, results: BayesianResults, data_dict: Dict[str, pd.DataFrame]):
+        """Create comprehensive visualisations for all analyses."""
+        print("Creating visualisations...")
         
         # 1. Hierarchical accuracy plots
         if results.accuracy_results:
@@ -1260,7 +1260,7 @@ class BayesianModelComparison:
             # d) Posterior pairwise differences and rank probabilities
             if results.accuracy_results and 'accuracy_samples' in results.accuracy_results:
                 self._plot_posterior_differences_and_ranks(results.accuracy_results)
-            # e) Ensemble weights visualization
+            # e) Ensemble weights visualisation
             if results.stacking_results and 'ensemble_weights' in results.stacking_results:
                 self._plot_ensemble_weights(results.stacking_results)
             # f) MCC distributions (per-model across folds)
@@ -2806,13 +2806,13 @@ class BayesianModelComparison:
             stacking_results=stacking_results
         )
         
-        # Create visualizations
+        # Create visualisations
         try:
-            print("Attempting to create visualizations...")
-            self.create_visualizations(results, data_dict)
+            print("Attempting to create visualisations...")
+            self.create_visualisations(results, data_dict)
             print("✅ Visualizations created successfully")
         except Exception as e:
-            print(f"❌ Error creating visualizations: {e}")
+            print(f"❌ Error creating visualisations: {e}")
             print(f"Error type: {type(e).__name__}")
             import traceback
             print(f"Traceback: {traceback.format_exc()}")

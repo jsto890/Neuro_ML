@@ -174,7 +174,7 @@ python run_shap_multifold.py \
 - **Cross-validation analysis**: Analyze across CV folds
 - **Feature stability**: Assess feature importance consistency
 - **Statistical analysis**: Statistical significance testing
-- **Visualization**: Comprehensive visualization plots
+- **Visualization**: Comprehensive visualisation plots
 
 ### SHAP Interpretability Module (`shap_interpretability.py`)
 
@@ -294,7 +294,7 @@ python validate_model_deep.py \
 #### Global Interpretability
 - **Feature importance**: Overall feature importance
 - **Feature interactions**: Feature interaction analysis
-- **Model behavior**: Understanding model decision-making
+- **Model behaviour**: Understanding model decision-making
 
 #### Local Interpretability
 - **Individual predictions**: Explain individual predictions
@@ -305,7 +305,7 @@ python validate_model_deep.py \
 
 #### Activation Maps
 - **Class activation**: Class-specific activation maps
-- **Spatial attention**: Spatial attention visualization
+- **Spatial attention**: Spatial attention visualisation
 - **Feature importance**: Visual feature importance
 
 #### Usage

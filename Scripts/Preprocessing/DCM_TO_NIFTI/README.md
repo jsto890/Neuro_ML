@@ -1,11 +1,11 @@
 # DICOM to NIfTI Converter for CN_SPECT_PPMI
 
-This script converts all DICOM files in the CN_SPECT_PPMI folder to NIfTI format with proper organization.
+This script converts all DICOM files in the CN_SPECT_PPMI folder to NIfTI format with proper organisation.
 
 ## Features
 
 - **Automatic DICOM discovery**: Recursively finds all DICOM files in the specified folder
-- **Smart organization**: Groups files by scan series and organizes output by subject ID and scan date
+- **Smart organisation**: Groups files by scan series and organises output by subject ID and scan date
 - **Metadata preservation**: Extracts and preserves DICOM metadata in BIDS JSON format
 - **Backup**: Keeps original DICOM files as backup
 - **Compression**: Outputs compressed NIfTI files (.nii.gz)
@@ -62,7 +62,7 @@ The script expects DICOM files in this structure:
 
 ## Output Structure
 
-The script creates organized output on your Desktop:
+The script creates organised output on your Desktop:
 
 ```
 ~/Desktop/CN_SPECT_PPMI_NIfTI/
@@ -78,7 +78,7 @@ The script creates organized output on your Desktop:
 ## What Gets Preserved
 
 - **NIfTI files**: Compressed 3D/4D image data
-- **BIDS JSON**: Complete DICOM metadata in standardized format
+- **BIDS JSON**: Complete DICOM metadata in standardised format
 - **Original DICOM**: Backup copies of source files
 - **Folder structure**: Organized by subject, date, and modality
 

@@ -63,7 +63,7 @@ training:
   label_smoothing: 0.1    # Label smoothing for transformers
   mixup_alpha: 0.2       # Mixup alpha
   
-  # Memory optimization
+  # Memory optimisation
   gradient_accumulation_steps: 1  # Reduced for RTX 6000 (24GB VRAM)
   mixed_precision: true   # Use mixed precision training
 

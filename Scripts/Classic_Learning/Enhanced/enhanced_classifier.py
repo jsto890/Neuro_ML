@@ -812,7 +812,7 @@ class EnhancedRadiomicsClassifier:
             return False
     
     def generate_plots(self):
-        """Generate comprehensive visualization plots."""
+        """Generate comprehensive visualisation plots."""
         self.logger.info("Generating plots...")
         
         try:

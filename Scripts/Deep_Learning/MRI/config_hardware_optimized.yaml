@@ -1,7 +1,7 @@
-# Hardware-Optimized Configuration for Threadripper 3990X + RTX 6000
+# Hardware-Optimised Configuration for Threadripper 3990X + RTX 6000
 # Image dimensions: 97x115x97
 
-# Vision Transformer 3D Configuration (Large - Optimized for RTX 6000)
+# Vision Transformer 3D Configuration (Large - Optimised for RTX 6000)
 vision_transformer_3d:
   img_size: [97, 115, 97]  # Actual image dimensions
   patch_size: 16           # Patch size for embedding
@@ -16,7 +16,7 @@ vision_transformer_3d:
   attn_drop_rate: 0.0      # Attention dropout rate
   drop_path_rate: 0.1      # Stochastic depth rate
 
-# Swin UNETR Configuration (Medium - Optimized for RTX 6000)
+# Swin UNETR Configuration (Medium - Optimised for RTX 6000)
 swin_unetr_classifier:
   in_channels: 1           # Single channel for sMRI
   num_classes: 2           # Binary classification
@@ -27,7 +27,7 @@ swin_unetr_classifier:
   use_checkpoint: false    # No need for checkpointing with 24GB VRAM
   spatial_dims: 3          # 3D spatial dimensions
 
-# Full Swin UNETR Configuration (Small - Optimized for RTX 6000)
+# Full Swin UNETR Configuration (Small - Optimised for RTX 6000)
 full_swin_unetr_classifier:
   in_channels: 1           # Single channel for sMRI
   num_classes: 2           # Binary classification
@@ -39,7 +39,7 @@ full_swin_unetr_classifier:
   spatial_dims: 3          # 3D spatial dimensions
   # Note: Input will be automatically resized to [96, 128, 96] to meet Swin UNETR requirements
 
-# Training Configuration (Optimized for Threadripper 3990X + RTX 6000)
+# Training Configuration (Optimised for Threadripper 3990X + RTX 6000)
 training:
   # Learning rate schedules
   learning_rate: 1e-4      # Initial learning rate
@@ -64,11 +64,11 @@ training:
   label_smoothing: 0.1     # Label smoothing for transformers
   mixup_alpha: 0.2        # Mixup alpha
   
-  # Memory optimization (Optimized for RTX 6000)
+  # Memory optimisation (Optimised for RTX 6000)
   gradient_accumulation_steps: 1  # No accumulation needed with 24GB VRAM
   mixed_precision: true    # Use mixed precision training
 
-# Model-specific hyperparameters (Optimized for RTX 6000)
+# Model-specific hyperparameters (Optimised for RTX 6000)
 model_variants:
   # Large Vision Transformer (can fit in RTX 6000)
   vit_large:
@@ -94,7 +94,7 @@ model_variants:
     feature_size: 128
     drop_rate: 0.1
 
-# Evaluation settings (Optimized for Threadripper 3990X)
+# Evaluation settings (Optimised for Threadripper 3990X)
 evaluation:
   batch_size: 8           # Larger batch size for RTX 6000 (24GB VRAM)
   num_workers: 32         # More workers for 128-thread CPU
@@ -109,7 +109,7 @@ hardware:
   cpu_threads: 128        # CPU threads
   ram: 64                 # Recommended RAM in GB
   
-# Performance optimizations
+# Performance optimisations
 performance:
   # Batch sizes for different models
   batch_sizes:
@@ -123,7 +123,7 @@ performance:
   # Number of workers for data loading
   num_workers: 32         # Can use more workers with 128 threads
   
-  # Memory optimizations
+  # Memory optimisations
   pin_memory: true        # Pin memory for faster GPU transfer
   persistent_workers: true # Keep workers alive between epochs
   

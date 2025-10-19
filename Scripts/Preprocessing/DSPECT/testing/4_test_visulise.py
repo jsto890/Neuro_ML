@@ -5,7 +5,7 @@ import argparse
 import numpy as np
 
 # --- Argument Parser ---
-parser = argparse.ArgumentParser(description="Test script for SPECT brain masking visualization.")
+parser = argparse.ArgumentParser(description="Test script for SPECT brain masking visualisation.")
 parser.add_argument("--isHasel", action="store_true", help="Set this flag if running on the Hasel server.")
 args = parser.parse_args()
 

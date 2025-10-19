@@ -39,7 +39,7 @@ class ModelValidator:
         Initialize the model validator.
         
         Args:
-            model_path (str): Path to optimized SVM model
+            model_path (str): Path to optimised SVM model
             scaler_path (str): Path to fitted scaler
             feature_importance_path (str): Path to feature importance CSV
         """
@@ -53,7 +53,7 @@ class ModelValidator:
         self.load_feature_importance()
         
     def load_model(self):
-        """Load the optimized SVM model and scaler."""
+        """Load the optimised SVM model and scaler."""
         try:
             with open(self.model_path, 'rb') as f:
                 self.model = pickle.load(f)
@@ -300,9 +300,9 @@ Confusion Matrix (rows=actual, cols=pred):
 
 def main():
     parser = argparse.ArgumentParser(description="Validate classical model (multiclass CN/AD/PD)")
-    parser.add_argument('--model-path', default='~/reseng202500013-ndd-ml/data/optimized_classical_results/optimized_svm_model.pkl')
-    parser.add_argument('--scaler-path', default='~/reseng202500013-ndd-ml/data/optimized_classical_results/optimized_scaler.pkl')
-    parser.add_argument('--feature-importance', default='~/reseng202500013-ndd-ml/data/optimized_classical_results/optimized_feature_importance.csv')
+    parser.add_argument('--model-path', default='~/reseng202500013-ndd-ml/data/optimised_classical_results/optimised_svm_model.pkl')
+    parser.add_argument('--scaler-path', default='~/reseng202500013-ndd-ml/data/optimised_classical_results/optimised_scaler.pkl')
+    parser.add_argument('--feature-importance', default='~/reseng202500013-ndd-ml/data/optimised_classical_results/optimised_feature_importance.csv')
     parser.add_argument('--test-data', default='~/reseng202500013-ndd-ml/data/radiomics_MRI_mri_labels.csv')
     parser.add_argument('--output-dir', default='~/reseng202500013-ndd-ml/clinical_outputs/classical_validation')
     parser.add_argument('--label-map-json', required=False, help='Optional JSON mapping of numeric labels to names')

@@ -202,7 +202,7 @@ python run_bayesian_analysis.py \
 - **Box plots**: Performance distribution comparison
 - **Violin plots**: Distribution shape comparison
 - **Scatter plots**: Performance correlation analysis
-- **Heatmaps**: Performance matrix visualization
+- **Heatmaps**: Performance matrix visualisation
 
 ### Statistical Analysis Plots
 - **Forest plots**: Effect size comparison
@@ -212,9 +212,9 @@ python run_bayesian_analysis.py \
 
 ### Bayesian Analysis Plots
 - **Trace plots**: MCMC convergence assessment
-- **Posterior plots**: Posterior distribution visualization
-- **Credible intervals**: Uncertainty visualization
-- **Bayes factor plots**: Model comparison visualization
+- **Posterior plots**: Posterior distribution visualisation
+- **Credible intervals**: Uncertainty visualisation
+- **Bayes factor plots**: Model comparison visualisation
 
 ## 🔧 Configuration
 
@@ -272,7 +272,7 @@ comparison:
     confidence_intervals: true
     practical_significance: true
   
-  visualization:
+  visualisation:
     box_plots: true
     violin_plots: true
     scatter_plots: true
@@ -337,7 +337,7 @@ comparison_results/
 
 ### Visualization Issues
 1. **Plot clarity**: Ensure plots are clear and informative
-2. **Color schemes**: Use accessible color schemes
+2. **Color schemes**: Use accessible colour schemes
 3. **Figure size**: Optimize figure sizes
 4. **Labels**: Include clear labels and legends
 
@@ -359,7 +359,7 @@ comparison_results/
 
 ### Bayesian Analysis
 - **PyMC**: Probabilistic programming
-- **ArviZ**: Bayesian analysis and visualization
+- **ArviZ**: Bayesian analysis and visualisation
 - **Bambi**: Bayesian model building
 - **xarray**: Multi-dimensional arrays
 
@@ -373,14 +373,14 @@ comparison_results/
 - **matplotlib**: Plotting
 - **seaborn**: Statistical plotting
 - **plotly**: Interactive plotting
-- **bokeh**: Interactive visualization
+- **bokeh**: Interactive visualisation
 
 ## 🚀 Performance Optimization
 
 ### Bayesian Analysis Optimization
 - **Parallel sampling**: Use multiple chains
 - **GPU acceleration**: Use GPU for sampling
-- **Memory optimization**: Optimize memory usage
+- **Memory optimisation**: Optimize memory usage
 - **Caching**: Cache intermediate results
 
 ### Statistical Testing Optimization

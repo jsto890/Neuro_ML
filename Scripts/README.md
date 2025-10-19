@@ -1,6 +1,6 @@
 # Scripts Directory
 
-This directory contains all the main pipeline scripts for the P4P (Parkinson's Disease Detection Pipeline) project. The scripts are organized into logical modules covering the complete workflow from data preprocessing to model deployment.
+This directory contains all the main pipeline scripts for the P4P (Parkinson's Disease Detection Pipeline) project. The scripts are organised into logical modules covering the complete workflow from data preprocessing to model deployment.
 
 ## 📁 Directory Structure
 
@@ -34,7 +34,7 @@ Scripts/
 │   └── [comparison scripts]
 └── Visualise/                    # Visualization tools
     ├── README.md                # Visualization documentation
-    └── [visualization scripts]
+    └── [visualisation scripts]
 ```
 
 ## 🔄 Complete Pipeline Workflow
@@ -60,7 +60,7 @@ Scripts/
 - **Location**: `Preprocessing/PET/`
 - **Purpose**: PET image preprocessing
 - **Key Scripts**:
-  - `02_norm_stand.py`: PET normalization and standardization
+  - `02_norm_stand.py`: PET normalization and standardisation
   - `03_skullstrip.py`: PET skull stripping
 
 #### SPECT Preprocessing
@@ -102,7 +102,7 @@ Scripts/
   - `PET/train_pet.py`: PET deep learning training
   - `DSPECT/train_spect.py`: SPECT deep learning training
   - `MRI/evaluate_model.py`: Model evaluation
-  - `MRI/visualise_gradcam.py`: Grad-CAM visualization
+  - `MRI/visualise_gradcam.py`: Grad-CAM visualisation
 
 ### 4. Model Comparison (`Comparison/`)
 
@@ -138,8 +138,8 @@ Scripts/
 #### Visualization Tools
 - **Purpose**: Visualize results and intermediate steps
 - **Key Scripts**:
-  - `interactive_visualise.py`: Interactive image visualization
-  - `visualise_middle_slice.py`: Middle slice visualization
+  - `interactive_visualise.py`: Interactive image visualisation
+  - `visualise_middle_slice.py`: Middle slice visualisation
   - `animate_gradcam_overlay.py`: Grad-CAM animation
 
 ## 🚀 Quick Start Examples
@@ -174,7 +174,7 @@ python run_pipeline.py --diagnosis CN --force
 cd Scripts/Deep_Learning/MRI
 
 # Train MRI model
-python train_smri.py --config config_hardware_optimized.yaml
+python train_smri.py --config config_hardware_optimised.yaml
 ```
 
 ### Clinical Prediction
@@ -193,9 +193,9 @@ python predict_clinical.py \
 ## 🔧 Configuration Files
 
 ### Hardware-Optimized Configuration
-- **File**: `config_hardware_optimized.yaml`
+- **File**: `config_hardware_optimised.yaml`
 - **Purpose**: Optimized settings for different hardware configurations
-- **Usage**: Automatic hardware detection and optimization
+- **Usage**: Automatic hardware detection and optimisation
 
 ### Transformer Configuration
 - **File**: `config_transformers.yaml`
@@ -297,7 +297,7 @@ clinical_results/
 
 ### Common Issues
 1. **File Path Errors**: Check configuration files and paths
-2. **Memory Issues**: Use hardware-optimized configurations
+2. **Memory Issues**: Use hardware-optimised configurations
 3. **GPU Issues**: Check CUDA compatibility and memory
 4. **Data Format Issues**: Validate input data formats
 

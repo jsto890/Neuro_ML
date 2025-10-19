@@ -192,7 +192,7 @@ class SHAPInterpreter:
                 self.logger.warning(f"KernelExplainer can be slow. Consider using tree-based or linear models for faster explanations.")
         
         except Exception as e:
-            self.logger.error(f"Error initializing SHAP explainer: {e}")
+            self.logger.error(f"Error initialising SHAP explainer: {e}")
             raise
     
     def compute_shap_values(self, X_test: np.ndarray, max_samples: Optional[int] = None) -> np.ndarray:

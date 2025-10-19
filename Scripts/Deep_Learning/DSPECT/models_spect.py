@@ -4,11 +4,11 @@ SPECT-Optimized Deep Learning Models
 Designed specifically for 91x109x91 SPECT images and CN vs PD classification
 
 Features:
-- Models optimized for SPECT dimensions (91x109x91)
+- Models optimised for SPECT dimensions (91x109x91)
 - Memory-efficient architectures for various hardware capabilities
 - Built-in data validation and error handling
 - Support for both training and inference
-- Automatic model initialization based on input dimensions
+- Automatic model initialisation based on input dimensions
 """
 
 import torch
@@ -96,7 +96,7 @@ class Simple3DCNN_SPECT(nn.Module):
         # Initialize weights
         self._initialize_weights()
         
-        logger.info(f"Simple3DCNN_SPECT initialized with {self._count_parameters()} parameters")
+        logger.info(f"Simple3DCNN_SPECT initialised with {self._count_parameters()} parameters")
         logger.info(f"Expected input shape: {input_shape}")
         logger.info(f"Feature shape after conv layers: {self.feature_shape}")
     
@@ -116,7 +116,7 @@ class Simple3DCNN_SPECT(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
     
     def _initialize_weights(self):
-        """Initialize model weights using Xavier initialization."""
+        """Initialize model weights using Xavier initialisation."""
         for m in self.modules():
             if isinstance(m, nn.Conv3d):
                 nn.init.xavier_uniform_(m.weight)
@@ -199,7 +199,7 @@ class ResNet3D_SPECT(nn.Module):
         )
         
         self._initialize_weights()
-        logger.info(f"ResNet3D_SPECT initialized with {self._count_parameters()} parameters")
+        logger.info(f"ResNet3D_SPECT initialised with {self._count_parameters()} parameters")
     
     def _make_layer(self, in_channels: int, out_channels: int, blocks: int, stride: int):
         """Create a ResNet layer with residual connections."""
@@ -323,7 +323,7 @@ class EfficientNet3D_SPECT(nn.Module):
         )
         
         self._initialize_weights()
-        logger.info(f"EfficientNet3D_SPECT initialized with {self._count_parameters()} parameters")
+        logger.info(f"EfficientNet3D_SPECT initialised with {self._count_parameters()} parameters")
     
     def _make_efficient_block(self, in_channels: int, out_channels: int, stride: int):
         """Create an efficient block with depthwise separable convolutions."""
@@ -419,7 +419,7 @@ class SPECTClassifier(nn.Module):
         else:
             raise ValueError(f"Unknown model type: {model_type}. Available: simple, resnet, efficient")
         
-        logger.info(f"SPECTClassifier initialized with {model_type} backbone")
+        logger.info(f"SPECTClassifier initialised with {model_type} backbone")
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.backbone(x)
@@ -465,7 +465,7 @@ def get_3d_model(model_name, num_classes: int = 2, in_channels: int = 1, base_ch
                  use_pretrained: bool = False, dropout_p: float = 0.0,
                  vit_drop_rate: float = 0.0, vit_attn_drop_rate: float = 0.0, vit_drop_path_rate: float = 0.0):
     """
-    DSPECT model factory mapping legacy names to SPECT-optimized backbones.
+    DSPECT model factory mapping legacy names to SPECT-optimised backbones.
     Supported names:
       - "Simple3DCNN"        -> Simple3DCNN_SPECT
       - "ResNet18_3D"        -> ResNet3D_SPECT

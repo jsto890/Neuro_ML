@@ -94,7 +94,7 @@ Examples:
     )
     parser.add_argument(
         "--run-dirs", nargs="*",
-        help="Specific run directories to analyze"
+        help="Specific run directories to analyse"
     )
     parser.add_argument(
         "--models", nargs="*",

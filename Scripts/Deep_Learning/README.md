@@ -140,8 +140,8 @@ python train_spect.py --config config_hardware_optimized.yaml
 ```
 
 #### Features
-- **Automatic hardware detection**: GPU/CPU optimization
-- **Memory optimization**: Efficient memory usage
+- **Automatic hardware detection**: GPU/CPU optimisation
+- **Memory optimisation**: Efficient memory usage
 - **Cross-validation**: Stratified k-fold cross-validation
 - **Early stopping**: Prevent overfitting
 - **Model checkpointing**: Save best models
@@ -183,7 +183,7 @@ dataloader = DataLoader(
 ### Evaluation Script (`evaluate_model.py`)
 
 #### Purpose
-Comprehensive model evaluation with multiple metrics and visualizations.
+Comprehensive model evaluation with multiple metrics and visualisations.
 
 #### Usage
 ```bash
@@ -252,11 +252,11 @@ python regenerate_plots.py \
 #### Features
 - **Performance plots**: ROC curves, confusion matrices
 - **Training curves**: Loss and accuracy curves
-- **Feature maps**: Activation visualizations
-- **Comparison plots**: Model comparison visualizations
+- **Feature maps**: Activation visualisations
+- **Comparison plots**: Model comparison visualisations
 
 ### Interactive Visualization
-- **3D rendering**: Interactive 3D image visualization
+- **3D rendering**: Interactive 3D image visualisation
 - **Overlay display**: Show activation maps overlaid on images
 - **Animation**: Animate through image slices
 

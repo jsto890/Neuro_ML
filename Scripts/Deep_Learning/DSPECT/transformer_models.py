@@ -360,7 +360,7 @@ class SwinUNETRClassifier(nn.Module):
 class SwinUNETRClassifierGradCAM(SwinUNETRClassifier):
     """
     Swin UNETR Classifier with Grad-CAM support.
-    Returns both logits and feature maps for visualization.
+    Returns both logits and feature maps for visualisation.
     """
     
     def forward(self, x):
@@ -537,7 +537,7 @@ class FullSwinUNETRClassifier(nn.Module):
 class FullSwinUNETRClassifierGradCAM(FullSwinUNETRClassifier):
     """
     Full Swin UNETR Classifier with Grad-CAM support.
-    Returns both logits and feature maps for visualization.
+    Returns both logits and feature maps for visualisation.
     """
     
     def forward(self, x):

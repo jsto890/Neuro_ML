@@ -108,7 +108,7 @@ def convert_dicom(dicom_dir: Path, out_dir: Path, prefix: str) -> bool:
             return False
 
 def create_output_structure(base_output_path, subject_id, scan_date, modality):
-    """Create organized output folder structure"""
+    """Create organised output folder structure"""
     # Create main subject folder
     subject_folder = base_output_path / f"Subject_{subject_id}"
     subject_folder.mkdir(parents=True, exist_ok=True)

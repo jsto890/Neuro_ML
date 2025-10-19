@@ -272,7 +272,7 @@ def main():
 
     print(f"✓ JSON report saved to: {json_path}")
 
-    # Probability visualization (bar chart) next to JSON
+    # Probability visualisation (bar chart) next to JSON
     try:
         result_probs = result.get("probabilities", {}) if isinstance(result, dict) else {}
         if result_probs:

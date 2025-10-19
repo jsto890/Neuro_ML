@@ -1,6 +1,6 @@
 # Label Generation Directory
 
-This directory contains scripts for generating and validating subject labels for machine learning training and evaluation. The scripts automatically scan preprocessed medical imaging data and create standardized label files that map subject IDs to disease classifications.
+This directory contains scripts for generating and validating subject labels for machine learning training and evaluation. The scripts automatically scan preprocessed medical imaging data and create standardised label files that map subject IDs to disease classifications.
 
 ## 📁 Directory Structure
 
@@ -103,7 +103,7 @@ python generate_pet_labels.py --validate-only --write-reports --out-dir ~/path/t
 
 #### Features
 - **Multiple file patterns**: Supports various SUVR file naming conventions
-- **Disease folder scanning**: Scans organized disease-specific folders
+- **Disease folder scanning**: Scans organised disease-specific folders
 - **File preference**: Prefers newer file formats (soft4, .nii.gz)
 - **Subject validation**: Ensures subjects exist in imaging records
 - **Automatic cleanup**: Removes subjects without valid PET files
@@ -256,7 +256,7 @@ PD_wrong 0
 ### Data Issues
 1. **Missing files**: Ensure required files exist for each subject
 2. **File naming**: Check file naming conventions
-3. **Directory structure**: Verify expected directory organization
+3. **Directory structure**: Verify expected directory organisation
 
 ### Label Issues
 1. **Mismatches**: Review imaging records for accuracy

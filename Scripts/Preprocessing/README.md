@@ -90,7 +90,7 @@ python 03_zscore_skull_strip.py --input ~/path/to/smriprep --output ~/path/to/zs
 ```
 
 #### Features
-- **sMRIprep integration**: Uses standardized preprocessing pipeline
+- **sMRIprep integration**: Uses standardised preprocessing pipeline
 - **Quality control**: Automated quality assessment
 - **Z-score normalization**: Standardizes intensity values
 - **Skull stripping**: Removes non-brain tissue
@@ -101,7 +101,7 @@ python 03_zscore_skull_strip.py --input ~/path/to/smriprep --output ~/path/to/zs
 Preprocess PET imaging data for SUVR calculation and analysis.
 
 #### Key Scripts
-- **`02_norm_stand.py`**: PET normalization and standardization
+- **`02_norm_stand.py`**: PET normalization and standardisation
 - **`03_skullstrip.py`**: PET skull stripping
 
 #### Usage
@@ -247,7 +247,7 @@ python 6_test.py  # Test postprocessing
 ### MRI Preprocessing Issues
 1. **sMRIprep failures**: Check input data quality
 2. **Skull stripping**: Verify brain extraction quality
-3. **Normalization**: Check intensity standardization
+3. **Normalization**: Check intensity standardisation
 
 ## 🔍 Debugging
 

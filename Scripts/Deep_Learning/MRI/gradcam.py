@@ -10,7 +10,7 @@ def compute_gradcam_3d(model, smri_tensor, target_class, device="cuda"):
     Args:
       model         : an instance of SMRI_GradCAM_3DCNN, already loaded with weights.
       smri_tensor   : torch.Tensor of shape [1, 1, D, H, W], single‐subject volume.
-      target_class  : integer (0 or 1), the class index you want to visualize.
+      target_class  : integer (0 or 1), the class index you want to visualise.
       device        : "cuda" or "cpu"
 
     Returns:
@@ -81,7 +81,7 @@ def compute_gradcam_simple3d(model, smri_tensor, target_class, device="cuda"):
     Args:
       model         : Wrapped Simple3DCNN model with exposed features
       smri_tensor   : torch.Tensor of shape [1, 1, D, H, W], single‐subject volume.
-      target_class  : integer (0 or 1), the class index you want to visualize.
+      target_class  : integer (0 or 1), the class index you want to visualise.
       device        : "cuda" or "cpu"
 
     Returns:
@@ -149,7 +149,7 @@ def compute_gradcam_swinunetr(model, smri_tensor, target_class, device="cuda"):
     Args:
       model         : SwinUNETRClassifierGradCAM model
       smri_tensor   : torch.Tensor of shape [1, 1, D, H, W], single‐subject volume.
-      target_class  : integer (0 or 1), the class index you want to visualize.
+      target_class  : integer (0 or 1), the class index you want to visualise.
       device        : "cuda" or "cpu"
 
     Returns:
@@ -223,7 +223,7 @@ def compute_gradcam_visiontransformer(model, smri_tensor, target_class, device="
     Args:
       model         : VisionTransformer3D model
       smri_tensor   : torch.Tensor of shape [1, 1, D, H, W], single‐subject volume.
-      target_class  : integer (0 or 1), the class index you want to visualize.
+      target_class  : integer (0 or 1), the class index you want to visualise.
       device        : "cuda" or "cpu"
 
     Returns:

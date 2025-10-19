@@ -313,7 +313,7 @@ def create_overlay_viewer(base_img, base_data, overlay_data, title="Overlay View
 
 def main():
     parser = argparse.ArgumentParser(description="Interactive Visualization Tool")
-    parser.add_argument("--file", type=str, help="Path to specific NIfTI file to visualize")
+    parser.add_argument("--file", type=str, help="Path to specific NIfTI file to visualise")
     parser.add_argument("--diagnosis", type=str, choices=['CN', 'PD'], help="Diagnosis group to browse (SPECT mode)")
     parser.add_argument("--step", type=str, choices=['reoriented', 'normalised', 'registered', 'masked', 'finalised', 'postprocessed'], 
                        help="Processing step to browse (SPECT mode)")
@@ -383,7 +383,7 @@ def main():
         create_overlay_viewer(b_img, b_data, o_data, title=title, init_alpha=float(args.overlay_alpha))
         return
 
-    # Base-only visualization (no overlay)
+    # Base-only visualisation (no overlay)
     if args.base and not args.overlay:
         if not os.path.exists(args.base):
             print(f"Base file not found: {args.base}")
@@ -434,7 +434,7 @@ def main():
         print(f"No data found matching diagnosis={args.diagnosis}, step={args.step}")
         return
     
-    # Select data to visualize
+    # Select data to visualise
     selected_data = available_data[0]  # Use first available
     print(f"\nUsing: {selected_data['diagnosis']} - {selected_data['step']}")
     

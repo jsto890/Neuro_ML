@@ -1,14 +1,14 @@
 # Visualization Directory
 
-This directory contains visualization tools for medical imaging data, model results, and interpretability analysis. The visualization tools support interactive exploration, static plotting, and animation of medical images and analysis results.
+This directory contains visualisation tools for medical imaging data, model results, and interpretability analysis. The visualisation tools support interactive exploration, static plotting, and animation of medical images and analysis results.
 
 ## 📁 Directory Structure
 
 ```
 Visualise/
 ├── README.md                     # This file
-├── interactive_visualise.py      # Interactive image visualization
-├── visualise_middle_slice.py     # Middle slice visualization
+├── interactive_visualise.py      # Interactive image visualisation
+├── visualise_middle_slice.py     # Middle slice visualisation
 └── animate_gradcam_overlay.py    # Grad-CAM animation
 ```
 
@@ -17,7 +17,7 @@ Visualise/
 ### Interactive Visualization (`interactive_visualise.py`)
 
 #### Purpose
-Interactive 3D medical image visualization with slice navigation, overlay display, and analysis tools.
+Interactive 3D medical image visualisation with slice navigation, overlay display, and analysis tools.
 
 #### Features
 - **3D slice navigation**: Navigate through 3D image slices
@@ -51,7 +51,7 @@ python interactive_visualise.py \
 ### Middle Slice Visualization (`visualise_middle_slice.py`)
 
 #### Purpose
-Generate static visualizations of the middle slice of 3D medical images with optional overlays.
+Generate static visualisations of the middle slice of 3D medical images with optional overlays.
 
 #### Features
 - **Middle slice extraction**: Automatically find and display middle slice
@@ -86,7 +86,7 @@ python visualise_middle_slice.py \
 - **`--overlay`**: Optional overlay NIfTI file
 - **`--output`**: Output image file
 - **`--orientations`**: Image orientations to display
-- **`--colormap`**: Colormap for overlay
+- **`--colourmap`**: Colormap for overlay
 - **`--alpha`**: Overlay transparency (0-1)
 - **`--title`**: Image title
 - **`--dpi`**: Output image DPI
@@ -94,7 +94,7 @@ python visualise_middle_slice.py \
 ### Grad-CAM Animation (`animate_gradcam_overlay.py`)
 
 #### Purpose
-Create animated visualizations of Grad-CAM activation maps overlaid on medical images.
+Create animated visualisations of Grad-CAM activation maps overlaid on medical images.
 
 #### Features
 - **Animation creation**: Generate animated overlays
@@ -139,7 +139,7 @@ python animate_gradcam_overlay.py \
 - **`--fps`**: Frames per second
 - **`--duration`**: Animation duration in seconds
 - **`--quality`**: Rendering quality (low, medium, high)
-- **`--colormap`**: Colormap for Grad-CAM
+- **`--colourmap`**: Colormap for Grad-CAM
 - **`--alpha`**: Overlay transparency
 
 ## 🎯 Visualization Types
@@ -148,7 +148,7 @@ python animate_gradcam_overlay.py \
 - **3D slice display**: Display 3D images as 2D slices
 - **Multi-planar reconstruction**: Show multiple orientations
 - **Intensity adjustment**: Adjust contrast and brightness
-- **Colormap selection**: Choose appropriate colormaps
+- **Colormap selection**: Choose appropriate colourmaps
 - **Annotation support**: Add text and shape annotations
 
 ### Activation Map Visualization
@@ -169,8 +169,8 @@ python animate_gradcam_overlay.py \
 
 ### Visualization Settings
 ```yaml
-visualization:
-  default_colormap: "viridis"
+visualisation:
+  default_colourmap: "viridis"
   overlay_alpha: 0.6
   figure_size: [12, 8]
   dpi: 300
@@ -181,7 +181,7 @@ visualization:
     contrast_limits: "auto"
     
   activation_maps:
-    colormap: "jet"
+    colourmap: "jet"
     alpha: 0.7
     threshold: 0.1
     
@@ -224,17 +224,17 @@ interactive:
 - **HTML5**: Interactive web animations
 
 ### Interactive Content
-- **HTML**: Interactive web visualizations
+- **HTML**: Interactive web visualisations
 - **Jupyter notebooks**: Interactive notebook outputs
-- **WebGL**: 3D web visualizations
-- **Plotly**: Interactive plotly visualizations
+- **WebGL**: 3D web visualisations
+- **Plotly**: Interactive plotly visualisations
 
 ## 🎨 Styling and Customization
 
 ### Color Schemes
-- **Medical colormaps**: Optimized for medical imaging
+- **Medical colourmaps**: Optimized for medical imaging
 - **Accessibility**: Colorblind-friendly palettes
-- **Custom colormaps**: User-defined color schemes
+- **Custom colourmaps**: User-defined colour schemes
 - **Transparency**: Alpha channel support
 
 ### Layout Options
@@ -278,7 +278,7 @@ interactive:
 - **Noise**: Noise reduction and filtering
 
 ### Visualization Quality
-- **Clarity**: Ensure clear and readable visualizations
+- **Clarity**: Ensure clear and readable visualisations
 - **Accuracy**: Maintain data accuracy
 - **Consistency**: Consistent styling and formatting
 - **Accessibility**: Ensure accessibility compliance
@@ -286,7 +286,7 @@ interactive:
 ## 📚 Dependencies
 
 ### Core Libraries
-- **matplotlib**: Plotting and visualization
+- **matplotlib**: Plotting and visualisation
 - **nibabel**: Medical image I/O
 - **numpy**: Numerical operations
 - **scipy**: Scientific computing
@@ -295,7 +295,7 @@ interactive:
 ### Interactive Libraries
 - **ipywidgets**: Interactive widgets
 - **plotly**: Interactive plotting
-- **bokeh**: Interactive visualization
+- **bokeh**: Interactive visualisation
 - **streamlit**: Web app framework
 
 ### Animation Libraries
@@ -329,7 +329,7 @@ interactive:
 ### Visualization Debugging
 - **Check data**: Validate input data
 - **Test with sample data**: Use known good data
-- **Review parameters**: Check visualization parameters
+- **Review parameters**: Check visualisation parameters
 - **Monitor performance**: Track rendering performance
 
 ### Interactive Debugging
@@ -340,9 +340,9 @@ interactive:
 
 ## 📞 Support
 
-For visualization issues:
+For visualisation issues:
 - Check input data format and quality
-- Validate visualization parameters
+- Validate visualisation parameters
 - Test with sample data first
 - Review output quality and format
 - Check system requirements and dependencies
