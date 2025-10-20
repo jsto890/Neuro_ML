@@ -1,4 +1,4 @@
-# scripts/visualize_gradcam.py
+# scripts/visualise_gradcam.py
 
 import os
 import argparse
@@ -120,7 +120,7 @@ def main():
         # 5) Extract original PET volume for overlay
         pet_np = pet.detach().squeeze().cpu().numpy()  # [D, H, W]
 
-        # 6) Choose a slice to visualize (e.g., mid‐axial)
+        # 6) Choose a slice to visualise (e.g., mid‐axial)
         D, H, W = pet_np.shape
         mid_ax = D // 2
         anat_slice = pet_np[mid_ax]    # [H, W]

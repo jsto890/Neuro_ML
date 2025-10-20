@@ -1,18 +1,43 @@
 #!/usr/bin/env python3
 """
-Interactive SPECT Visualization Tool
-Displays processed SPECT images with interactive controls
+Interactive Visualization Tool
+- Browse SPECT pipeline folders (original mode)
+- OR overlay a heatmap on a base 3D volume with slice sliders
+  Usage:
+    python interactive_visualise.py --base /path/base.nii.gz --overlay /path/heat.nii.gz [--overlay-alpha 0.4]
 """
 
 import os
 import sys
+import re
+import json
+import glob as glob_mod
 import numpy as np
 import nibabel as nib
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider, Button, RadioButtons
+from matplotlib.widgets import Slider, Button, RadioButtons, CheckButtons
 import argparse
 
-nii_file = "/Volumes/reseng202500013-ndd-ml/data/interpret/sub-I1624206_space-MNI152NLin2009cAsym_res-2_desc-preproc_T1w_brain_zscore_gradcam_class0.nii.gz"
+nii_file = "/Volumes/reseng202500013-ndd-ml/data/preprocessed/PET/PD/sub-I1518677_PPMI_PET_PD/sub-I1518677_PPMI_PET_PD_SUVR_s2_brain_soft4.nii.gz"
+
+def _robust_normalize(arr: np.ndarray, lo_p: float = 2.0, hi_p: float = 98.0) -> np.ndarray:
+    arr = arr.astype(np.float32)
+    lo = np.percentile(arr, lo_p)
+    hi = np.percentile(arr, hi_p)
+    if hi - lo < 1e-6:
+        return arr
+    out = (arr - lo) / (hi - lo)
+    return np.clip(out, 0.0, 1.0)
+
+def _normalize_overlay_within_mask(overlay: np.ndarray, base: np.ndarray, lo_p: float = 90.0, hi_p: float = 99.5) -> np.ndarray:
+    mask = (base != 0)
+    vals = overlay[mask] if np.any(mask) else overlay
+    lo = np.percentile(vals, lo_p)
+    hi = np.percentile(vals, hi_p)
+    if hi - lo < 1e-6:
+        return _robust_normalize(overlay, 2.0, 98.0)
+    out = (overlay - lo) / (hi - lo)
+    return np.clip(out, 0.0, 1.0)
 
 def find_spect_data():
     """Find available SPECT data in the Desktop SPECT directory"""
@@ -163,18 +188,221 @@ def create_interactive_viewer(img, data, title="SPECT Image"):
     
     plt.show()
 
+
+def create_overlay_viewer(base_img, base_data, overlay_data, title="Overlay Viewer", init_alpha: float = 0.4):
+    """Interactive viewer with overlays and slice sliders for a 3D volume.
+    - base_data: anatomical volume (grayscale)
+    - overlay_data: heatmap volume, same shape as base_data
+    """
+    if base_data.shape != overlay_data.shape:
+        print(f"⚠️ Base and overlay shapes differ: {base_data.shape} vs {overlay_data.shape}. Proceeding without resample.")
+
+    base = _robust_normalize(base_data)
+    heat = _normalize_overlay_within_mask(overlay_data, base_data)
+
+    nx, ny, nz = base.shape
+    x_idx, y_idx, z_idx = nx // 2, ny // 2, nz // 2
+
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
+    fig.suptitle(title, fontsize=16)
+
+    # Initial plots
+    im1 = ax1.imshow(base[:, :, z_idx].T, cmap='gray', origin='lower')
+    hm1 = ax1.imshow(heat[:, :, z_idx].T, cmap='hot', origin='lower', alpha=init_alpha)
+    ax1.set_title(f'Axial (Z={z_idx})')
+    ax1.axis('off')
+
+    im2 = ax2.imshow(base[x_idx, :, :].T, cmap='gray', origin='lower')
+    hm2 = ax2.imshow(heat[x_idx, :, :].T, cmap='hot', origin='lower', alpha=init_alpha)
+    ax2.set_title(f'Sagittal (X={x_idx})')
+    ax2.axis('off')
+
+    im3 = ax3.imshow(base[:, y_idx, :].T, cmap='gray', origin='lower')
+    hm3 = ax3.imshow(heat[:, y_idx, :].T, cmap='hot', origin='lower', alpha=init_alpha)
+    ax3.set_title(f'Coronal (Y={y_idx})')
+    ax3.axis('off')
+
+    plt.subplots_adjust(bottom=0.05)
+
+    # Crosshair lines
+    vline1 = ax1.axvline(x_idx, color='cyan', linewidth=1, alpha=0.8)
+    hline1 = ax1.axhline(y_idx, color='cyan', linewidth=1, alpha=0.8)
+    
+    vline2 = ax2.axvline(y_idx, color='cyan', linewidth=1, alpha=0.8)
+    hline2 = ax2.axhline(z_idx, color='cyan', linewidth=1, alpha=0.8)
+    
+    vline3 = ax3.axvline(x_idx, color='cyan', linewidth=1, alpha=0.8)
+    hline3 = ax3.axhline(z_idx, color='cyan', linewidth=1, alpha=0.8)
+
+    def update_views():
+        # Update images
+        im1.set_array(base[:, :, z_idx].T)
+        hm1.set_array(heat[:, :, z_idx].T)
+        ax1.set_title(f'Axial (Z={z_idx})')
+
+        im2.set_array(base[x_idx, :, :].T)
+        hm2.set_array(heat[x_idx, :, :].T)
+        ax2.set_title(f'Sagittal (X={x_idx})')
+
+        im3.set_array(base[:, y_idx, :].T)
+        hm3.set_array(heat[:, y_idx, :].T)
+        ax3.set_title(f'Coronal (Y={y_idx})')
+        
+        # Update crosshairs
+        vline1.set_xdata([x_idx, x_idx])
+        hline1.set_ydata([y_idx, y_idx])
+        
+        vline2.set_xdata([y_idx, y_idx])
+        hline2.set_ydata([z_idx, z_idx])
+        
+        vline3.set_xdata([x_idx, x_idx])
+        hline3.set_ydata([z_idx, z_idx])
+        
+        fig.canvas.draw_idle()
+
+    def on_motion(event):
+        nonlocal x_idx, y_idx, z_idx
+        if event.inaxes == ax1:  # Axial view - Y position sets Y, X position sets X
+            if event.xdata is not None and event.ydata is not None:
+                x_idx = max(0, min(nx-1, int(event.xdata)))
+                y_idx = max(0, min(ny-1, int(event.ydata)))
+                update_views()
+        elif event.inaxes == ax2:  # Sagittal view - Y position sets Z, X position sets Y
+            if event.xdata is not None and event.ydata is not None:
+                y_idx = max(0, min(ny-1, int(event.xdata)))
+                z_idx = max(0, min(nz-1, int(event.ydata)))
+                update_views()
+        elif event.inaxes == ax3:  # Coronal view - Y position sets Z, X position sets X
+            if event.xdata is not None and event.ydata is not None:
+                x_idx = max(0, min(nx-1, int(event.xdata)))
+                z_idx = max(0, min(nz-1, int(event.ydata)))
+                update_views()
+        else:
+            # Mouse is outside all view boxes - reset to middle slices
+            x_idx = nx // 2
+            y_idx = ny // 2
+            z_idx = nz // 2
+            update_views()
+
+    def on_key(event):
+        nonlocal x_idx, y_idx, z_idx
+        if event.key == 'up':
+            z_idx = min(nz-1, z_idx + 1)
+            update_views()
+        elif event.key == 'down':
+            z_idx = max(0, z_idx - 1)
+            update_views()
+        elif event.key == 'left':
+            x_idx = max(0, x_idx - 1)
+            update_views()
+        elif event.key == 'right':
+            x_idx = min(nx-1, x_idx + 1)
+            update_views()
+        elif event.key == 'pageup':
+            y_idx = min(ny-1, y_idx + 1)
+            update_views()
+        elif event.key == 'pagedown':
+            y_idx = max(0, y_idx - 1)
+            update_views()
+
+    # Connect mouse motion and keyboard events
+    fig.canvas.mpl_connect('motion_notify_event', on_motion)
+    fig.canvas.mpl_connect('key_press_event', on_key)
+
+    plt.show()
+
 def main():
-    parser = argparse.ArgumentParser(description="Interactive SPECT Visualization Tool")
-    parser.add_argument("--file", type=str, help="Path to specific NIfTI file to visualize")
-    parser.add_argument("--diagnosis", type=str, choices=['CN', 'PD'], help="Diagnosis group to browse")
+    parser = argparse.ArgumentParser(description="Interactive Visualization Tool")
+    parser.add_argument("--file", type=str, help="Path to specific NIfTI file to visualise")
+    parser.add_argument("--diagnosis", type=str, choices=['CN', 'PD'], help="Diagnosis group to browse (SPECT mode)")
     parser.add_argument("--step", type=str, choices=['reoriented', 'normalised', 'registered', 'masked', 'finalised', 'postprocessed'], 
-                       help="Processing step to browse")
+                       help="Processing step to browse (SPECT mode)")
+    # Overlay mode
+    parser.add_argument("--base", type=str, help="Path to base anatomical NIfTI (supports base-only or with overlay)")
+    parser.add_argument("--overlay", type=str, help="Path to overlay heatmap NIfTI for overlay mode")
+    parser.add_argument("--overlay-alpha", type=float, default=0.4, help="Initial overlay alpha (0-1)")
     args = parser.parse_args()
     
+    # Overlay mode takes precedence if both paths provided
+    if args.base and args.overlay:
+        if not os.path.exists(args.base):
+            print(f"Base file not found: {args.base}")
+            return
+        if not os.path.exists(args.overlay):
+            print(f"Overlay file not found: {args.overlay}")
+            return
+        try:
+            b_img = nib.as_closest_canonical(nib.load(args.base)); b_data = b_img.get_fdata().astype(np.float32)
+            o_img = nib.as_closest_canonical(nib.load(args.overlay)); o_data = o_img.get_fdata().astype(np.float32)
+        except Exception as e:
+            print(f"Failed to load NIfTI: {e}")
+            return
+        if b_data.ndim != 3:
+            print("Base volume must be 3D")
+            return
+        if o_data.ndim == 4:
+            o_data = o_data.mean(axis=-1)
+        if o_data.ndim != 3:
+            print("Overlay must be 3D or 4D")
+            return
+        
+        # Extract subject ID and predicted disease from JSON if available
+        sub_id = "Unknown"
+        predicted_disease = "Unknown"
+        
+        # Try to find corresponding JSON file
+        overlay_dir = os.path.dirname(args.overlay)
+        base_name = os.path.basename(args.base)
+        # Extract subject ID from base filename for JSON lookup
+        sub_match = re.search(r'sub-([A-Za-z0-9]+)', base_name)
+        if sub_match:
+            sub_id = sub_match.group(1)
+            json_pattern = f"*{sub_id}*_clinical_prediction_deep.json"
+            json_files = glob_mod.glob(os.path.join(overlay_dir, json_pattern))
+        else:
+            json_files = []
+        
+        if json_files:
+            try:
+                import json
+                with open(json_files[0], 'r') as f:
+                    json_data = json.load(f)
+                # Extract predicted disease and map to full names
+                if 'prediction' in json_data and 'label_name' in json_data['prediction']:
+                    disease_code = json_data['prediction']['label_name']
+                    disease_mapping = {
+                        'CN': 'Healthy',
+                        'PD': 'Parkinsons Disease', 
+                        'AD': 'Alzheimers Disease'
+                    }
+                    predicted_disease = disease_mapping.get(disease_code, disease_code)
+            except Exception as e:
+                print(f"Could not parse JSON: {e}")
+        
+        title = f"Subject: {sub_id} | Disease Prediction: {predicted_disease}"
+        create_overlay_viewer(b_img, b_data, o_data, title=title, init_alpha=float(args.overlay_alpha))
+        return
+
+    # Base-only visualisation (no overlay)
+    if args.base and not args.overlay:
+        if not os.path.exists(args.base):
+            print(f"Base file not found: {args.base}")
+            return
+        try:
+            b_img = nib.as_closest_canonical(nib.load(args.base)); b_data = b_img.get_fdata().astype(np.float32)
+        except Exception as e:
+            print(f"Failed to load base NIfTI: {e}")
+            return
+        # Show grayscale base with zero overlay (alpha=0.0)
+        zero_overlay = np.zeros_like(b_data, dtype=np.float32)
+        title = f"Base-only Viewer: {os.path.basename(args.base)}"
+        create_overlay_viewer(b_img, b_data, zero_overlay, title=title, init_alpha=0.0)
+        return
+
     if args.file:
         # Load specific file
         if not os.path.exists(args.file):
-            print(f"❌ File not found: {args.file}")
+            print(f"File not found: {args.file}")
             return
         
         img, data = load_spect_image(args.file)
@@ -187,7 +415,7 @@ def main():
     available_data = find_spect_data()
     
     if not available_data:
-        print("❌ No SPECT data found in /Users/jacksonschofield/Desktop/SPECT/")
+        print("No SPECT data found in /Users/jacksonschofield/Desktop/SPECT/")
         print("Please ensure you have run the preprocessing pipeline first.")
         return
     
@@ -203,12 +431,12 @@ def main():
         available_data = [d for d in available_data if d['step'] == args.step]
     
     if not available_data:
-        print(f"❌ No data found matching diagnosis={args.diagnosis}, step={args.step}")
+        print(f"No data found matching diagnosis={args.diagnosis}, step={args.step}")
         return
     
-    # Select data to visualize
+    # Select data to visualise
     selected_data = available_data[0]  # Use first available
-    print(f"\n🎯 Using: {selected_data['diagnosis']} - {selected_data['step']}")
+    print(f"\nUsing: {selected_data['diagnosis']} - {selected_data['step']}")
     
     # Find a subject with valid data
     valid_subject = None

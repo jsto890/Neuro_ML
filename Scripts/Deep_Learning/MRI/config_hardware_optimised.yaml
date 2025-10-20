@@ -1,0 +1,147 @@
+# Hardware-Optimised Configuration for Threadripper 3990X + RTX 6000
+# Image dimensions: 97x115x97
+
+# Vision Transformer 3D Configuration (Large - Optimised for RTX 6000)
+vision_transformer_3d:
+  img_size: [97, 115, 97]  # Actual image dimensions
+  patch_size: 16           # Patch size for embedding
+  in_channels: 1           # Single channel for sMRI
+  num_classes: 2           # Binary classification (AD vs CN)
+  embed_dim: 1024          # Embedding dimension (Large)
+  depth: 16                # Number of transformer blocks (Large)
+  num_heads: 16            # Number of attention heads (Large)
+  mlp_ratio: 4.0           # MLP expansion ratio
+  qkv_bias: true           # Use bias in QKV projection
+  drop_rate: 0.1           # Dropout rate
+  attn_drop_rate: 0.0      # Attention dropout rate
+  drop_path_rate: 0.1      # Stochastic depth rate
+
+# Swin UNETR Configuration (Medium - Optimised for RTX 6000)
+swin_unetr_classifier:
+  in_channels: 1           # Single channel for sMRI
+  num_classes: 2           # Binary classification
+  feature_size: 48         # Feature size for Swin Transformer (Medium)
+  drop_rate: 0.1           # Dropout rate
+  attn_drop_rate: 0.0      # Attention dropout rate
+  dropout_path_rate: 0.1   # Stochastic depth rate
+  use_checkpoint: false    # No need for checkpointing with 24GB VRAM
+  spatial_dims: 3          # 3D spatial dimensions
+
+# Full Swin UNETR Configuration (Small - Optimised for RTX 6000)
+full_swin_unetr_classifier:
+  in_channels: 1           # Single channel for sMRI
+  num_classes: 2           # Binary classification
+  feature_size: 24         # Feature size for Swin Transformer (Small - for memory efficiency)
+  drop_rate: 0.1           # Dropout rate
+  attn_drop_rate: 0.0      # Attention dropout rate
+  dropout_path_rate: 0.1   # Stochastic depth rate
+  use_checkpoint: false    # No need for checkpointing with 24GB VRAM
+  spatial_dims: 3          # 3D spatial dimensions
+  # Note: Input will be automatically resized to [96, 128, 96] to meet Swin UNETR requirements
+
+# Training Configuration (Optimised for Threadripper 3990X + RTX 6000)
+training:
+  # Learning rate schedules
+  learning_rate: 1e-4      # Initial learning rate
+  weight_decay: 1e-5       # Weight decay
+  warmup_epochs: 5         # Warmup epochs for transformer models
+  cosine_schedule: true    # Use cosine learning rate schedule
+  
+  # Optimizer settings
+  optimizer: "adamw"       # Use AdamW for transformers
+  betas: [0.9, 0.999]     # AdamW betas
+  eps: 1e-8               # AdamW epsilon
+  
+  # Data augmentation (specific to transformers)
+  augmentation:
+    random_rotation: 10    # Random rotation in degrees
+    random_flip: true      # Random flip
+    random_crop: true      # Random crop
+    color_jitter: false    # No color jitter for sMRI
+    mixup: 0.1            # Mixup alpha
+  
+  # Regularization
+  label_smoothing: 0.1     # Label smoothing for transformers
+  mixup_alpha: 0.2        # Mixup alpha
+  
+  # Memory optimisation (Optimised for RTX 6000)
+  gradient_accumulation_steps: 1  # No accumulation needed with 24GB VRAM
+  mixed_precision: true    # Use mixed precision training
+
+# Model-specific hyperparameters (Optimised for RTX 6000)
+model_variants:
+  # Large Vision Transformer (can fit in RTX 6000)
+  vit_large:
+    embed_dim: 768
+    depth: 12
+    num_heads: 12
+    mlp_ratio: 4.0
+  
+  # Extra Large Vision Transformer (for RTX 6000)
+  vit_xlarge:
+    embed_dim: 1024
+    depth: 16
+    num_heads: 16
+    mlp_ratio: 4.0
+  
+  # Large Swin UNETR (for RTX 6000)
+  swin_unetr_large:
+    feature_size: 96
+    drop_rate: 0.1
+  
+  # Extra Large Swin UNETR (for RTX 6000)
+  swin_unetr_xlarge:
+    feature_size: 128
+    drop_rate: 0.1
+
+# Evaluation settings (Optimised for Threadripper 3990X)
+evaluation:
+  batch_size: 8           # Larger batch size for RTX 6000 (24GB VRAM)
+  num_workers: 32         # More workers for 128-thread CPU
+  mixed_precision: true   # Use mixed precision for evaluation
+  
+# Hardware specifications
+hardware:
+  gpu: "Quadro RTX 6000"
+  gpu_memory: 24          # GPU memory in GB
+  cpu: "AMD Ryzen Threadripper 3990X"
+  cpu_cores: 64           # CPU cores
+  cpu_threads: 128        # CPU threads
+  ram: 64                 # Recommended RAM in GB
+  
+# Performance optimisations
+performance:
+  # Batch sizes for different models
+  batch_sizes:
+    simple3dcnn: 8
+    resnet18_3d: 6
+    densenet121_3d: 4
+    efficientnetb0_3d: 4
+    visiontransformer3d: 4
+    swinunetrclassifier: 4
+  
+  # Number of workers for data loading
+  num_workers: 32         # Can use more workers with 128 threads
+  
+  # Memory optimisations
+  pin_memory: true        # Pin memory for faster GPU transfer
+  persistent_workers: true # Keep workers alive between epochs
+  
+  # Mixed precision settings
+  mixed_precision: true   # Use AMP for faster training
+  autocast: true          # Enable autocast for mixed precision
+  
+# Training recommendations
+recommendations:
+  # For best performance:
+  # - Use batch_size=4 for transformer models
+  # - Use num_workers=32 for data loading
+  # - Enable mixed precision training
+  # - Use gradient accumulation only if needed for larger models
+  # - Monitor GPU memory usage with nvidia-smi
+  
+  # Expected performance:
+  # - Vision Transformer: ~2-3 hours for 30 epochs
+  # - Swin UNETR: ~3-4 hours for 30 epochs
+  # - Memory usage: ~18-20GB VRAM for large models
+  # - CPU usage: ~60-80% across all cores 

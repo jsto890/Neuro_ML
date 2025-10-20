@@ -272,6 +272,41 @@ def main():
 
     print(f"✓ JSON report saved to: {json_path}")
 
+    # Probability visualisation (bar chart) next to JSON
+    try:
+        result_probs = result.get("probabilities", {}) if isinstance(result, dict) else {}
+        if result_probs:
+            labels = list(result_probs.keys())
+            values = [float(result_probs[k]) for k in labels]
+            s = sum(values)
+            disp_vals = [v / s if s > 0 else 0.0 for v in values]
+
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+
+            fig, ax = plt.subplots(figsize=(6, 4))
+            bars = ax.bar(labels, disp_vals, color=['#2ca02c' if l == 'CN' else '#1f77b4' if l == 'AD' else '#d62728' for l in labels])
+            ax.set_ylim(0.0, 1.0)
+            ax.set_ylabel('Probability')
+            pred_name = result.get("predicted_label_name", "") if isinstance(result, dict) else ""
+            conf = float(result.get("confidence", 0.0)) if isinstance(result, dict) else 0.0
+            sid_title = sid if isinstance(sid, str) else "subject"
+            ax.set_title(f"{sid_title} • Prediction: {pred_name} ({conf:.0%})")
+            for rect, v in zip(bars, disp_vals):
+                ax.annotate(f"{v*100:.0f}%",
+                            xy=(rect.get_x() + rect.get_width() / 2, v),
+                            xytext=(0, 3),
+                            textcoords="offset points",
+                            ha='center', va='bottom', fontsize=9)
+            fig.tight_layout()
+            prob_png = output_dir / f"{sid}_probabilities.png"
+            plt.savefig(str(prob_png), dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            print(f"✓ Probabilities plot saved to: {prob_png}")
+    except Exception as _e:
+        print(f"Warning: failed to save probabilities plot: {_e}")
+
 
 if __name__ == "__main__":
     main()

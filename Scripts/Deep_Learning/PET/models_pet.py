@@ -148,6 +148,32 @@ class PET_GradCAM_3DCNN(nn.Module):
         out  = out.view(out.size(0), -1)  # [B, 64]
         logits = self.classifier(out)     # [B, num_classes]
         return logits, fmap
+class ResNetFeatureClassifier(nn.Module):
+    """
+    Wraps a MONAI ResNet (spatial_dims=3). When the backbone is constructed with
+    feed_forward=False (as required for MedicalNet pretrained weights), it returns
+    feature vectors instead of class logits. This wrapper attaches a classification
+    head lazily on the first forward pass with the correct in_features.
+    """
+    def __init__(self, backbone: nn.Module, num_classes: int):
+        super().__init__()
+        self.backbone = backbone
+        self.num_classes = num_classes
+        self.head: nn.Module | None = None
+        self.pool = nn.AdaptiveAvgPool3d(output_size=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        feats = self.backbone(x)
+        # Ensure [B, C] by global pooling if spatial dims present
+        if feats.dim() > 2:
+            feats = self.pool(feats)
+            feats = feats.view(feats.size(0), -1)
+        if self.head is None:
+            in_features = feats.size(1)
+            self.head = nn.Linear(in_features, self.num_classes).to(feats.device)
+        logits = self.head(feats)
+        return logits
+
 
 # --- Model Factory Function ---
 def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use_pretrained=False, dropout_p: float = 0.0,
@@ -175,11 +201,25 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
         
         if use_pretrained:
             print("Loading pretrained ResNet18_3D...")
-            model = resnet18(pretrained=True, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes, feed_forward=False, shortcut_type='A', bias_downsample=True)
+            # MedicalNet pretrained requires feed_forward=False; attach our own head
+            backbone = resnet18(
+                pretrained=True,
+                spatial_dims=3,
+                n_input_channels=in_channels,
+                num_classes=num_classes,
+                feed_forward=False,
+                shortcut_type='A',
+                bias_downsample=True
+            )
+            return ResNetFeatureClassifier(backbone, num_classes)
         else:
             print("Creating ResNet18_3D from scratch...")
+            # When training from scratch, return logits directly
             model = resnet18(pretrained=False, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes)
-        return model
+            # Defensive: ensure classifier matches requested num_classes
+            if hasattr(model, 'fc') and isinstance(model.fc, nn.Linear) and model.fc.out_features != num_classes:
+                model.fc = nn.Linear(model.fc.in_features, num_classes)
+            return model
     
     elif model_name == "resnet50_3d":
         if resnet is None:
@@ -187,11 +227,22 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
         
         if use_pretrained:
             print("Loading pretrained ResNet50_3D...")
-            model = resnet50(pretrained=True, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes, feed_forward=False, shortcut_type='B', bias_downsample=False)
+            backbone = resnet50(
+                pretrained=True,
+                spatial_dims=3,
+                n_input_channels=in_channels,
+                num_classes=num_classes,
+                feed_forward=False,
+                shortcut_type='B',
+                bias_downsample=False
+            )
+            return ResNetFeatureClassifier(backbone, num_classes)
         else:
             print("Creating ResNet50_3D from scratch...")
             model = resnet50(pretrained=False, spatial_dims=3, n_input_channels=in_channels, num_classes=num_classes)
-        return model
+            if hasattr(model, 'fc') and isinstance(model.fc, nn.Linear) and model.fc.out_features != num_classes:
+                model.fc = nn.Linear(model.fc.in_features, num_classes)
+            return model
     
     elif model_name == "densenet121_3d":
         if DenseNet121 is None:
@@ -230,7 +281,7 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
                     )
             except Exception as e:
                 print(f"Warning: Could not load pretrained EfficientNet weights: {e}")
-                print("Falling back to from-scratch initialization...")
+                print("Falling back to from-scratch initialisation...")
                 model = EfficientNet3D.from_name("efficientnet-b0", override_params={'num_classes': num_classes})
                 
                 # Modify the first conv layer to accept in_channels if different from default (3)

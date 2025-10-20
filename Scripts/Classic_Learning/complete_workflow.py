@@ -22,7 +22,7 @@ from datetime import datetime
 sys.path.append(str(Path(__file__).parent / "Optimised"))
 
 try:
-    from improved_optimized_classifier import ImprovedOptimizedRadiomicsClassifier
+    from improved_optimised_classifier import ImprovedOptimizedRadiomicsClassifier
 except ImportError as e:
     print(f"Error importing ImprovedOptimizedRadiomicsClassifier: {e}")
     print("Please ensure you're running this from the Classic_Learning directory")
@@ -74,7 +74,7 @@ def load_config(config_path=None):
         logger = logging.getLogger(__name__)
         logger.info(f"Loaded configuration from: {config_path}")
     else:
-        # Default configuration for the improved optimized pipeline
+        # Default configuration for the improved optimised pipeline
         config = {
             'data': {
                 'binary_only': True,
@@ -144,7 +144,7 @@ def load_config(config_path=None):
             }
         }
         logger = logging.getLogger(__name__)
-        logger.info("Using default configuration for improved optimized pipeline")
+        logger.info("Using default configuration for improved optimised pipeline")
     
     return config
 
@@ -177,7 +177,7 @@ def run_complete_workflow(input_path, output_dir, config_path=None, random_state
     # Load configuration
     config = load_config(config_path)
     
-    # Step 2: Initialize the improved optimized classifier
+    # Step 2: Initialize the improved optimised classifier
     logger.info("Step 2: Initializing Improved Optimized Radiomics Classifier...")
     classifier = ImprovedOptimizedRadiomicsClassifier(
         input_path=input_path,
@@ -254,8 +254,8 @@ def generate_summary_report(classifier, output_path):
                 'logs': list(output_path.glob('*.log'))
             },
             'recommendations': {
-                'primary_model': 'SVM model (optimized_svm_model.pkl)',
-                'backup_model': 'Ensemble model (optimized_ensemble_model.pkl)',
+                'primary_model': 'SVM model (optimised_svm_model.pkl)',
+                'backup_model': 'Ensemble model (optimised_ensemble_model.pkl)',
                 'clinical_use': 'Use SVM model for clinical predictions',
                 'research_use': 'Use ensemble model for research and validation'
             }
@@ -392,8 +392,8 @@ Examples:
         if results.get('success', True):
             print(f"\n✅ Workflow completed successfully!")
             print(f"📁 Results saved to: {output_path}")
-            print(f"🎯 Primary model: SVM (optimized_svm_model.pkl)")
-            print(f"🔄 Backup model: Ensemble (optimized_ensemble_model.pkl)")
+            print(f"🎯 Primary model: SVM (optimised_svm_model.pkl)")
+            print(f"🔄 Backup model: Ensemble (optimised_ensemble_model.pkl)")
             print(f"📊 Check workflow_report.txt for detailed results")
         else:
             print(f"\n❌ Workflow failed: {results.get('error', 'Unknown error')}")

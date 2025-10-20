@@ -6,7 +6,7 @@ Reference: Uses the same MNI filename logic as `03_zscore_skull_strip.py`:
   - Must contain both "MNI152NLin2009cAsym" and "_desc-preproc_T1w.nii.gz"
   - Must contain both "MNI152NLin2009cAsym" and "_desc-brain_mask.nii.gz"
 
-The script compares subjects present in raw MRI directories (organized as
+The script compares subjects present in raw MRI directories (organised as
 <raw_smri>/<site>/<disease>/sub-*) against sMRIPrep derivatives at
 <smri_p>/sub-*/anat.
 

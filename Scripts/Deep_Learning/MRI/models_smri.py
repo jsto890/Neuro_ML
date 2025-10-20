@@ -263,7 +263,7 @@ def get_3d_model(model_name, num_classes=2, in_channels=1, base_channels=16, use
                     )
             except Exception as e:
                 print(f"Warning: Could not load pretrained EfficientNet weights: {e}")
-                print("Falling back to from-scratch initialization...")
+                print("Falling back to from-scratch initialisation...")
                 model = EfficientNet3D.from_name("efficientnet-b0", override_params={'num_classes': num_classes})
                 
                 # Modify the first conv layer to accept in_channels if different from default (3)
