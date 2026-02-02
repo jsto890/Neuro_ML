@@ -154,8 +154,23 @@ def load_model(arch: str, num_classes: int, in_channels: int, weights_path: str,
         base_model.to(device)
         base_model.eval()
 
-        # Let the model auto-initialise the classifier based on actual input size
-        # Don't force the classifier size as it may not match the checkpoint
+        # IMPORTANT:
+        # Simple3DCNN initialises classifier[0] as Linear(1,256) and normally fixes it during forward()
+        # via _initialize_classifier(x). However, our Grad-CAM wrapper bypasses base_model.forward(),
+        # so we must align classifier[0] to the checkpoint *before* load_state_dict, otherwise PyTorch
+        # will error on size mismatch even with strict=False.
+        if classifier_in is not None:
+            try:
+                out_feats = int(getattr(base_model.classifier[0], "out_features", 256))
+            except Exception:
+                out_feats = 256
+            try:
+                base_model.classifier[0] = nn.Linear(int(classifier_in), int(out_feats)).to(device)
+                # Prevent base_model.forward() from re-initialising and overwriting the loaded classifier
+                if hasattr(base_model, "_initialized"):
+                    base_model._initialized = True  # type: ignore
+            except Exception:
+                pass
 
         if clean_sd is not None:
             base_model.load_state_dict(clean_sd, strict=False)

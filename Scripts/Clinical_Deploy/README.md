@@ -263,7 +263,7 @@ python3 Scripts/Clinical_Deploy/Deep/batch_explain_mri.py \
   --weights /abs/path/to/best_smri_model_fold_1.pth \
   --weights-list /abs/path/to/best_smri_model_fold_2.pth /abs/path/to/best_smri_model_fold_3.pth /abs/path/to/best_smri_model_fold_4.pth /abs/path/to/best_smri_model_fold_5.pth \
   --model-arch Simple3DCNN --num-classes 3 --resize-dims 96 96 112 \
-  --device cuda:3 --num-threads 8 --normalize none \
+  --device cuda:0 --num-threads 8 --normalize none \
   --ensemble-avg-method logits \
   --tta-n 0 \
   --cam-tta-n 1 --cam-tta-noise-std 0.0 \
