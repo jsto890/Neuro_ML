@@ -116,6 +116,8 @@ def _build_predict_cmd(predict_script: str, spec: RunSpec, passthrough: Sequence
         spec.image_path,
         "--output-dir",
         spec.output_dir,
+        "--known-label",
+        str(int(spec.label)),
         # ensure we actually produce both nifti types for cohort analyses
         "--run",
         "gradcam",

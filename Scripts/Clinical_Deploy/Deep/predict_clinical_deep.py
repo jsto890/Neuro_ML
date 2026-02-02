@@ -942,6 +942,7 @@ def main():
     parser.add_argument('--cudnn-benchmark', action='store_true', help='Enable cudnn.benchmark for faster convs on fixed sizes (CUDA only)')
     parser.add_argument('--amp', action='store_true', help='Enable mixed precision (CUDA autocast) for prediction phase')
     parser.add_argument('--num-classes', type=int, default=3)
+    parser.add_argument('--known-label', type=int, default=None, help='Optional known/true class index for this subject (0..num-classes-1). If set, interpretability targets (and overlays) use this label instead of the predicted class.')
     parser.add_argument('--label-map-json', type=str, help='Optional JSON mapping of numeric labels to names')
     parser.add_argument('--normalize', choices=['zscore', 'minmax', 'none'], default='zscore')
     parser.add_argument('--resize-dims', type=int, nargs=3, metavar=('D', 'H', 'W'), help='Optional resize to D H W before inference')
@@ -1137,6 +1138,20 @@ def main():
     confidence = float(adjusted_probs[pred_idx])
     prob_dict = {label_map.get(i, str(i)): float(adjusted_probs[i]) for i in range(len(adjusted_probs))}
 
+    # Choose which class index to use for "default" interpretability targets and overlays.
+    # For cohort analyses, a known/true label is often preferred to avoid missing overlays when misclassified.
+    known_label = getattr(args, 'known_label', None)
+    interpret_idx = pred_idx
+    if known_label is not None:
+        try:
+            known_i = int(known_label)
+            if known_i < 0 or known_i >= int(args.num_classes):
+                raise ValueError(f"--known-label out of range [0, {int(args.num_classes)-1}]")
+            interpret_idx = known_i
+        except Exception as e:
+            print(f"Warning: ignoring --known-label ({e}); using predicted class for interpretability.")
+            interpret_idx = pred_idx
+
     # Prepare output directory
     out_dir = Path(expand_path(args.output_dir))
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1154,7 +1169,7 @@ def main():
         if getattr(args, 'cam_classes', None) is not None and len(getattr(args, 'cam_classes')) > 0:
             classes_to_compute = sorted(set([int(c) for c in getattr(args, 'cam_classes')]))
         else:
-            classes_to_compute = range(args.num_classes) if args.all_classes_interpret else [pred_idx]
+            classes_to_compute = range(args.num_classes) if args.all_classes_interpret else [interpret_idx]
         overlay_saved = False
         for c in classes_to_compute:
             try:
@@ -1205,7 +1220,7 @@ def main():
                 save_nifti(cam_full, affine, header, cam_path)
                 gradcam_paths[str(c)] = str(cam_path)
                 # Optional overlays for predicted class
-                if args.save_overlay_pngs and c == pred_idx and not overlay_saved:
+                if args.save_overlay_pngs and int(c) == int(interpret_idx) and not overlay_saved:
                     try:
                         class_name = label_map.get(int(c), str(c))
                         save_overlay_pngs(
@@ -1230,7 +1245,7 @@ def main():
         if getattr(args, 'cam_classes', None) is not None and len(getattr(args, 'cam_classes')) > 0:
             classes_to_compute = sorted(set([int(c) for c in getattr(args, 'cam_classes')]))
         else:
-            classes_to_compute = range(args.num_classes) if args.all_classes_interpret else [pred_idx]
+            classes_to_compute = range(args.num_classes) if args.all_classes_interpret else [interpret_idx]
         overlay_saved_pp = False
         for c in classes_to_compute:
             try:
@@ -1289,7 +1304,7 @@ def main():
                 save_nifti(cam_full, affine, header, cam_path)
                 gradcam_paths[f"plusplus_{c}"] = str(cam_path)
                 # Optional overlays for predicted class
-                if args.save_overlay_pngs and c == pred_idx and not overlay_saved_pp:
+                if args.save_overlay_pngs and int(c) == int(interpret_idx) and not overlay_saved_pp:
                     try:
                         class_name = label_map.get(int(c), str(c))
                         save_overlay_pngs(
@@ -1313,11 +1328,11 @@ def main():
     if 'saliency' in run_set:
         try:
             if not is_ensemble:
-                sal = compute_saliency_volume(models[0], input_tensor, pred_idx)
+                sal = compute_saliency_volume(models[0], input_tensor, interpret_idx)
             else:
                 sal_accum = None
                 for m in models:
-                    sal_i = compute_saliency_volume(m, input_tensor, pred_idx)
+                    sal_i = compute_saliency_volume(m, input_tensor, interpret_idx)
                     sal_accum = sal_i if sal_accum is None else (sal_accum + sal_i)
                 sal = sal_accum / float(len(models))
             if use_focus:
@@ -1335,7 +1350,7 @@ def main():
                         vol_np,
                         sal_full,
                         out_dir / f"{sid}_saliency_overlay.png",
-                        title=f"{sid} • Saliency • Pred={pred_name}",
+                        title=f"{sid} • Saliency • Target={label_map.get(int(interpret_idx), str(interpret_idx))}",
                         mask=brain_mask_eroded,
                         alpha=float(getattr(args, 'overlay_alpha', 0.4)),
                         zero_outside=bool(getattr(args, 'overlay_zero_outside', False))
@@ -1352,13 +1367,13 @@ def main():
     if 'smoothgrad' in run_set:
         try:
             if not is_ensemble:
-                sg_sal = compute_smoothgrad_volume(models[0], input_tensor, pred_idx, 
+                sg_sal = compute_smoothgrad_volume(models[0], input_tensor, interpret_idx, 
                                                  n_samples=int(args.sg_samples), 
                                                  noise_std=float(args.sg_noise_std))
             else:
                 sg_accum = None
                 for m in models:
-                    sg_i = compute_smoothgrad_volume(m, input_tensor, pred_idx, 
+                    sg_i = compute_smoothgrad_volume(m, input_tensor, interpret_idx, 
                                                    n_samples=int(args.sg_samples), 
                                                    noise_std=float(args.sg_noise_std))
                     sg_accum = sg_i if sg_accum is None else (sg_accum + sg_i)
@@ -1377,7 +1392,7 @@ def main():
                         vol_np,
                         sg_full,
                         out_dir / f"{sid}_smoothgrad_overlay.png",
-                        title=f"{sid} • SmoothGrad • Pred={pred_name}",
+                        title=f"{sid} • SmoothGrad • Target={label_map.get(int(interpret_idx), str(interpret_idx))}",
                         mask=brain_mask_eroded,
                         alpha=float(getattr(args, 'overlay_alpha', 0.4)),
                         zero_outside=bool(getattr(args, 'overlay_zero_outside', False))
@@ -1393,13 +1408,13 @@ def main():
     if 'integrated_gradients' in run_set:
         try:
             if not is_ensemble:
-                ig_sal = compute_integrated_gradients_volume(models[0], input_tensor, pred_idx, 
+                ig_sal = compute_integrated_gradients_volume(models[0], input_tensor, interpret_idx, 
                                                            n_steps=int(args.ig_steps), 
                                                            baseline_type=args.ig_baseline)
             else:
                 ig_accum = None
                 for m in models:
-                    ig_i = compute_integrated_gradients_volume(m, input_tensor, pred_idx, 
+                    ig_i = compute_integrated_gradients_volume(m, input_tensor, interpret_idx, 
                                                              n_steps=int(args.ig_steps), 
                                                              baseline_type=args.ig_baseline)
                     ig_accum = ig_i if ig_accum is None else (ig_accum + ig_i)
@@ -1418,7 +1433,7 @@ def main():
                         vol_np,
                         ig_full,
                         out_dir / f"{sid}_integrated_gradients_overlay.png",
-                        title=f"{sid} • Integrated Gradients • Pred={pred_name}",
+                        title=f"{sid} • Integrated Gradients • Target={label_map.get(int(interpret_idx), str(interpret_idx))}",
                         mask=brain_mask_eroded,
                         alpha=float(getattr(args, 'overlay_alpha', 0.4)),
                         zero_outside=bool(getattr(args, 'overlay_zero_outside', False))
@@ -1434,7 +1449,7 @@ def main():
     if 'fused_saliency' in run_set:
         try:
             if not is_ensemble:
-                fused_sal = compute_fused_saliency_volume(models[0], input_tensor, pred_idx, 
+                fused_sal = compute_fused_saliency_volume(models[0], input_tensor, interpret_idx, 
                                                         sg_samples=int(args.sg_samples), 
                                                         ig_steps=int(args.ig_steps),
                                                         noise_std=float(args.sg_noise_std), 
@@ -1442,7 +1457,7 @@ def main():
             else:
                 fused_accum = None
                 for m in models:
-                    fused_i = compute_fused_saliency_volume(m, input_tensor, pred_idx, 
+                    fused_i = compute_fused_saliency_volume(m, input_tensor, interpret_idx, 
                                                           sg_samples=int(args.sg_samples), 
                                                           ig_steps=int(args.ig_steps),
                                                           noise_std=float(args.sg_noise_std), 
@@ -1463,7 +1478,7 @@ def main():
                         vol_np,
                         fused_full,
                         out_dir / f"{sid}_fused_saliency_overlay.png",
-                        title=f"{sid} • Fused Saliency • Pred={pred_name}",
+                        title=f"{sid} • Fused Saliency • Target={label_map.get(int(interpret_idx), str(interpret_idx))}",
                         mask=brain_mask_eroded,
                         alpha=float(getattr(args, 'overlay_alpha', 0.4)),
                         zero_outside=bool(getattr(args, 'overlay_zero_outside', False))
@@ -1482,14 +1497,14 @@ def main():
                 # Default to stride = ksize//2 if not provided
                 stride_val = args.occ_stride if args.occ_stride is not None else max(1, int(args.occ_ksize)//2)
                 occ_full = compute_occlusion_volume(
-                    models[0], input_tensor, pred_idx, ksize=int(args.occ_ksize), stride=stride_val, baseline=float(args.occ_baseline)
+                    models[0], input_tensor, interpret_idx, ksize=int(args.occ_ksize), stride=stride_val, baseline=float(args.occ_baseline)
                 )
             else:
                 occ_accum = None
                 for m in models:
                     stride_val = args.occ_stride if args.occ_stride is not None else max(1, int(args.occ_ksize)//2)
                     occ_i = compute_occlusion_volume(
-                        m, input_tensor, pred_idx, ksize=int(args.occ_ksize), stride=stride_val, baseline=float(args.occ_baseline)
+                        m, input_tensor, interpret_idx, ksize=int(args.occ_ksize), stride=stride_val, baseline=float(args.occ_baseline)
                     )
                     occ_accum = occ_i if occ_accum is None else (occ_accum + occ_i)
                 occ_full = occ_accum / float(len(models))
@@ -1507,7 +1522,7 @@ def main():
                         vol_np,
                         occ_map,
                         out_dir / f"{sid}_occlusion_overlay.png",
-                        title=f"{sid} • Occlusion • Pred={pred_name}",
+                        title=f"{sid} • Occlusion • Target={label_map.get(int(interpret_idx), str(interpret_idx))}",
                         mask=brain_mask_eroded,
                         alpha=float(getattr(args, 'overlay_alpha', 0.4)),
                         zero_outside=bool(getattr(args, 'overlay_zero_outside', False))
@@ -1545,7 +1560,7 @@ def main():
                 attributions = gs.attribute(
                     attr_input,
                     baselines=baseline,
-                    target=pred_idx,
+                    target=interpret_idx,
                     n_samples=int(args.gshap_samples),
                     stdevs=float(args.gshap_std),
                 )
@@ -1602,6 +1617,12 @@ def main():
             'probabilities': prob_dict,
             'risk_weights_applied': applied_risk,
             'cn_min_prob': float(args.cn_min_prob) if args.cn_min_prob is not None else None,
+        },
+        'known_label': {
+            'label_index': int(known_label) if known_label is not None else None,
+            'label_name': label_map.get(int(known_label), str(known_label)) if known_label is not None else None,
+            'interpretability_target_index': int(interpret_idx),
+            'interpretability_target_name': label_map.get(int(interpret_idx), str(interpret_idx)),
         },
         'prediction_raw': {
             'label_index': int(np.argmax(list(prob_dict_raw.values()))),

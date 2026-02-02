@@ -247,6 +247,7 @@ To generate a *cohort* of Grad-CAM / Grad-CAM++ NIfTIs (e.g., **20 per class** C
 - **Backend**: calls `Scripts/Clinical_Deploy/Deep/predict_clinical_deep.py` once per subject
 - **Recommendation**: use `--all-classes-interpret` (enabled by default in the batch script) so maps don’t depend on the model’s predicted class.
   - Alternatively (and faster for cohort statistics), generate maps only for the **true label class** using `--cam-classes <label>`. The batch script does this by default.
+  - If you also want PNG overlays even when the model misclassifies, pass `--known-label <label>` so overlay generation targets the known class instead of the predicted class (the batch script does this by default).
 
 Example (matches your Zeus layout):
 
