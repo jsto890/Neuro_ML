@@ -92,25 +92,29 @@ def _save_mid_sagittal_png(
     title: str,
     alpha: float = 0.45,
     white_bg: bool = True,
+    base_interp: str = "bicubic",
+    heat_interp: str = "nearest",
+    dpi: int = 300,
+    figsize: Tuple[float, float] = (6.5, 5.5),
 ) -> None:
     x = _get_mid_sagittal_idx(heat.shape)
     heat2d = heat[x, :, :].T  # display Y-Z plane
     heat2d = _robust01(heat2d, 90.0, 99.5)  # emphasise highlights
 
-    fig = plt.figure(figsize=(6, 5))
+    fig = plt.figure(figsize=figsize)
     if white_bg:
         fig.patch.set_facecolor("white")
     if base is not None:
         base2d = base[x, :, :].T
         base2d = _robust01(base2d, 2.0, 98.0)
-        plt.imshow(base2d, cmap="gray", origin="lower")
-        plt.imshow(heat2d, cmap="hot", origin="lower", alpha=float(alpha))
+        plt.imshow(base2d, cmap="gray", origin="lower", interpolation=str(base_interp))
+        plt.imshow(heat2d, cmap="hot", origin="lower", alpha=float(alpha), interpolation=str(heat_interp))
     else:
-        plt.imshow(heat2d, cmap="hot", origin="lower")
+        plt.imshow(heat2d, cmap="hot", origin="lower", interpolation=str(heat_interp))
     plt.axis("off")
     plt.title(title)
     plt.tight_layout()
-    plt.savefig(out_png, dpi=200, bbox_inches="tight", facecolor=("white" if white_bg else None))
+    plt.savefig(out_png, dpi=int(dpi), bbox_inches="tight", facecolor=("white" if white_bg else None))
     plt.close()
 
 
@@ -123,6 +127,10 @@ def main() -> None:
     ap.add_argument("--base_nifti", type=str, default=None, help="Optional base anatomical NIfTI for overlay (will be resampled to CAM grid if needed).")
     ap.add_argument("--alpha", type=float, default=0.45, help="Overlay alpha.")
     ap.add_argument("--white_bg", action="store_true", help="Save PNG with a white background (recommended for manuscripts).")
+    ap.add_argument("--dpi", type=int, default=300, help="PNG DPI (300 recommended for manuscripts).")
+    ap.add_argument("--figsize", type=float, nargs=2, default=[6.5, 5.5], metavar=("W", "H"), help="Figure size in inches.")
+    ap.add_argument("--base_interp", type=str, default="bicubic", choices=["nearest", "bilinear", "bicubic", "lanczos"], help="Interpolation used for the anatomical underlay.")
+    ap.add_argument("--heat_interp", type=str, default="nearest", choices=["nearest", "bilinear", "bicubic"], help="Interpolation used for the heatmap overlay.")
     ap.add_argument("--normalise_each", action="store_true", help="Robust-normalise each subject CAM before averaging (useful if scales differ).")
     ap.add_argument("--title", type=str, default=None, help="Optional figure title.")
     args = ap.parse_args()
@@ -156,7 +164,18 @@ def main() -> None:
 
     title = args.title if args.title else f"{args.name} (n={len(paths)})"
     out_png = os.path.join(out_dir, f"{args.name}_mid_sagittal.png")
-    _save_mid_sagittal_png(base_vol, mean_cam, out_png, title=title, alpha=float(args.alpha), white_bg=bool(args.white_bg))
+    _save_mid_sagittal_png(
+        base_vol,
+        mean_cam,
+        out_png,
+        title=title,
+        alpha=float(args.alpha),
+        white_bg=bool(args.white_bg),
+        base_interp=str(args.base_interp),
+        heat_interp=str(args.heat_interp),
+        dpi=int(args.dpi),
+        figsize=(float(args.figsize[0]), float(args.figsize[1])),
+    )
 
     print(f"✓ Found {len(paths)} CAMs")
     print(f"✓ Saved mean NIfTI: {out_mean}")
