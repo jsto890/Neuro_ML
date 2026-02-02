@@ -271,6 +271,31 @@ python3 Scripts/Clinical_Deploy/Deep/batch_explain_mri.py \
   --cam-layer prepool --save-overlay-pngs
 ```
 
+### ROI Statistics on Grad-CAM NIfTIs (MNI2mm)
+
+Once you have per-subject Grad-CAM / Grad-CAM++ NIfTIs in MNI2mm space, a robust next step is ROI-based
+group statistics using an atlas in the same space/shape.
+
+- **Script**: `Scripts/Clinical_Deploy/Deep/analyse_cam_roi_stats.py`
+- **Inputs**:
+  - `--explain_root`: your `.../data/explain/MRI` directory
+  - `--labels_csv`: `subject_id,label` (0/1/2 for CN/AD/PD)
+  - `--atlas`: integer-labelled atlas NIfTI in MNI2mm (0 = background)
+
+Example:
+
+```bash
+python3 Scripts/Clinical_Deploy/Deep/analyse_cam_roi_stats.py \
+  --explain_root /abs/path/to/data/explain/MRI \
+  --labels_csv /abs/path/to/data/mri_labels.csv \
+  --atlas /abs/path/to/atlas_mni2mm_labels.nii.gz \
+  --atlas_xml /abs/path/to/fsl_atlas.xml \
+  --output_dir /abs/path/to/cam_roi_stats \
+  --cam_kind gradcam \
+  --cam_class 0 \
+  --auto_resample_atlas
+```
+
 #### Output Format
 ```json
 {
