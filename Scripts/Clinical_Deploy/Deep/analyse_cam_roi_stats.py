@@ -379,8 +379,8 @@ def main() -> None:
         rows.append(rec)
 
     # Write per-subject matrix
-    matrix_path = out_dir / f"roi_matrix_{args.cam_kind}" + (f"_class{args.cam_class}" if args.cam_class is not None else "") + ".csv"
-    matrix_path = Path(str(matrix_path))  # ensure Path
+    matrix_fname = f"roi_matrix_{args.cam_kind}" + (f"_class{args.cam_class}" if args.cam_class is not None else "") + ".csv"
+    matrix_path = out_dir / matrix_fname
     with open(matrix_path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["subject_id", "label", "cam_path"] + roi_name_cols + roi_cols)
@@ -475,8 +475,8 @@ def main() -> None:
     pair_cols = sorted([k for k in test_rows[0].keys() if k.startswith("mwu_") or k.startswith("cohens_d_")])
     cols = base_cols + group_cols + pair_cols
 
-    out_tests = out_dir / f"roi_tests_{args.cam_kind}" + (f"_class{args.cam_class}" if args.cam_class is not None else "") + ".csv"
-    out_tests = Path(str(out_tests))
+    tests_fname = f"roi_tests_{args.cam_kind}" + (f"_class{args.cam_class}" if args.cam_class is not None else "") + ".csv"
+    out_tests = out_dir / tests_fname
     with open(out_tests, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(cols)
