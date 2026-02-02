@@ -239,6 +239,35 @@ python predict_clinical_deep.py \
 - **Occlusion sensitivity**: Occlusion sensitivity analysis
 - **Multiple outputs**: Prediction, confidence, and interpretability maps
 
+### Batch Interpretability Export (MRI cohorts)
+
+To generate a *cohort* of Grad-CAM / Grad-CAM++ NIfTIs (e.g., **20 per class** CN/AD/PD) for downstream statistical analysis across subjects, use:
+
+- **Script**: `Scripts/Clinical_Deploy/Deep/batch_explain_mri.py`
+- **Backend**: calls `Scripts/Clinical_Deploy/Deep/predict_clinical_deep.py` once per subject
+- **Recommendation**: use `--all-classes-interpret` (enabled by default in the batch script) so maps don’t depend on the model’s predicted class.
+
+Example (matches your Zeus layout):
+
+```bash
+python3 Scripts/Clinical_Deploy/Deep/batch_explain_mri.py \
+  --labels_csv /abs/path/to/mri_labels.csv \
+  --preprocessed_mri_root /abs/path/to/preprocessed/MRI \
+  --output_root /abs/path/to/explain/MRI \
+  --n_per_class 20 \
+  --seed 0 \
+  --skip_existing \
+  --max_workers 2 \
+  -- \
+  --weights /abs/path/to/best_smri_model_fold_1.pth \
+  --weights-list /abs/path/to/best_smri_model_fold_2.pth /abs/path/to/best_smri_model_fold_3.pth /abs/path/to/best_smri_model_fold_4.pth /abs/path/to/best_smri_model_fold_5.pth \
+  --model-arch Simple3DCNN --num-classes 3 --resize-dims 96 96 112 \
+  --device cuda:3 --num-threads 8 --normalize none \
+  --ensemble-avg-method logits \
+  --tta-n 8 --tta-noise-std 0.003 \
+  --cam-layer prepool --save-overlay-pngs
+```
+
 #### Output Format
 ```json
 {
