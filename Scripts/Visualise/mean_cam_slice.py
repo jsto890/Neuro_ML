@@ -96,6 +96,9 @@ def _save_mid_sagittal_png(
     heat_interp: str = "nearest",
     dpi: int = 300,
     figsize: Tuple[float, float] = (6.5, 5.5),
+    white_nonbrain: bool = False,
+    mask_heat_outside: bool = False,
+    nonbrain_threshold: float = 0.0,
 ) -> None:
     x = _get_mid_sagittal_idx(heat.shape)
     heat2d = heat[x, :, :].T  # display Y-Z plane
@@ -104,11 +107,25 @@ def _save_mid_sagittal_png(
     fig = plt.figure(figsize=figsize)
     if white_bg:
         fig.patch.set_facecolor("white")
+    ax = plt.gca()
+    if white_bg:
+        ax.set_facecolor("white")
     if base is not None:
         base2d = base[x, :, :].T
         base2d = _robust01(base2d, 2.0, 98.0)
-        plt.imshow(base2d, cmap="gray", origin="lower", interpolation=str(base_interp))
-        plt.imshow(heat2d, cmap="hot", origin="lower", alpha=float(alpha), interpolation=str(heat_interp))
+        base_mask = base2d > float(nonbrain_threshold)
+        if white_nonbrain:
+            base_show = np.ma.masked_where(~base_mask, base2d)
+            cmap_base = plt.cm.get_cmap("gray").copy()
+            cmap_base.set_bad(color="white")
+            plt.imshow(base_show, cmap=cmap_base, origin="lower", interpolation=str(base_interp))
+        else:
+            plt.imshow(base2d, cmap="gray", origin="lower", interpolation=str(base_interp))
+
+        heat_show = heat2d
+        if mask_heat_outside:
+            heat_show = np.where(base_mask, heat2d, 0.0)
+        plt.imshow(heat_show, cmap="hot", origin="lower", alpha=float(alpha), interpolation=str(heat_interp))
     else:
         plt.imshow(heat2d, cmap="hot", origin="lower", interpolation=str(heat_interp))
     plt.axis("off")
@@ -131,6 +148,9 @@ def main() -> None:
     ap.add_argument("--figsize", type=float, nargs=2, default=[6.5, 5.5], metavar=("W", "H"), help="Figure size in inches.")
     ap.add_argument("--base_interp", type=str, default="bicubic", choices=["nearest", "bilinear", "bicubic", "lanczos"], help="Interpolation used for the anatomical underlay.")
     ap.add_argument("--heat_interp", type=str, default="nearest", choices=["nearest", "bilinear", "bicubic"], help="Interpolation used for the heatmap overlay.")
+    ap.add_argument("--white_nonbrain", action="store_true", help="Render zero/non-brain underlay voxels as white (useful with *_brain.nii.gz templates).")
+    ap.add_argument("--mask_heat_outside", action="store_true", help="Zero the heatmap outside the non-brain mask inferred from the underlay.")
+    ap.add_argument("--nonbrain_threshold", type=float, default=0.0, help="Threshold on underlay intensity to define brain mask (default: >0).")
     ap.add_argument("--normalise_each", action="store_true", help="Robust-normalise each subject CAM before averaging (useful if scales differ).")
     ap.add_argument("--title", type=str, default=None, help="Optional figure title.")
     args = ap.parse_args()
@@ -175,6 +195,9 @@ def main() -> None:
         heat_interp=str(args.heat_interp),
         dpi=int(args.dpi),
         figsize=(float(args.figsize[0]), float(args.figsize[1])),
+        white_nonbrain=bool(args.white_nonbrain),
+        mask_heat_outside=bool(args.mask_heat_outside),
+        nonbrain_threshold=float(args.nonbrain_threshold),
     )
 
     print(f"✓ Found {len(paths)} CAMs")
