@@ -947,6 +947,7 @@ def main():
     # Interpretability selection
     parser.add_argument('--run-all', action='store_true', help='Run all interpretability maps (default if neither --run nor --run-all provided)')
     parser.add_argument('--run', nargs='+', choices=['gradcam', 'gradcam_plusplus', 'saliency', 'smoothgrad', 'integrated_gradients', 'fused_saliency', 'occlusion', 'gradientshap'], help='One or more interpretability methods to run, e.g. --run gradcam smoothgrad fused_saliency')
+    parser.add_argument('--cam-classes', type=int, nargs='+', default=None, help='Optional explicit class indices to generate CAMs for (overrides --all-classes-interpret / predicted class selection).')
     # Advanced saliency parameters
     parser.add_argument('--sg-samples', type=int, default=40, help='SmoothGrad samples (40=fast, 80=HQ)')
     parser.add_argument('--sg-noise-std', type=float, default=0.1, help='SmoothGrad noise std (fraction of in-mask intensity std)')
@@ -1135,10 +1136,15 @@ def main():
 
     # Vanilla Grad-CAM
     if 'gradcam' in run_set:
-        classes_to_compute = range(args.num_classes) if args.all_classes_interpret else [pred_idx]
+        if getattr(args, 'cam_classes', None) is not None and len(getattr(args, 'cam_classes')) > 0:
+            classes_to_compute = sorted(set([int(c) for c in getattr(args, 'cam_classes')]))
+        else:
+            classes_to_compute = range(args.num_classes) if args.all_classes_interpret else [pred_idx]
         overlay_saved = False
         for c in classes_to_compute:
             try:
+                if int(c) < 0 or int(c) >= int(args.num_classes):
+                    raise ValueError(f"Requested class {c} out of range [0, {int(args.num_classes)-1}]")
                 def _cam_for_model(m):
                     # CAM TTA: average multiple noisy passes if requested (defaults to global TTA when unset)
                     reps = int(getattr(args, 'cam_tta_n', 0))
@@ -1206,10 +1212,15 @@ def main():
 
     # Grad-CAM++
     if 'gradcam_plusplus' in run_set:
-        classes_to_compute = range(args.num_classes) if args.all_classes_interpret else [pred_idx]
+        if getattr(args, 'cam_classes', None) is not None and len(getattr(args, 'cam_classes')) > 0:
+            classes_to_compute = sorted(set([int(c) for c in getattr(args, 'cam_classes')]))
+        else:
+            classes_to_compute = range(args.num_classes) if args.all_classes_interpret else [pred_idx]
         overlay_saved_pp = False
         for c in classes_to_compute:
             try:
+                if int(c) < 0 or int(c) >= int(args.num_classes):
+                    raise ValueError(f"Requested class {c} out of range [0, {int(args.num_classes)-1}]")
                 def _campp_for_model(m):
                     reps = int(getattr(args, 'cam_tta_n', 0))
                     if reps <= 0:

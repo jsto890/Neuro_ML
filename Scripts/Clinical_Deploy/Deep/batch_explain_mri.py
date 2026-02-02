@@ -120,8 +120,9 @@ def _build_predict_cmd(predict_script: str, spec: RunSpec, passthrough: Sequence
         "--run",
         "gradcam",
         "gradcam_plusplus",
-        # avoid dependence on (possibly wrong) predicted class
-        "--all-classes-interpret",
+        # cohort analysis: generate maps for the TRUE label class (stable across subjects)
+        "--cam-classes",
+        str(int(spec.label)),
     ]
     cmd.extend(list(passthrough))
     return cmd

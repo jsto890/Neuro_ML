@@ -246,6 +246,7 @@ To generate a *cohort* of Grad-CAM / Grad-CAM++ NIfTIs (e.g., **20 per class** C
 - **Script**: `Scripts/Clinical_Deploy/Deep/batch_explain_mri.py`
 - **Backend**: calls `Scripts/Clinical_Deploy/Deep/predict_clinical_deep.py` once per subject
 - **Recommendation**: use `--all-classes-interpret` (enabled by default in the batch script) so maps don’t depend on the model’s predicted class.
+  - Alternatively (and faster for cohort statistics), generate maps only for the **true label class** using `--cam-classes <label>`. The batch script does this by default.
 
 Example (matches your Zeus layout):
 
@@ -264,7 +265,8 @@ python3 Scripts/Clinical_Deploy/Deep/batch_explain_mri.py \
   --model-arch Simple3DCNN --num-classes 3 --resize-dims 96 96 112 \
   --device cuda:3 --num-threads 8 --normalize none \
   --ensemble-avg-method logits \
-  --tta-n 8 --tta-noise-std 0.003 \
+  --tta-n 0 \
+  --cam-tta-n 1 --cam-tta-noise-std 0.0 \
   --cam-layer prepool --save-overlay-pngs
 ```
 
