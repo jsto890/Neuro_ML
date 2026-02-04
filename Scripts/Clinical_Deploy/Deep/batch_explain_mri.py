@@ -89,15 +89,16 @@ def _safe_mkdir(p: str) -> None:
     Path(p).mkdir(parents=True, exist_ok=True)
 
 
-def _already_done(out_dir: str, sid: str) -> bool:
+def _already_done(out_dir: str, sid: str, methods: Sequence[str]) -> bool:
     """
-    Consider the run done if both CAM NIfTIs exist for the predicted (or all) classes.
+    Consider the run done if the requested CAM NIfTIs exist.
     We check for any class file presence to avoid overfitting to class naming.
     """
     p = Path(out_dir)
-    # At minimum: one gradcam and one gradcam++ nifti should exist.
-    has_gc = any(p.glob(f"{sid}*_gradcam_class*.nii.gz"))
-    has_gcpp = any(p.glob(f"{sid}*_gradcam_plusplus_class*.nii.gz"))
+    want_gc = "gradcam" in set([str(m).lower() for m in methods])
+    want_gcpp = "gradcam_plusplus" in set([str(m).lower() for m in methods])
+    has_gc = any(p.glob(f"{sid}*_gradcam_class*.nii.gz")) if want_gc else True
+    has_gcpp = any(p.glob(f"{sid}*_gradcam_plusplus_class*.nii.gz")) if want_gcpp else True
     return bool(has_gc and has_gcpp)
 
 
@@ -128,8 +129,6 @@ def _build_predict_cmd(predict_script: str, spec: RunSpec, passthrough: Sequence
         spec.output_dir,
         "--known-label",
         str(int(spec.label)),
-        # interpretability methods to run (set by CLI)
-        "--run",
         # cohort analysis: generate maps for the TRUE label class (stable across subjects)
         "--cam-classes",
         str(int(spec.label)),
@@ -313,9 +312,7 @@ def main() -> None:
         passthrough = passthrough[1:]
 
     # Build method args once
-    method_args: List[str] = []
-    for m in args.methods:
-        method_args.append(str(m))
+    method_args: List[str] = [str(m) for m in args.methods]
 
     _safe_mkdir(out_root)
 
@@ -330,7 +327,7 @@ def main() -> None:
             if not os.path.isfile(spec.image_path):
                 return RunResult(output_dir=spec.output_dir, status="skipped_missing", returncode=2, elapsed_s=float(time.time() - t0))
             _safe_mkdir(spec.output_dir)
-            if args.skip_existing and _already_done(spec.output_dir, spec.sid):
+            if args.skip_existing and _already_done(spec.output_dir, spec.sid, methods=method_args):
                 return RunResult(output_dir=spec.output_dir, status="skipped_exists", returncode=0, elapsed_s=float(time.time() - t0))
             cmd = _build_predict_cmd(predict_script, spec, ["--run", *method_args, *list(passthrough)])
             if args.dry_run:
@@ -368,7 +365,7 @@ def main() -> None:
             progress.update(RunResult(output_dir=spec.output_dir, status="skipped_missing", returncode=2, elapsed_s=float(time.time() - t0)))
             continue
         _safe_mkdir(spec.output_dir)
-        if args.skip_existing and _already_done(spec.output_dir, spec.sid):
+        if args.skip_existing and _already_done(spec.output_dir, spec.sid, methods=method_args):
             print(f"[SKIP] Exists: {spec.output_dir}")
             progress.update(RunResult(output_dir=spec.output_dir, status="skipped_exists", returncode=0, elapsed_s=float(time.time() - t0)))
             continue
