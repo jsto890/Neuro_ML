@@ -28,6 +28,7 @@ import os
 import random
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -108,6 +109,14 @@ class RunSpec:
     output_dir: str
 
 
+@dataclass
+class RunResult:
+    output_dir: str
+    status: str  # ok, skipped_exists, skipped_missing, failed
+    returncode: int
+    elapsed_s: float
+
+
 def _build_predict_cmd(predict_script: str, spec: RunSpec, passthrough: Sequence[str]) -> List[str]:
     cmd = [
         "python3",
@@ -118,16 +127,101 @@ def _build_predict_cmd(predict_script: str, spec: RunSpec, passthrough: Sequence
         spec.output_dir,
         "--known-label",
         str(int(spec.label)),
-        # ensure we actually produce both nifti types for cohort analyses
+        # interpretability methods to run (set by CLI)
         "--run",
-        "gradcam",
-        "gradcam_plusplus",
         # cohort analysis: generate maps for the TRUE label class (stable across subjects)
         "--cam-classes",
         str(int(spec.label)),
     ]
     cmd.extend(list(passthrough))
     return cmd
+
+
+class ProgressTracker:
+    def __init__(self, total: int, max_workers: int, progress_every: int = 10, progress_time_s: int = 60) -> None:
+        self.total = int(max(0, total))
+        self.max_workers = int(max(1, max_workers))
+        self.progress_every = int(max(1, progress_every))
+        self.progress_time_s = int(max(1, progress_time_s))
+        self.t0 = time.time()
+        self.last_print = self.t0
+        self.done_total = 0
+        self.done_ok = 0
+        self.done_failed = 0
+        self.done_skipped_exists = 0
+        self.done_skipped_missing = 0
+        self._durations: List[float] = []  # executed runtimes only
+
+    def update(self, rr: RunResult) -> None:
+        self.done_total += 1
+        if rr.status == "ok":
+            self.done_ok += 1
+            if rr.elapsed_s > 0:
+                self._durations.append(float(rr.elapsed_s))
+                # keep a short history for responsiveness
+                if len(self._durations) > 50:
+                    self._durations = self._durations[-50:]
+        elif rr.status == "failed":
+            self.done_failed += 1
+            if rr.elapsed_s > 0:
+                self._durations.append(float(rr.elapsed_s))
+                if len(self._durations) > 50:
+                    self._durations = self._durations[-50:]
+        elif rr.status == "skipped_exists":
+            self.done_skipped_exists += 1
+        elif rr.status == "skipped_missing":
+            self.done_skipped_missing += 1
+
+        now = time.time()
+        should_print = (
+            (self.done_total % self.progress_every) == 0
+            or (now - self.last_print) >= self.progress_time_s
+            or self.done_total == self.total
+        )
+        if should_print:
+            self.print(now=now)
+            self.last_print = now
+
+    def _avg_s_per_exec(self) -> float:
+        if not self._durations:
+            return float("nan")
+        return float(sum(self._durations) / len(self._durations))
+
+    def _eta_s(self, now: float) -> float:
+        elapsed = max(1e-6, float(now - self.t0))
+        # Use observed throughput (completed per second) as it naturally accounts for max_workers.
+        rate = float(self.done_total) / elapsed if self.done_total > 0 else 0.0
+        if rate <= 0:
+            return float("nan")
+        remaining = max(0, self.total - self.done_total)
+        return float(remaining) / rate
+
+    @staticmethod
+    def _fmt_hms(seconds: float) -> str:
+        if not np.isfinite(seconds) or seconds < 0:
+            return "?"
+        s = int(round(seconds))
+        h = s // 3600
+        m = (s % 3600) // 60
+        sec = s % 60
+        if h > 0:
+            return f"{h}h{m:02d}m{sec:02d}s"
+        if m > 0:
+            return f"{m}m{sec:02d}s"
+        return f"{sec}s"
+
+    def print(self, now: Optional[float] = None) -> None:
+        now = time.time() if now is None else float(now)
+        elapsed = float(now - self.t0)
+        avg_exec = self._avg_s_per_exec()
+        eta = self._eta_s(now)
+        rate = (float(self.done_total) / elapsed) if elapsed > 0 else float("nan")
+        msg = (
+            f"[PROGRESS] {self.done_total}/{self.total} done | "
+            f"ok={self.done_ok} skip_exists={self.done_skipped_exists} skip_missing={self.done_skipped_missing} fail={self.done_failed} | "
+            f"avg_exec={avg_exec:.1f}s | rate={rate:.3f}/s | ETA={self._fmt_hms(eta)}"
+        )
+        print(msg, file=sys.stderr)
 
 
 def main() -> None:
@@ -146,6 +240,16 @@ def main() -> None:
     parser.add_argument("--skip_existing", action="store_true", help="Skip subjects whose outputs already exist.")
     parser.add_argument("--dry_run", action="store_true", help="Print commands but do not execute.")
     parser.add_argument("--max_workers", type=int, default=1, help="Parallel workers (1 = sequential).")
+    parser.add_argument(
+        "--methods",
+        type=str,
+        nargs="+",
+        default=["gradcam_plusplus"],
+        choices=["gradcam", "gradcam_plusplus"],
+        help="Interpretability methods to run (default: gradcam_plusplus only).",
+    )
+    parser.add_argument("--progress_every", type=int, default=10, help="Print progress every N subjects.")
+    parser.add_argument("--progress_time_s", type=int, default=60, help="Also print progress at least every T seconds.")
 
     # Everything after '--' is passed to predict_clinical_deep.py unchanged.
     parser.add_argument("passthrough", nargs=argparse.REMAINDER, help="Arguments after '--' are passed to predict_clinical_deep.py.")
@@ -207,23 +311,30 @@ def main() -> None:
     if len(passthrough) > 0 and passthrough[0] == "--":
         passthrough = passthrough[1:]
 
+    # Build method args once
+    method_args: List[str] = []
+    for m in args.methods:
+        method_args.append(str(m))
+
     _safe_mkdir(out_root)
 
     # Optionally parallelise (simple worker pool)
     max_workers = max(1, int(args.max_workers))
+    progress = ProgressTracker(total=len(runs), max_workers=max_workers, progress_every=int(args.progress_every), progress_time_s=int(args.progress_time_s))
     if max_workers != 1:
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        def run_one(spec: RunSpec) -> Tuple[str, int]:
+        def run_one(spec: RunSpec) -> RunResult:
+            t0 = time.time()
             if not os.path.isfile(spec.image_path):
-                return (spec.output_dir, 2)
+                return RunResult(output_dir=spec.output_dir, status="skipped_missing", returncode=2, elapsed_s=float(time.time() - t0))
             _safe_mkdir(spec.output_dir)
             if args.skip_existing and _already_done(spec.output_dir, spec.sid):
-                return (spec.output_dir, 0)
-            cmd = _build_predict_cmd(predict_script, spec, passthrough)
+                return RunResult(output_dir=spec.output_dir, status="skipped_exists", returncode=0, elapsed_s=float(time.time() - t0))
+            cmd = _build_predict_cmd(predict_script, spec, ["--run", *method_args, *list(passthrough)])
             if args.dry_run:
                 print(" ".join(cmd))
-                return (spec.output_dir, 0)
+                return RunResult(output_dir=spec.output_dir, status="ok", returncode=0, elapsed_s=float(time.time() - t0))
             p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             if p.returncode != 0:
                 # write log into output directory
@@ -232,37 +343,45 @@ def main() -> None:
                         f.write(p.stdout)
                 except Exception:
                     pass
-            return (spec.output_dir, int(p.returncode))
+                return RunResult(output_dir=spec.output_dir, status="failed", returncode=int(p.returncode), elapsed_s=float(time.time() - t0))
+            return RunResult(output_dir=spec.output_dir, status="ok", returncode=0, elapsed_s=float(time.time() - t0))
 
         failures = 0
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futs = [ex.submit(run_one, spec) for spec in runs]
             for fut in as_completed(futs):
-                out_dir, code = fut.result()
-                if code != 0:
+                rr = fut.result()
+                progress.update(rr)
+                if rr.returncode != 0 and rr.status == "failed":
                     failures += 1
-                    print(f"[FAIL] {out_dir} (exit {code})", file=sys.stderr)
+                    print(f"[FAIL] {rr.output_dir} (exit {rr.returncode})", file=sys.stderr)
         if failures:
             raise SystemExit(f"{failures} runs failed.")
         return
 
     # Sequential (default; easiest to debug)
     for spec in runs:
+        t0 = time.time()
         if not os.path.isfile(spec.image_path):
             print(f"[SKIP] Missing image: {spec.image_path}", file=sys.stderr)
+            progress.update(RunResult(output_dir=spec.output_dir, status="skipped_missing", returncode=2, elapsed_s=float(time.time() - t0)))
             continue
         _safe_mkdir(spec.output_dir)
         if args.skip_existing and _already_done(spec.output_dir, spec.sid):
             print(f"[SKIP] Exists: {spec.output_dir}")
+            progress.update(RunResult(output_dir=spec.output_dir, status="skipped_exists", returncode=0, elapsed_s=float(time.time() - t0)))
             continue
-        cmd = _build_predict_cmd(predict_script, spec, passthrough)
+        cmd = _build_predict_cmd(predict_script, spec, ["--run", *method_args, *list(passthrough)])
         print(f"[RUN] {spec.label_name} {spec.sid} -> {spec.output_dir}")
         if args.dry_run:
             print(" ".join(cmd))
+            progress.update(RunResult(output_dir=spec.output_dir, status="ok", returncode=0, elapsed_s=float(time.time() - t0)))
             continue
         p = subprocess.run(cmd)
         if p.returncode != 0:
+            progress.update(RunResult(output_dir=spec.output_dir, status="failed", returncode=int(p.returncode), elapsed_s=float(time.time() - t0)))
             raise SystemExit(p.returncode)
+        progress.update(RunResult(output_dir=spec.output_dir, status="ok", returncode=0, elapsed_s=float(time.time() - t0)))
 
 
 if __name__ == "__main__":

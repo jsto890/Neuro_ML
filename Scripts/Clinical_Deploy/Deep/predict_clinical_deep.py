@@ -957,6 +957,7 @@ def main():
     parser.add_argument('--all-classes-interpret', action='store_true', help='Produce Grad-CAM for all classes (default: predicted only)')
     parser.add_argument('--save-overlay-pngs', action='store_true', help='Also save 2D slice overlays (axial/coronal/sagittal) as PNGs')
     parser.add_argument('--cam-layer', type=str, default='prepool', choices=['last', 'prepool', 'mid'], help='Which conv layer to use for Grad-CAM (Simple3DCNN)')
+    parser.add_argument('--cam-single-model', action='store_true', help='If using an ensemble, compute CAMs using only the first model (much faster); prediction can still use the full ensemble.')
     parser.add_argument('--cam-tta-n', type=int, default=0, help='Number of TTA replicates when computing CAMs (averaged for stability). If 0, falls back to --tta-n.')
     parser.add_argument('--cam-tta-noise-std', type=float, default=0.0, help='Gaussian noise std for CAM TTA (fraction of input scale). If 0, falls back to --tta-noise-std.')
     parser.add_argument('--cam-tta-filter-by-pred', action='store_true', help='When averaging CAMs over TTA, include only replicates that predict the target class')
@@ -1205,7 +1206,7 @@ def main():
                         return compute_gradcam_volume(gradcam_module, m, input_tensor, c, args.model_arch, device, cam_layer=args.cam_layer)
                     return np.mean(np.stack(cams, axis=0), axis=0).astype(np.float32)
 
-                if not is_ensemble:
+                if not is_ensemble or bool(getattr(args, 'cam_single_model', False)):
                     cam = _cam_for_model(models[0])
                 else:
                     cam_list = [_cam_for_model(m) for m in models]
@@ -1278,7 +1279,7 @@ def main():
                         return compute_gradcam_plusplus_volume(gradcam_module, m, input_tensor, c, args.model_arch, device, cam_layer=args.cam_layer)
                     return np.mean(np.stack(cams, axis=0), axis=0).astype(np.float32)
 
-                if not is_ensemble:
+                if not is_ensemble or bool(getattr(args, 'cam_single_model', False)):
                     cam = _campp_for_model(models[0])
                 else:
                     cam_list = [_campp_for_model(m) for m in models]
