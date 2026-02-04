@@ -29,6 +29,7 @@ import random
 import subprocess
 import sys
 import time
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -198,7 +199,7 @@ class ProgressTracker:
 
     @staticmethod
     def _fmt_hms(seconds: float) -> str:
-        if not np.isfinite(seconds) or seconds < 0:
+        if (seconds is None) or (not math.isfinite(float(seconds))) or float(seconds) < 0:
             return "?"
         s = int(round(seconds))
         h = s // 3600
