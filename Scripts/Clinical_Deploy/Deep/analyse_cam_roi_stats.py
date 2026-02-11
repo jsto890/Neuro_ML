@@ -157,6 +157,95 @@ def _read_fsl_atlas_xml(path: str) -> Dict[int, str]:
     return mapping
 
 
+def _align_roi_name_map_to_atlas(roi_name_map: Dict[int, str], atlas_labels: Sequence[int]) -> Dict[int, str]:
+    """
+    FSL atlas XML files sometimes use 0-based label indices while the NIfTI label
+    image uses 1-based integers (0 reserved for background). This helper detects
+    that mismatch and shifts the mapping keys if it improves coverage.
+    """
+    if not roi_name_map:
+        return roi_name_map
+    atlas_set = set(int(x) for x in atlas_labels)
+    keys = set(int(k) for k in roi_name_map.keys())
+    if not atlas_set:
+        return roi_name_map
+
+    def coverage(kset: set[int]) -> int:
+        return len(atlas_set.intersection(kset))
+
+    cov0 = coverage(keys)
+    keys_p1 = set(k + 1 for k in keys)
+    keys_m1 = set(k - 1 for k in keys)
+    cov_p1 = coverage(keys_p1)
+    cov_m1 = coverage(keys_m1)
+
+    # Prefer +1 shift if XML is 0-based and atlas is 1-based.
+    if cov_p1 > cov0 and cov_p1 >= cov_m1:
+        return {int(k) + 1: v for k, v in roi_name_map.items()}
+    if cov_m1 > cov0 and cov_m1 > cov_p1:
+        return {int(k) - 1: v for k, v in roi_name_map.items() if int(k) - 1 >= 0}
+    return roi_name_map
+
+
+def _summarise_mapping_and_check_bilateral(roi_ids: Sequence[int], roi_name_map: Dict[int, str], atlas_i: np.ndarray,
+                                          strict: bool = False) -> None:
+    """
+    Basic sanity checks to catch common ROI name mapping errors (e.g., 0-based vs 1-based shifts).
+
+    - Reports how many ROI IDs have an associated name
+    - Checks bilateral symmetry of voxel counts for any ROI names in the form "Left X" / "Right X"
+      and warns (or aborts in strict mode) on extreme asymmetry.
+    """
+    roi_ids = [int(x) for x in roi_ids]
+    named = 0
+    unnamed: List[int] = []
+    for rid in roi_ids:
+        nm = roi_name_map.get(int(rid), f"roi_{int(rid)}")
+        if nm.startswith("roi_"):
+            unnamed.append(int(rid))
+        else:
+            named += 1
+
+    print(f"[MAPPING] ROI IDs present: {len(roi_ids)} | named: {named} | unnamed: {len(unnamed)}")
+    if unnamed:
+        print(f"[MAPPING] Unnamed ROI IDs (first 10): {unnamed[:10]}")
+
+    # Build voxel counts
+    vox_counts: Dict[int, int] = {rid: int(np.sum(atlas_i == int(rid))) for rid in roi_ids}
+
+    # Build left/right pairs from names
+    left: Dict[str, int] = {}
+    right: Dict[str, int] = {}
+    for rid in roi_ids:
+        nm = roi_name_map.get(int(rid), f"roi_{int(rid)}")
+        if nm.lower().startswith("left "):
+            base = nm[5:].strip()
+            left[base] = int(rid)
+        elif nm.lower().startswith("right "):
+            base = nm[6:].strip()
+            right[base] = int(rid)
+
+    bad_pairs: List[Tuple[str, float, int, int]] = []
+    for base in sorted(set(left.keys()).intersection(right.keys())):
+        l_id = left[base]
+        r_id = right[base]
+        l_n = vox_counts.get(l_id, 0)
+        r_n = vox_counts.get(r_id, 0)
+        if l_n <= 0 or r_n <= 0:
+            continue
+        ratio = float(r_n) / float(l_n)
+        if ratio < 0.3 or ratio > 3.0:
+            bad_pairs.append((base, ratio, l_n, r_n))
+
+    if bad_pairs:
+        msg = "[MAPPING] Extreme Left/Right voxel-count asymmetry detected (possible atlas↔name mismatch):\n"
+        for base, ratio, l_n, r_n in bad_pairs[:12]:
+            msg += f"  - {base}: R/L={ratio:.3f} (L={l_n}, R={r_n})\n"
+        print(msg.rstrip())
+        if strict:
+            raise SystemExit("Aborting due to strict mapping checks. Fix ROI name mapping / atlas resampling before proceeding.")
+
+
 def _bh_fdr(pvals: Sequence[float]) -> List[float]:
     """
     Benjamini–Hochberg FDR correction.
@@ -305,6 +394,7 @@ def main() -> None:
     ap.add_argument("--cam_kind", choices=["gradcam", "gradcam_plusplus"], default="gradcam", help="Which attribution type to analyse.")
     ap.add_argument("--cam_class", type=int, default=None, help="If set, use only CAM files for this class index (e.g. 0/1/2).")
     ap.add_argument("--min_per_group", type=int, default=5, help="Minimum subjects per group required to run group tests.")
+    ap.add_argument("--strict_mapping", action="store_true", help="Abort if ROI mapping sanity checks detect extreme Left/Right voxel-count asymmetry.")
 
     args = ap.parse_args()
 
@@ -335,7 +425,7 @@ def main() -> None:
         raise SystemExit(f"Expected 3D atlas NIfTI at {atlas_path}, got shape {atlas_data.shape}")
 
     resampled_atlas_path = None
-    if tuple(atlas_data.shape) != tuple(cam_data.shape):
+    if tuple(atlas_data.shape) != tuple(cam_data.shape) or (not np.allclose(atlas_img.affine, cam_img.affine)):
         if not bool(getattr(args, "auto_resample_atlas", False)):
             raise SystemExit(
                 f"Shape mismatch: CAM {cam_data.shape} vs atlas {atlas_data.shape}. "
@@ -360,6 +450,9 @@ def main() -> None:
         roi_name_map = _read_fsl_atlas_xml(_expand(str(getattr(args, "atlas_xml"))))
     elif getattr(args, "atlas_labels", None):
         roi_name_map = _read_roi_name_map(_expand(str(getattr(args, "atlas_labels"))))
+    # Auto-align potential 0-based XML indices to atlas label values
+    roi_name_map = _align_roi_name_map_to_atlas(roi_name_map, roi_ids)
+    _summarise_mapping_and_check_bilateral(roi_ids=roi_ids, roi_name_map=roi_name_map, atlas_i=atlas_i, strict=bool(getattr(args, "strict_mapping", False)))
 
     # Build per-subject ROI matrix
     rows: List[Dict[str, object]] = []

@@ -73,6 +73,70 @@ def _read_fsl_atlas_xml(path: str) -> Dict[int, str]:
     return mapping
 
 
+def _align_roi_name_map_to_atlas(roi_name_map: Dict[int, str], atlas_labels: List[int]) -> Dict[int, str]:
+    """
+    Detect and correct 0-based vs 1-based label index mismatches between FSL XML and label NIfTI.
+    """
+    if not roi_name_map:
+        return roi_name_map
+    atlas_set = set(int(x) for x in atlas_labels)
+    keys = set(int(k) for k in roi_name_map.keys())
+    if not atlas_set:
+        return roi_name_map
+
+    cov0 = len(atlas_set.intersection(keys))
+    cov_p1 = len(atlas_set.intersection(set(k + 1 for k in keys)))
+    cov_m1 = len(atlas_set.intersection(set(k - 1 for k in keys)))
+
+    if cov_p1 > cov0 and cov_p1 >= cov_m1:
+        return {int(k) + 1: v for k, v in roi_name_map.items()}
+    if cov_m1 > cov0 and cov_m1 > cov_p1:
+        return {int(k) - 1: v for k, v in roi_name_map.items() if int(k) - 1 >= 0}
+    return roi_name_map
+
+
+def _summarise_mapping_and_check_bilateral(roi_ids: List[int], roi_name_map: Dict[int, str], atl_i: np.ndarray,
+                                          strict: bool = False) -> None:
+    roi_ids = [int(x) for x in roi_ids]
+    named = 0
+    unnamed: List[int] = []
+    for rid in roi_ids:
+        nm = roi_name_map.get(int(rid), f"roi_{int(rid)}")
+        if nm.startswith("roi_"):
+            unnamed.append(int(rid))
+        else:
+            named += 1
+    print(f"[MAPPING] ROI IDs present: {len(roi_ids)} | named: {named} | unnamed: {len(unnamed)}")
+    if unnamed:
+        print(f"[MAPPING] Unnamed ROI IDs (first 10): {unnamed[:10]}")
+
+    vox_counts: Dict[int, int] = {rid: int(np.sum(atl_i == int(rid))) for rid in roi_ids}
+    left: Dict[str, int] = {}
+    right: Dict[str, int] = {}
+    for rid in roi_ids:
+        nm = roi_name_map.get(int(rid), f"roi_{int(rid)}")
+        if nm.lower().startswith("left "):
+            left[nm[5:].strip()] = int(rid)
+        elif nm.lower().startswith("right "):
+            right[nm[6:].strip()] = int(rid)
+    bad: List[Tuple[str, float, int, int]] = []
+    for base in sorted(set(left.keys()).intersection(right.keys())):
+        l_id = left[base]; r_id = right[base]
+        l_n = vox_counts.get(l_id, 0); r_n = vox_counts.get(r_id, 0)
+        if l_n <= 0 or r_n <= 0:
+            continue
+        ratio = float(r_n) / float(l_n)
+        if ratio < 0.3 or ratio > 3.0:
+            bad.append((base, ratio, l_n, r_n))
+    if bad:
+        msg = "[MAPPING] Extreme Left/Right voxel-count asymmetry detected (possible atlas↔name mismatch):\n"
+        for base, ratio, l_n, r_n in bad[:12]:
+            msg += f"  - {base}: R/L={ratio:.3f} (L={l_n}, R={r_n})\n"
+        print(msg.rstrip())
+        if strict:
+            raise SystemExit("Aborting due to strict mapping checks. Fix ROI name mapping / atlas resampling before proceeding.")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Compute ROI means from a mean CAM NIfTI.")
     ap.add_argument("--mean_cam", required=True, type=str, help="Absolute path to mean CAM NIfTI.")
@@ -80,6 +144,7 @@ def main() -> None:
     ap.add_argument("--atlas_xml", type=str, default=None, help="Optional FSL atlas XML to map ROI IDs to names.")
     ap.add_argument("--output_csv", required=True, type=str, help="Absolute output CSV path.")
     ap.add_argument("--save_resampled_atlas", action="store_true", help="If resampling occurs, save the resampled atlas next to the CSV.")
+    ap.add_argument("--strict_mapping", action="store_true", help="Abort if mapping sanity checks detect extreme Left/Right voxel-count asymmetry.")
     args = ap.parse_args()
 
     mean_cam_path = _expand(args.mean_cam)
@@ -110,6 +175,8 @@ def main() -> None:
     name_map: Dict[int, str] = {}
     if args.atlas_xml:
         name_map = _read_fsl_atlas_xml(_expand(args.atlas_xml))
+        name_map = _align_roi_name_map_to_atlas(name_map, roi_ids)
+    _summarise_mapping_and_check_bilateral(roi_ids=roi_ids, roi_name_map=name_map, atl_i=atl_i, strict=bool(getattr(args, "strict_mapping", False)))
 
     rows: List[Dict[str, object]] = []
     for rid in roi_ids:
