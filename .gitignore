@@ -53,6 +53,7 @@ data/
 *.pickle
 *.pkl
 *.joblib
+backend/uploads/*
 
 # Model files
 *.h5
