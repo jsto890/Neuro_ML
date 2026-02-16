@@ -53,7 +53,7 @@ data/
 *.pickle
 *.pkl
 *.joblib
-backend/uploads/*
+backend/uploads/
 
 # Model files
 *.h5
@@ -130,3 +130,6 @@ secrets.yaml
 # Generated file lists
 file_list.txt
 *.filelist
+
+# Local project process notes
+CONTRIBUTING.md

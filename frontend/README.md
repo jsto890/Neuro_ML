@@ -1,122 +1,37 @@
-# P4P Project Frontend
+# Frontend
 
-A modern React application for medical image analysis, supporting both NIFTI and DICOM image processing with AI-powered classification.
+React and TypeScript interface for image upload and classification result display.
 
-**GitHub Repository:** [https://github.com/Jackson-Schofield/P4P](https://github.com/Jackson-Schofield/P4P)
+## Purpose
 
-## Features
+The frontend provides a lightweight workflow to:
 
-- **Modern UI/UX**: Clean, responsive design built with React and Tailwind CSS
-- **File Upload**: Drag-and-drop interface for NIFTI (.nii, .nii.gz) and DICOM (.dcm, .dicom) files
-- **Real-time Analysis**: Simulated AI analysis with confidence scoring
-- **Multiple Image Types**: Support for SPECT, MRI, PET, DICOM, and NIFTI images
-- **Results Display**: Comprehensive analysis results with visual indicators
-- **TypeScript**: Full type safety and better development experience
+- upload MRI, PET, SPECT, NIfTI, and DICOM files
+- submit files to the backend API
+- present prediction and confidence outputs
 
-## Tech Stack
+## Stack
 
-- **React 18** with TypeScript
-- **Tailwind CSS** for styling
-- **Lucide React** for icons
-- **Headless UI** for accessible components
+- React 18
+- TypeScript
+- Tailwind CSS
 
-## Getting Started
+## Local development
 
-### Prerequisites
-
-- Node.js (v16 or higher)
-- npm or yarn
-
-### Installation
-
-1. Navigate to the frontend directory:
-   ```bash
-   cd frontend
-   ```
-
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-
-3. Start the development server:
-   ```bash
-   npm start
-   ```
-
-4. Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
-
-### Available Scripts
-
-- `npm start` - Runs the app in development mode
-- `npm run build` - Builds the app for production
-- `npm test` - Launches the test runner
-- `npm run eject` - Ejects from Create React App (one-way operation)
-
-## Project Structure
-
-```
-src/
-├── components/
-│   ├── Header.tsx          # Navigation header
-│   ├── FileUpload.tsx      # File upload component
-│   ├── AnalysisResults.tsx # Results display
-│   └── Footer.tsx          # Footer component
-├── App.tsx                 # Main application component
-├── index.css              # Global styles with Tailwind
-└── index.tsx              # Application entry point
+```bash
+cd frontend
+npm install
+npm start
 ```
 
-## Features Overview
+Default development URL: `http://localhost:3000`.
 
-### File Upload
-- Drag-and-drop interface
-- Support for multiple file selection
-- File type validation (.nii, .nii.gz, .dcm, .dicom)
-- File size display
-- Image type detection (SPECT/MRI/PET/DICOM/NIFTI)
+## Related components
 
-### Analysis Results
-- Prediction display with color coding
-- Confidence percentage with progress bar
-- Timestamp and processing time
-- File type indicators
-- Clear all results functionality
+- API integration: `src/services/api.ts`
+- Upload UI: `src/components/FileUpload.tsx`
+- Result views: `src/components/AnalysisResults.tsx`, `src/components/TwoStepAnalysis.tsx`
 
-### Design System
-- Custom color palette (primary, medical)
-- Inter font family
-- Responsive grid layouts
-- Hover states and transitions
-- Accessibility considerations
+## Notes
 
-## Future Enhancements
-
-- [ ] Real API integration
-- [ ] Image preview functionality
-- [ ] Batch processing
-- [ ] Export results
-- [ ] User authentication
-- [ ] Advanced filtering and sorting
-- [ ] 3D image visualization
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## Authors
-
-- **Joseph Storey** - Research and Development
-- **Jackson Schofield** - Research and Development
-
-## License
-
-This project is part of the P4P medical imaging research project.
-
-## Repository
-
-**GitHub:** [https://github.com/Jackson-Schofield/P4P](https://github.com/Jackson-Schofield/P4P)
+This module is maintained as part of the main `Neuro_ML` repository.

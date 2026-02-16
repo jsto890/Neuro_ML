@@ -1,43 +1,27 @@
-# P4P Backend
+# Backend
 
-Simple Flask backend for handling medical image uploads.
+Flask API for file upload, conversion checks, and analysis orchestration.
 
 ## Setup
 
-1. Install dependencies:
 ```bash
+cd backend
 pip install -r requirements.txt
-```
-
-2. Run the server:
-```bash
 python app.py
 ```
 
-The server will start on `http://localhost:5001`
+Default API URL: `http://localhost:5001`.
 
-## Endpoints
+## Core endpoints
 
-- `GET /health` - Health check
-- `POST /upload` - Upload medical images (NIFTI/DICOM)
-- `GET /upload-status/<file_id>` - Get upload status
-- `GET /list-files` - List all uploaded files
+- `GET /health` for service health checks
+- `POST /upload` for NIfTI and DICOM uploads
+- `GET /upload-status/<file_id>` for upload status
+- `GET /list-files` for uploaded file listing
+- `POST /analyze-files` for post-upload analysis flow
 
-## Features
+## Notes
 
-- Accepts NIFTI (.nii, .nii.gz) and DICOM (.dcm, .dicom) files
-- Saves files to `uploads/` directory
-- Generates unique file IDs
-- CORS enabled for frontend communication
-- File type validation
-- Detailed logging
-
-## File Structure
-
-```
-backend/
-├── app.py              # Main Flask application
-├── requirements.txt    # Python dependencies
-├── uploads/           # Uploaded files directory
-└── README.md          # This file
-```
+- Uploaded files are written to `backend/uploads/`.
+- `backend/uploads/` is excluded from version control.
+- CORS is enabled for local frontend integration.

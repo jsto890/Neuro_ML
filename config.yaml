@@ -1,21 +1,20 @@
-# config.yaml
+# Project configuration template
+# Update these paths for your local environment before running pipelines.
 
-# Absolute paths on the research drive (access is Password and 2FA protected):
 raw_data:
-  smri: ~/reseng202500013-ndd-ml/data/raw/MRI
-  pet: ~/reseng202500013-ndd-ml/data/raw/PET
-  spect: ~/reseng202500013-ndd-ml/data/raw/SPECT
+  smri: /path/to/data/raw/MRI
+  pet: /path/to/data/raw/PET
+  spect: /path/to/data/raw/SPECT
 
 preprocessed_data:
-  smri_p: ~/reseng202500013-ndd-ml/data/preprocessed/MRI/smriprep
-  pet_p: ~/reseng202500013-ndd-ml/data/preprocessed/PET
-  spect_p: ~/reseng202500013-ndd-ml/data/preprocessed/SPECT
+  smri_p: /path/to/data/preprocessed/MRI/smriprep
+  pet_p: /path/to/data/preprocessed/PET
+  spect_p: /path/to/data/preprocessed/SPECT
 
-# Template paths (sourced online and modified):
 templates:
-  MRI_brain_mask: ~/reseng202500013-ndd-ml/P4P/Templates/MRI/MNI152_T1_1mm_brain.nii.gz
-  PET_template: ~/reseng202500013-ndd-ml/P4P/Templates/PET/FDG-PET-template_padded.nii.gz
-  PET_brain_mask: ~/reseng202500013-ndd-ml/P4P/Templates/PET/brain_in_petspace.nii.gz
-  PET_cereb_mask: ~/reseng202500013-ndd-ml/P4P/Templates/PET/cereb_in_petspace.nii.gz
-  SPECT_occipital: ~/reseng202500013-ndd-ml/P4P/Templates/SPECT/occipital_mask.nii.gz
-  SPECT_template: ~/reseng202500013-ndd-ml/P4P/Templates/SPECT/symFPCITtemplate_MNI_norm.nii
+  MRI_brain_mask: /path/to/Neuro_ML/Templates/MRI/MNI152_T1_1mm_brain.nii.gz
+  PET_template: /path/to/Neuro_ML/Templates/PET/FDG-PET-template_padded.nii.gz
+  PET_brain_mask: /path/to/Neuro_ML/Templates/PET/brain_in_petspace.nii.gz
+  PET_cereb_mask: /path/to/Neuro_ML/Templates/PET/cereb_in_petspace.nii.gz
+  SPECT_occipital: /path/to/Neuro_ML/Templates/SPECT/occipital_mask.nii.gz
+  SPECT_template: /path/to/Neuro_ML/Templates/SPECT/symFPCITtemplate_MNI_norm.nii
