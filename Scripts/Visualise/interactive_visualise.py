@@ -69,20 +69,20 @@ def load_spect_image(file_path):
         
         # Basic validation
         if np.all(data == 0):
-            print(f"⚠️ Warning: Image {file_path} contains only zeros")
+            print(f"️ Warning: Image {file_path} contains only zeros")
             return None, None
         
         if np.any(np.isnan(data)):
-            print(f"⚠️ Warning: Image {file_path} contains NaN values")
+            print(f"️ Warning: Image {file_path} contains NaN values")
             data = np.nan_to_num(data, nan=0.0)
         
         if np.any(np.isinf(data)):
-            print(f"⚠️ Warning: Image {file_path} contains infinite values")
+            print(f"️ Warning: Image {file_path} contains infinite values")
             data = np.nan_to_num(data, posinf=0.0, neginf=0.0)
         
         return img, data
     except Exception as e:
-        print(f"❌ Error loading {file_path}: {e}")
+        print(f" Error loading {file_path}: {e}")
         return None, None
 
 def create_interactive_viewer(img, data, title="SPECT Image"):
@@ -195,7 +195,7 @@ def create_overlay_viewer(base_img, base_data, overlay_data, title="Overlay View
     - overlay_data: heatmap volume, same shape as base_data
     """
     if base_data.shape != overlay_data.shape:
-        print(f"⚠️ Base and overlay shapes differ: {base_data.shape} vs {overlay_data.shape}. Proceeding without resample.")
+        print(f"️ Base and overlay shapes differ: {base_data.shape} vs {overlay_data.shape}. Proceeding without resample.")
 
     base = _robust_normalize(base_data)
     heat = _normalize_overlay_within_mask(overlay_data, base_data)
@@ -411,7 +411,7 @@ def main():
         return
     
     # Find available data
-    print("🔍 Searching for available SPECT data...")
+    print(" Searching for available SPECT data...")
     available_data = find_spect_data()
     
     if not available_data:
@@ -419,7 +419,7 @@ def main():
         print("Please ensure you have run the preprocessing pipeline first.")
         return
     
-    print(f"\n📊 Found {len(available_data)} data directories:")
+    print(f"\n Found {len(available_data)} data directories:")
     for i, data_info in enumerate(available_data):
         print(f"  {i+1}. {data_info['diagnosis']} - {data_info['step']} ({len(data_info['subjects'])} subjects)")
     
@@ -463,10 +463,10 @@ def main():
                     break
     
     if not valid_subject:
-        print("❌ No valid subjects found with non-zero data")
+        print(" No valid subjects found with non-zero data")
         return
     
-    print(f"✅ Found valid subject: {valid_subject}")
+    print(f" Found valid subject: {valid_subject}")
     
     # Load and display the image
     file_path = os.path.join(selected_data['path'], valid_subject, expected_file)
@@ -476,7 +476,7 @@ def main():
         title = f"{valid_subject} - {selected_data['step']}"
         create_interactive_viewer(img, data, title)
     else:
-        print("❌ Failed to load image data")
+        print(" Failed to load image data")
 
 if __name__ == "__main__":
     main()

@@ -24,11 +24,11 @@ try:
             subject_id = f
             break
 except FileNotFoundError:
-    print(f"❌ Could not find reoriented data directory. Looked in: {reoriented_base_dir}")
+    print(f" Could not find reoriented data directory. Looked in: {reoriented_base_dir}")
     exit(1)
 
 if not subject_id:
-    print(f"❌ No subject found in {reoriented_base_dir}")
+    print(f" No subject found in {reoriented_base_dir}")
     exit(1)
 
 print(f"INFO: Testing with subject: {subject_id}")
@@ -44,7 +44,7 @@ try:
         raw_path = os.path.join(data_root, "CN_SPECT_PPMI_NIfTI", subject_id, f"{subject_id}.nii.gz")
 
     if not os.path.exists(raw_path):
-        print(f"❌ Raw file not found: {raw_path}")
+        print(f" Raw file not found: {raw_path}")
         print("Raw data may be in different location. Checking alternative paths...")
         
         # Try alternative paths
@@ -58,10 +58,10 @@ try:
         for alt_path in alt_paths:
             if os.path.exists(alt_path):
                 raw_path = alt_path
-                print(f"✅ Found raw data: {raw_path}")
+                print(f" Found raw data: {raw_path}")
                 break
         else:
-            print(f"❌ Raw data not found in any location")
+            print(f" Raw data not found in any location")
             exit(1)
 
     orig = nib.load(raw_path)
@@ -69,10 +69,10 @@ try:
 
     print("Original orientation:", aff2axcodes(orig.affine))
     print("Reoriented orientation:", aff2axcodes(reoriented.affine))
-    print("✅ Reorientation test passed!")
+    print(" Reorientation test passed!")
 
 except FileNotFoundError as e:
-    print(f"\n❌ File not found: {e}")
+    print(f"\n File not found: {e}")
     print("Please ensure you have raw data and have run step 1 (reorient).")
 except Exception as e:
-    print(f"\n❌ An unexpected error occurred: {e}")
+    print(f"\n An unexpected error occurred: {e}")

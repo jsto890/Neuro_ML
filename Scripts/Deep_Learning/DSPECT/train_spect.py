@@ -2294,41 +2294,41 @@ def auto_reduce_batch_size(model, initial_batch_size, min_batch_size, device, ar
             dummy_loss = torch.tensor(0.0, requires_grad=True, device=device)
             dummy_loss.backward()
             
-            print(f"[MEMORY] ✅ Batch size {batch_size} works! Using this for training.")
+            print(f"[MEMORY]  Batch size {batch_size} works! Using this for training.")
             return batch_size
             
         except torch.cuda.OutOfMemoryError as e:
-            print(f"[MEMORY] ❌ Batch size {batch_size} failed: {e}")
+            print(f"[MEMORY]  Batch size {batch_size} failed: {e}")
             
             # Clear GPU memory
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             
             if batch_size <= min_batch_size:
-                print(f"[MEMORY] ⚠️  Reached minimum batch size {min_batch_size}. Training may be slow.")
+                print(f"[MEMORY] ️  Reached minimum batch size {min_batch_size}. Training may be slow.")
                 return min_batch_size
         except RuntimeError as e:
             if "Input type" in str(e) and "weight type" in str(e):
-                print(f"[MEMORY] ❌ Device mismatch error: {e}")
+                print(f"[MEMORY]  Device mismatch error: {e}")
                 print(f"[MEMORY] Attempting to fix device placement...")
                 try:
                     model = model.to(device)
                     # Retry with corrected device placement
                     with torch.no_grad():
                         _ = model(dummy_input)
-                    print(f"[MEMORY] ✅ Device issue fixed! Batch size {batch_size} works.")
+                    print(f"[MEMORY]  Device issue fixed! Batch size {batch_size} works.")
                     return batch_size
                 except Exception as retry_e:
-                    print(f"[MEMORY] ❌ Device fix failed: {retry_e}")
+                    print(f"[MEMORY]  Device fix failed: {retry_e}")
                     return min_batch_size
             else:
-                print(f"[MEMORY] ❌ Runtime error: {e}")
+                print(f"[MEMORY]  Runtime error: {e}")
                 return min_batch_size
         except Exception as e:
-            print(f"[MEMORY] ❌ Unexpected error: {e}")
+            print(f"[MEMORY]  Unexpected error: {e}")
             return min_batch_size
     
-    print(f"[MEMORY] ⚠️  Could not find working batch size. Using minimum: {min_batch_size}")
+    print(f"[MEMORY] ️  Could not find working batch size. Using minimum: {min_batch_size}")
     return min_batch_size
 
 

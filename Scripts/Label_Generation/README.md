@@ -2,7 +2,7 @@
 
 This directory contains scripts for generating and validating subject labels for machine learning training and evaluation. The scripts automatically scan preprocessed medical imaging data and create standardised label files that map subject IDs to disease classifications.
 
-## 📁 Directory Structure
+##  Directory Structure
 
 ```
 Label_Generation/
@@ -12,7 +12,7 @@ Label_Generation/
 └── generate_spect_labels.py      # Generate SPECT subject labels
 ```
 
-## 🎯 Purpose
+##  Purpose
 
 The label generation scripts serve several critical functions:
 
@@ -22,7 +22,7 @@ The label generation scripts serve several critical functions:
 4. **Quality Control**: Identify mismatches and missing subjects
 5. **Incremental Updates**: Update labels when new data becomes available
 
-## 🏷️ Label Mapping
+## ️ Label Mapping
 
 ### Standard Disease Labels
 All scripts use a canonical label mapping for consistency:
@@ -45,7 +45,7 @@ All scripts use a canonical label mapping for consistency:
 - **Binary classification**: `0=CN, 1=PD`
 - **Note**: AD subjects are excluded from SPECT analysis
 
-## 🔄 Scripts Overview
+##  Scripts Overview
 
 ### MRI Label Generation (`generate_mri_labels.py`)
 
@@ -147,7 +147,7 @@ python generate_spect_labels.py --validate-only --write-reports --out-dir ~/path
 - **Subject scanning**: Automatically finds subjects in disease folders
 - **Validation reports**: Detailed mismatch analysis
 
-## 📊 Output Format
+##  Output Format
 
 ### Label CSV Structure
 All scripts generate CSV files with the following structure:
@@ -175,7 +175,7 @@ subject_id,label_csv,records
 sub-999,0,None
 ```
 
-## 🔧 Configuration
+##  Configuration
 
 ### Default Paths
 All scripts use consistent default paths:
@@ -213,7 +213,7 @@ python generate_pet_labels.py --output ~/custom/pet_labels.csv
 python generate_spect_labels.py --records ~/custom/imaging_records.csv
 ```
 
-## 📈 Validation Process
+##  Validation Process
 
 ### Label Validation
 All scripts include comprehensive validation:
@@ -246,7 +246,7 @@ CN_wrong 2
 PD_wrong 0
 ```
 
-## 🚨 Common Issues
+##  Common Issues
 
 ### File Path Issues
 1. **Missing directories**: Ensure preprocessed data directories exist
@@ -263,7 +263,7 @@ PD_wrong 0
 2. **Missing subjects**: Check if subjects are in imaging records
 3. **Format issues**: Ensure CSV format is correct
 
-## 🔍 Debugging
+##  Debugging
 
 ### Validation Mode
 Use `--validate-only` to check existing labels without regenerating:
@@ -291,7 +291,7 @@ All scripts provide detailed logging:
 4. **Test with sample data**: Use small datasets for testing
 5. **Check permissions**: Ensure read/write access to all directories
 
-## 📚 Dependencies
+##  Dependencies
 
 ### Required Libraries
 - **pandas**: Data manipulation and CSV handling
@@ -304,7 +304,7 @@ All scripts provide detailed logging:
 - **Preprocessed data**: Modality-specific preprocessed imaging data
 - **File patterns**: Specific file naming conventions for each modality
 
-## 🚀 Usage Examples
+##  Usage Examples
 
 ### Complete Workflow
 ```bash
@@ -342,7 +342,7 @@ python generate_mri_labels.py \
     --out-dir ~/path/to/validation_reports
 ```
 
-## 📞 Support
+##  Support
 
 For label generation issues:
 - Check file paths and directory structure

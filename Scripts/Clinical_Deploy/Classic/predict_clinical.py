@@ -53,11 +53,11 @@ class ClinicalPredictor:
             with open(self.scaler_path, 'rb') as f:
                 self.scaler = pickle.load(f)
 
-            print("✓ Model loaded successfully")
+            print(" Model loaded successfully")
             print(f"  Model: {type(self.model).__name__}")
             print(f"  Scaler: {type(self.scaler).__name__}")
         except Exception as e:
-            print(f"✗ Error loading model artifacts: {e}")
+            print(f" Error loading model artifacts: {e}")
             sys.exit(1)
 
     def _confidence_level(self, confidence: float) -> str:
@@ -115,7 +115,7 @@ class ClinicalPredictor:
                 "recommendation": recommendation
             }
         except Exception as e:
-            print(f"✗ Error making prediction: {e}")
+            print(f" Error making prediction: {e}")
             return None
 
     def predict_from_csv(self, csv_path: str, subject_id: str = None) -> dict:
@@ -211,7 +211,7 @@ def main():
                 print("\nExiting...")
                 break
             except Exception as e:
-                print(f"✗ Error: {e}")
+                print(f" Error: {e}")
         return
 
     # Prepare label mapping
@@ -230,7 +230,7 @@ def main():
     # Load CSV and predict
     result = predictor.predict_from_csv(args.radiomics_file, args.subject_id)
     if result is None:
-        print("✗ No result produced")
+        print(" No result produced")
         sys.exit(1)
 
     # Optionally compute SHAP on the same row
@@ -270,7 +270,7 @@ def main():
     with open(json_path, 'w') as f:
         json.dump(report, f, indent=2)
 
-    print(f"✓ JSON report saved to: {json_path}")
+    print(f" JSON report saved to: {json_path}")
 
     # Probability visualisation (bar chart) next to JSON
     try:
@@ -303,7 +303,7 @@ def main():
             prob_png = output_dir / f"{sid}_probabilities.png"
             plt.savefig(str(prob_png), dpi=150, bbox_inches='tight')
             plt.close(fig)
-            print(f"✓ Probabilities plot saved to: {prob_png}")
+            print(f" Probabilities plot saved to: {prob_png}")
     except Exception as _e:
         print(f"Warning: failed to save probabilities plot: {_e}")
 

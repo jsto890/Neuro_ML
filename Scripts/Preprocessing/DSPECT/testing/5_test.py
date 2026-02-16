@@ -30,15 +30,15 @@ for subject_id in subjects:
         img = nib.load(nii_path)
         data = img.get_fdata()
         if data.shape != tuple(args.shape):
-            print(f"❌ {subject_id}: Wrong shape {data.shape}")
+            print(f" {subject_id}: Wrong shape {data.shape}")
             failed.append(subject_id)
         elif np.count_nonzero(data) == 0:
-            print(f"❌ {subject_id}: All voxels zero")
+            print(f" {subject_id}: All voxels zero")
             failed.append(subject_id)
         else:
-            print(f"✅ {subject_id}: OK")
+            print(f" {subject_id}: OK")
     except Exception as e:
-        print(f"❌ {subject_id}: {e}")
+        print(f" {subject_id}: {e}")
         failed.append(subject_id)
 
 if failed:

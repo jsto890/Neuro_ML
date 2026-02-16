@@ -32,10 +32,10 @@ Path(output_dir).mkdir(parents=True, exist_ok=True)
 
 summary_csv = os.path.join(output_dir, f"summary_{args.diagnosis}.csv")
 
-print(f"\n🔄 Processing {args.diagnosis} subjects")
-print(f"📁 Input directory: {input_dir}")
-print(f"📁 Output directory: {output_dir}")
-print(f"📄 Summary CSV: {summary_csv}\n")
+print(f"\n Processing {args.diagnosis} subjects")
+print(f" Input directory: {input_dir}")
+print(f" Output directory: {output_dir}")
+print(f" Summary CSV: {summary_csv}\n")
 
 subjects = sorted(Path(input_dir).glob("Subject_*"))
 print(f"DEBUG: Found {len(subjects)} subject folders. Example: {[s.name for s in subjects[:5]]}")
@@ -44,7 +44,7 @@ def validate_ml_readiness(norm_data, subject_id):
     """Validate postprocessed data is ML-ready"""
     mask = norm_data != 0
     if not np.any(mask):
-        print(f"❌ {subject_id}: No non-zero voxels after postprocessing")
+        print(f" {subject_id}: No non-zero voxels after postprocessing")
         return False
     
     # Check for reasonable z-score values (should be ~0 mean, ~1 std)
@@ -53,14 +53,14 @@ def validate_ml_readiness(norm_data, subject_id):
     std_val = np.std(brain_data)
     
     if abs(mean_val) > 0.5:
-        print(f"⚠️ {subject_id}: Mean far from 0 ({mean_val:.3f}) - may affect ML")
+        print(f"️ {subject_id}: Mean far from 0 ({mean_val:.3f}) - may affect ML")
     
     if not (0.5 < std_val < 2.0):
-        print(f"⚠️ {subject_id}: Std dev unusual ({std_val:.3f}) - may affect ML")
+        print(f"️ {subject_id}: Std dev unusual ({std_val:.3f}) - may affect ML")
     
     # Check for extreme outliers
     if np.any(np.abs(brain_data) > 5):
-        print(f"⚠️ {subject_id}: Extreme outliers detected (>5 std devs)")
+        print(f"️ {subject_id}: Extreme outliers detected (>5 std devs)")
     
     return True
 
@@ -79,7 +79,7 @@ for subject_path in subjects:
     subject_id = subject_path.name
     input_nii = find_finalised_nii_gz(subject_path)
     if input_nii is None:
-        print(f"❌ {subject_id}: No '5. finalised.nii.gz' file found in {subject_path}")
+        print(f" {subject_id}: No '5. finalised.nii.gz' file found in {subject_path}")
         continue
     print(f"Processing {subject_id} → {input_nii}")
     try:
@@ -88,10 +88,10 @@ for subject_path in subjects:
         mask = data != 0
         all_voxels.append(data[mask])
     except Exception as e:
-        print(f"❌ {subject_id}: {e}")
+        print(f" {subject_id}: {e}")
 
 if not all_voxels:
-    print("❌ No valid voxels found. Exiting.")
+    print(" No valid voxels found. Exiting.")
     exit(1)
 
 all_voxels_flat = np.concatenate(all_voxels)
@@ -105,7 +105,7 @@ for subject_path in subjects:
     subject_id = subject_path.name
     input_nii = find_finalised_nii_gz(subject_path)
     if input_nii is None:
-        print(f"❌ {subject_id}: No '5. finalised.nii.gz' file found in {subject_path}")
+        print(f" {subject_id}: No '5. finalised.nii.gz' file found in {subject_path}")
         continue
     
     # Create subject output directory
@@ -146,12 +146,12 @@ for subject_path in subjects:
         # Handle outliers for ML readiness - clip extreme values
         outlier_mask = np.abs(norm_data) > 5  # Clip values beyond ±5 standard deviations
         if np.any(outlier_mask):
-            print(f"⚠️ {subject_id}: Clipping {np.sum(outlier_mask)} outlier voxels")
+            print(f"️ {subject_id}: Clipping {np.sum(outlier_mask)} outlier voxels")
             norm_data[outlier_mask] = np.sign(norm_data[outlier_mask]) * 5  # Clip to ±5
         
         # Validate ML readiness
         if not validate_ml_readiness(norm_data, subject_id):
-            print(f"❌ {subject_id}: Failed ML validation")
+            print(f" {subject_id}: Failed ML validation")
             continue
         
         norm_img = nib.Nifti1Image(norm_data, img.affine, img.header)
@@ -167,9 +167,9 @@ for subject_path in subjects:
             'nonzero_voxels': int(np.count_nonzero(mask)),
             'ml_ready': True  # Add ML readiness flag
         })
-        print(f"✅ {subject_id}: Postprocessed and ML-validated.")
+        print(f" {subject_id}: Postprocessed and ML-validated.")
     except Exception as e:
-        print(f"❌ {subject_id}: {e}")
+        print(f" {subject_id}: {e}")
         import traceback
         traceback.print_exc()
 
@@ -181,10 +181,10 @@ with open(summary_csv, 'w', newline='') as csvfile:
     for row in subject_stats:
         writer.writerow(row)
 
-print(f"\n✅ Step 6 complete. Summary written to {summary_csv}")
+print(f"\n Step 6 complete. Summary written to {summary_csv}")
 print(f"DEBUG: Processed {len(subject_stats)} subjects. Summary written to {summary_csv}")
 
 
 
-print(f"\n✅ Postprocessing complete! Output saved to: {output_dir}")
-print(f"📁 Each subject now has a dedicated folder with postprocessed data and all original files.")
+print(f"\n Postprocessing complete! Output saved to: {output_dir}")
+print(f" Each subject now has a dedicated folder with postprocessed data and all original files.")

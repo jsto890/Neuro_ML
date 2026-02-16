@@ -117,8 +117,8 @@ class RadiomicsExtractor:
         df = df[~df['label'].isin(['label', ''])]
         df['label'] = df['label'].astype(int)
         
-        logger.info(f"📊 Found {len(df)} subjects in {labels_path}")
-        logger.info(f"🔬 Processing {modality} data")
+        logger.info(f" Found {len(df)} subjects in {labels_path}")
+        logger.info(f" Processing {modality} data")
         
         # Store results
         all_features = []
@@ -134,16 +134,16 @@ class RadiomicsExtractor:
             image_path = self.find_image_path(subject_id, modality)
             
             if not image_path:
-                logger.warning(f"❌ Image not found for {subject_id}")
+                logger.warning(f" Image not found for {subject_id}")
                 failed += 1
                 continue
                 
-            logger.info(f"🔍 Processing: {subject_id} (label: {label})")
+            logger.info(f" Processing: {subject_id} (label: {label})")
             
             try:
                 image, mask = self.create_mask_from_image(image_path)
                 if image is None or mask is None:
-                    logger.error(f"❌ Failed to create mask for {subject_id}")
+                    logger.error(f" Failed to create mask for {subject_id}")
                     failed += 1
                     continue
                 
@@ -158,10 +158,10 @@ class RadiomicsExtractor:
                 successful += 1
                 
                 feature_count = len([k for k in result.keys() if k not in ['subject_id', 'label', 'modality']])
-                logger.info(f"✅ Extracted {feature_count} features from {subject_id}")
+                logger.info(f" Extracted {feature_count} features from {subject_id}")
                 
             except Exception as e:
-                logger.error(f"❌ Error processing {subject_id}: {e}")
+                logger.error(f" Error processing {subject_id}: {e}")
                 failed += 1
         
         # Save results
@@ -175,13 +175,13 @@ class RadiomicsExtractor:
                 output_path = Path(output_dir) / output_filename
             results_df.to_csv(output_path, index=False)
             
-            logger.info(f"\n💾 Saved {len(all_features)} feature sets to {output_path}")
-            logger.info(f"📈 Feature matrix shape: {results_df.shape}")
-            logger.info(f"✅ Successful: {successful}, ❌ Failed: {failed}")
+            logger.info(f"\n Saved {len(all_features)} feature sets to {output_path}")
+            logger.info(f" Feature matrix shape: {results_df.shape}")
+            logger.info(f" Successful: {successful},  Failed: {failed}")
             
             return output_path
         else:
-            logger.error("❌ No features were successfully extracted")
+            logger.error(" No features were successfully extracted")
             return None
 
 def main():
@@ -205,10 +205,10 @@ def main():
     output_path = extractor.extract_features(args.labels, args.modality, args.output_dir)
     
     if output_path:
-        logger.info(f"🎉 Feature extraction completed successfully!")
-        logger.info(f"📁 Results saved to: {output_path}")
+        logger.info(f" Feature extraction completed successfully!")
+        logger.info(f" Results saved to: {output_path}")
     else:
-        logger.error("💥 Feature extraction failed!")
+        logger.error(" Feature extraction failed!")
 
 if __name__ == "__main__":
     main() 

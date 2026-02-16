@@ -2,7 +2,7 @@
 
 This directory contains tools for extracting radiomics features from medical images. Radiomics analysis involves the extraction of quantitative features from medical images to characterize tumor or tissue properties for machine learning applications.
 
-## 📁 Directory Structure
+##  Directory Structure
 
 ```
 Feature_Extraction/
@@ -12,7 +12,7 @@ Feature_Extraction/
     └── simple_radiomics.py       # Basic radiomics features
 ```
 
-## 🔬 Radiomics Analysis
+##  Radiomics Analysis
 
 ### Comprehensive Radiomics Extractor (`radiomics_extractor.py`)
 
@@ -172,7 +172,7 @@ python simple_radiomics.py \
 - **Texture features**: GLCM, GLRLM basics
 - **Intensity features**: Histogram features
 
-## 📊 Feature Extraction Process
+##  Feature Extraction Process
 
 ### Input Requirements
 - **Image files**: NIfTI format (.nii, .nii.gz)
@@ -193,7 +193,7 @@ python simple_radiomics.py \
 - **Correlation analysis**: Identify highly correlated features
 - **Outlier detection**: Detect and handle outliers
 
-## 🔧 Configuration
+##  Configuration
 
 ### Feature Selection
 ```yaml
@@ -239,7 +239,7 @@ output:
   verbose: true
 ```
 
-## 📈 Feature Analysis
+##  Feature Analysis
 
 ### Feature Statistics
 - **Descriptive statistics**: Mean, std, min, max, percentiles
@@ -259,7 +259,7 @@ output:
 - **Polynomial features**: Feature interactions
 - **Dimensionality reduction**: PCA, ICA, feature selection
 
-## 📊 Output Formats
+##  Output Formats
 
 ### CSV Format
 ```csv
@@ -296,7 +296,7 @@ sub-002,0.234,0.567,0.890,...
 - **Metadata**: Rich metadata support
 - **Accessibility**: Easy programmatic access
 
-## 🚨 Common Issues
+##  Common Issues
 
 ### Image Loading Issues
 1. **File format**: Ensure NIfTI format compatibility
@@ -316,7 +316,7 @@ sub-002,0.234,0.567,0.890,...
 3. **Feature correlation**: Identify highly correlated features
 4. **Outlier detection**: Handle extreme values
 
-## 🔍 Debugging
+##  Debugging
 
 ### Feature Extraction Debugging
 - **Check inputs**: Validate input images and masks
@@ -330,7 +330,7 @@ sub-002,0.234,0.567,0.890,...
 - **Check correlations**: Review feature correlations
 - **Handle outliers**: Identify and handle outliers
 
-## 📚 Dependencies
+##  Dependencies
 
 ### Core Libraries
 - **pyRadiomics**: Radiomics feature extraction
@@ -345,7 +345,7 @@ sub-002,0.234,0.567,0.890,...
 - **matplotlib**: Visualization
 - **seaborn**: Statistical visualisation
 
-## 🚀 Performance Optimization
+##  Performance Optimization
 
 ### Memory Management
 - **Batch processing**: Process images in batches
@@ -365,7 +365,7 @@ sub-002,0.234,0.567,0.890,...
 - **Metadata optimisation**: Optimize metadata storage
 - **Cleanup**: Remove temporary files
 
-## 📞 Support
+##  Support
 
 For feature extraction issues:
 - Check input image and mask quality

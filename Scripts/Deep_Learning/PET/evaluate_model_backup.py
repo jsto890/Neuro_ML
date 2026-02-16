@@ -334,7 +334,7 @@ def main():
     print("Generating evaluation plots...")
     create_evaluation_plots(predictions, probabilities, labels, metrics, args.output_dir)
     
-    print(f"\n✅ Evaluation completed! Results saved to: {args.output_dir}")
+    print(f"\n Evaluation completed! Results saved to: {args.output_dir}")
 
 if __name__ == "__main__":
     main() 

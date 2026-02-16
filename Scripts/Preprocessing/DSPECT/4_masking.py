@@ -38,15 +38,15 @@ else:
     try:
         spect_mask_path = "/Users/jacksonschofield/Desktop/P4P/Templates/SPECT/occipital_mask.nii.gz"  # Fallback to occipital for now
     except KeyError:
-        print("⚠️ Whole-brain mask not found, using occipital mask")
+        print("️ Whole-brain mask not found, using occipital mask")
         spect_mask_path = "/Users/jacksonschofield/Desktop/P4P/Templates/SPECT/occipital_mask.nii.gz"
 
 output_base = f"/Users/jacksonschofield/Desktop/SPECT/{args.diagnosis}_SPECT_PPMI_masked"
 
-print(f"\n🔄 Processing {args.diagnosis} subjects")
-print(f"📁 Input directory: {input_dir}")
-print(f"📁 Output directory: {output_base}")
-print(f"🎭 SPECT mask: {spect_mask_path}\n")
+print(f"\n Processing {args.diagnosis} subjects")
+print(f" Input directory: {input_dir}")
+print(f" Output directory: {output_base}")
+print(f" SPECT mask: {spect_mask_path}\n")
 
 # Create output directory
 os.makedirs(output_base, exist_ok=True)
@@ -87,13 +87,13 @@ def validate_ml_readiness(masked_data, subject_id):
     
     # ML-friendly coverage: 1-70% for SPECT (wider to keep more data, to be filtered later)
     if coverage < 1:
-        print(f"⚠️ {subject_id}: Very low coverage ({coverage:.1f}%) - may affect ML performance")
+        print(f"️ {subject_id}: Very low coverage ({coverage:.1f}%) - may affect ML performance")
     elif coverage > 70:
-        print(f"⚠️ {subject_id}: High coverage ({coverage:.1f}%) - may include non-brain tissue")
+        print(f"️ {subject_id}: High coverage ({coverage:.1f}%) - may include non-brain tissue")
     
     # Check for negative values (shouldn't exist in SPECT)
     if np.any(masked_data < 0):
-        print(f"❌ {subject_id}: Negative values detected - not ML-ready")
+        print(f" {subject_id}: Negative values detected - not ML-ready")
         return False
     
     return True
@@ -105,7 +105,7 @@ for subject_id in subject_dirs:
     if subject_id.startswith("._") or subject_id == ".DS_Store":
         continue
 
-    print(f"\n🔄 Masking {subject_id}")
+    print(f"\n Masking {subject_id}")
     subj_input_dir = os.path.join(input_dir, subject_id)
     output_dir = os.path.join(output_base, subject_id)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -144,21 +144,21 @@ for subject_id in subject_dirs:
         total_voxels = masked_data.size
         brain_coverage = (non_zero_voxels / total_voxels) * 100
         
-        print(f"✅ Saved: {output_nii}")
-        print(f"📊 SPECT coverage: {brain_coverage:.2f}% ({non_zero_voxels:,} voxels)")
+        print(f" Saved: {output_nii}")
+        print(f" SPECT coverage: {brain_coverage:.2f}% ({non_zero_voxels:,} voxels)")
 
     except Exception as e:
-        print(f"❌ Error for {subject_id}: {e}")
+        print(f" Error for {subject_id}: {e}")
         failed_subjects.append(subject_id)
 
 if failed_subjects:
     print("\n======================")
-    print("❌ FAILED SUBJECTS")
+    print(" FAILED SUBJECTS")
     print("======================")
     for sid in failed_subjects:
         print(sid)
 else:
-    print("\n✅ All subjects masked successfully.")
+    print("\n All subjects masked successfully.")
 
-print(f"\n✅ Masking complete! Output saved to: {output_base}")
-print(f"📁 Each subject now has a dedicated folder with masked data and all original files.")
+print(f"\n Masking complete! Output saved to: {output_base}")
+print(f" Each subject now has a dedicated folder with masked data and all original files.")

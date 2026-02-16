@@ -28,12 +28,12 @@ input_root = f"/Users/jacksonschofield/Desktop/SPECT/{args.diagnosis}_SPECT_PPMI
 output_root = f"/Users/jacksonschofield/Desktop/SPECT/{args.diagnosis}_SPECT_PPMI_normalised"
 occipital_mask_path = "/Users/jacksonschofield/Desktop/P4P/Templates/SPECT/occipital_mask.nii.gz"
 
-print(f"\n🔄 Processing {args.diagnosis} subjects")
-print(f"📁 Input directory: {input_root}")
-print(f"📁 Output directory: {output_root}")
-print(f"🎯 Normalization method: {args.method}")
+print(f"\n Processing {args.diagnosis} subjects")
+print(f" Input directory: {input_root}")
+print(f" Output directory: {output_root}")
+print(f" Normalization method: {args.method}")
 if args.method == 'reference':
-    print(f"🎭 Reference mask: {occipital_mask_path}\n")
+    print(f" Reference mask: {occipital_mask_path}\n")
 
 # Create output directory
 os.makedirs(output_root, exist_ok=True)
@@ -156,12 +156,12 @@ for subject in os.listdir(input_root):
 
             norm_img = nib.Nifti1Image(norm_data, img.affine, img.header)
             nib.save(norm_img, output_path)
-            print(f"✅ Successfully normalized {subject}")
+            print(f" Successfully normalized {subject}")
             print(f"[STATS] {subject}: mean={np.mean(norm_data):.3f}, std={np.std(norm_data):.3f}")
         except Exception as e:
-            print(f"❌ Failed on {input_path}: {e}")
+            print(f" Failed on {input_path}: {e}")
     else:
-        print(f"⚠️ {subject}: No reoriented file found at {input_path}")
+        print(f"️ {subject}: No reoriented file found at {input_path}")
 
-print(f"\n✅ Normalization complete! Output saved to: {output_root}")
-print(f"📁 Each subject now has a dedicated folder with normalized data and all original files.")
+print(f"\n Normalization complete! Output saved to: {output_root}")
+print(f" Each subject now has a dedicated folder with normalized data and all original files.")

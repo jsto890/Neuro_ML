@@ -25,9 +25,9 @@ subjects = [f for f in os.listdir(input_dir) if f.startswith('sub-') and f.endsw
 
 # Check CSV
 if not os.path.exists(csv_path):
-    print(f"❌ Summary CSV not found: {csv_path}")
+    print(f" Summary CSV not found: {csv_path}")
 else:
-    print(f"✅ Found summary CSV: {csv_path}")
+    print(f" Found summary CSV: {csv_path}")
     with open(csv_path) as f:
         reader = csv.DictReader(f)
         rows = list(reader)
@@ -41,12 +41,12 @@ for nii_file in subjects:
         img = nib.load(nii_path)
         data = img.get_fdata()
         if np.count_nonzero(data) == 0:
-            print(f"❌ {nii_file}: All voxels zero")
+            print(f" {nii_file}: All voxels zero")
             failed.append(nii_file)
         else:
-            print(f"✅ {nii_file}: OK")
+            print(f" {nii_file}: OK")
     except Exception as e:
-        print(f"❌ {nii_file}: {e}")
+        print(f" {nii_file}: {e}")
         failed.append(nii_file)
 
 if failed:

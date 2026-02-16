@@ -193,7 +193,7 @@ def find_missing_by_group_from_smriprep(
 def print_report(missing: Dict[str, Dict[str, List[str]]]) -> None:
     """Pretty-print grouped report to stdout."""
     if not missing:
-        print("All subjects appear to have required MNI outputs. ✅")
+        print("All subjects appear to have required MNI outputs. ")
         return
 
     print("\nMissing MNI subjects grouped by site and disease:\n")

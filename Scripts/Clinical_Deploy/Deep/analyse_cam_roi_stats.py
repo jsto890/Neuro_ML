@@ -598,8 +598,8 @@ def main() -> None:
     with open(out_dir / "roi_analysis_meta.json", "w") as f:
         json.dump(meta, f, indent=2)
 
-    print(f"✓ Wrote ROI matrix: {matrix_path}")
-    print(f"✓ Wrote ROI tests:  {out_tests}")
+    print(f" Wrote ROI matrix: {matrix_path}")
+    print(f" Wrote ROI tests:  {out_tests}")
 
 
 if __name__ == "__main__":

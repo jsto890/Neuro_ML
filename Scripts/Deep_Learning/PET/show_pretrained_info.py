@@ -16,12 +16,12 @@ def main():
     info = get_pretrained_model_info()
     
     for model_name, details in info.items():
-        print(f"\n📊 {model_name}")
+        print(f"\n {model_name}")
         print("-" * 50)
         print(f"Source:           {details['source']}")
         print(f"Pretrained on:    {details['pretrained_on']}")
         print(f"Input size:       {details['input_size']}")
-        print(f"Pretrained:       {'✅ Yes' if details['pretrained_available'] else '❌ No'}")
+        print(f"Pretrained:       {' Yes' if details['pretrained_available'] else ' No'}")
         print(f"Notes:            {details['notes']}")
     
     print("\n" + "="*80)
@@ -45,18 +45,18 @@ def main():
     print("\n" + "="*80)
     print("RECOMMENDATIONS")
     print("="*80)
-    print("\n🎯 For best performance:")
+    print("\n For best performance:")
     print("  • Use --use_pretrained flag for ResNet, DenseNet, and EfficientNet")
     print("  • MONAI pretrained models are specifically trained on medical imaging")
     print("  • ResNet50_3D often performs better than ResNet18_3D")
     print("  • DenseNet121_3D has good feature reuse capabilities")
     
-    print("\n⚡ For faster training:")
+    print("\n For faster training:")
     print("  • Use ResNet18_3D instead of ResNet50_3D")
     print("  • Reduce batch size if memory is limited")
     print("  • Use fewer epochs with pretrained models")
     
-    print("\n🔬 For research comparison:")
+    print("\n For research comparison:")
     print("  • Train both pretrained and from-scratch versions")
     print("  • Compare performance to measure transfer learning benefits")
     print("  • Use same random seed for fair comparison")

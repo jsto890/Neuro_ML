@@ -2,7 +2,7 @@
 
 This directory contains visualisation tools for medical imaging data, model results, and interpretability analysis. The visualisation tools support interactive exploration, static plotting, and animation of medical images and analysis results.
 
-## 📁 Directory Structure
+##  Directory Structure
 
 ```
 Visualise/
@@ -12,7 +12,7 @@ Visualise/
 └── animate_gradcam_overlay.py    # Grad-CAM animation
 ```
 
-## 🎨 Visualization Tools
+##  Visualization Tools
 
 ### Interactive Visualization (`interactive_visualise.py`)
 
@@ -142,7 +142,7 @@ python animate_gradcam_overlay.py \
 - **`--colourmap`**: Colormap for Grad-CAM
 - **`--alpha`**: Overlay transparency
 
-## 🎯 Visualization Types
+##  Visualization Types
 
 ### Medical Image Visualization
 - **3D slice display**: Display 3D images as 2D slices
@@ -165,7 +165,7 @@ python animate_gradcam_overlay.py \
 - **Correlation plots**: Correlation matrices and scatter plots
 - **Time series**: Training curves and performance over time
 
-## 🔧 Configuration
+##  Configuration
 
 ### Visualization Settings
 ```yaml
@@ -208,7 +208,7 @@ interactive:
     keyboard_shortcuts: true
 ```
 
-## 📊 Output Formats
+##  Output Formats
 
 ### Static Images
 - **PNG**: High-quality raster images
@@ -229,7 +229,7 @@ interactive:
 - **WebGL**: 3D web visualisations
 - **Plotly**: Interactive plotly visualisations
 
-## 🎨 Styling and Customization
+##  Styling and Customization
 
 ### Color Schemes
 - **Medical colourmaps**: Optimized for medical imaging
@@ -249,7 +249,7 @@ interactive:
 - **Scale bars**: Spatial reference scales
 - **Color bars**: Intensity scale references
 
-## 🚀 Performance Optimization
+##  Performance Optimization
 
 ### Memory Management
 - **Lazy loading**: Load images on demand
@@ -269,7 +269,7 @@ interactive:
 - **Caching**: Cache interactive states
 - **Optimization**: Optimize for real-time interaction
 
-## 🔍 Quality Control
+##  Quality Control
 
 ### Image Quality
 - **Resolution**: Maintain image resolution
@@ -283,7 +283,7 @@ interactive:
 - **Consistency**: Consistent styling and formatting
 - **Accessibility**: Ensure accessibility compliance
 
-## 📚 Dependencies
+##  Dependencies
 
 ### Core Libraries
 - **matplotlib**: Plotting and visualisation
@@ -304,7 +304,7 @@ interactive:
 - **imageio**: Image I/O and animation
 - **ffmpeg**: Video encoding
 
-## 🚨 Common Issues
+##  Common Issues
 
 ### Image Loading Issues
 1. **File format**: Check supported file formats
@@ -324,7 +324,7 @@ interactive:
 3. **Quality**: Balance quality and performance
 4. **Format compatibility**: Check format support
 
-## 🔍 Debugging
+##  Debugging
 
 ### Visualization Debugging
 - **Check data**: Validate input data
@@ -338,7 +338,7 @@ interactive:
 - **Validate outputs**: Check output quality
 - **Review user feedback**: Gather user feedback
 
-## 📞 Support
+##  Support
 
 For visualisation issues:
 - Check input data format and quality

@@ -142,7 +142,7 @@ Examples:
     run_dirs = [d for d in run_dirs if os.path.exists(d)]
     
     if not run_dirs:
-        print("❌ No valid model output directories found!")
+        print(" No valid model output directories found!")
         print("\nPlease specify:")
         print("  --base-dir /path/to/your/data/directory")
         print("  OR")
@@ -167,7 +167,7 @@ Examples:
     
     # Run Bayesian analysis
     try:
-        print("\n🚀 Starting Bayesian model comparison...")
+        print("\n Starting Bayesian model comparison...")
         comparator = BayesianModelComparison(output_dir, args.random_seed)
         
         results = comparator.run_complete_analysis(
@@ -178,15 +178,15 @@ Examples:
             reuse_from_dir=args.reuse_from
         )
         
-        print(f"\n✅ Analysis complete!")
-        print(f"📊 Results saved to: {output_dir}")
-        print(f"📈 Plots saved to: {output_dir}/plots")
-        print(f"📋 Data saved to: {output_dir}/data")
-        print(f"📄 Results saved to: {output_dir}/results")
+        print(f"\n Analysis complete!")
+        print(f" Results saved to: {output_dir}")
+        print(f" Plots saved to: {output_dir}/plots")
+        print(f" Data saved to: {output_dir}/data")
+        print(f" Results saved to: {output_dir}/results")
         
         # Print summary
         if results.accuracy_results:
-            print(f"\n📊 Model Performance Summary:")
+            print(f"\n Model Performance Summary:")
             models = results.accuracy_results['models']
             means = results.accuracy_results['accuracy_means']
             
@@ -195,12 +195,12 @@ Examples:
         
         if results.stacking_results and 'ensemble_accuracy' in results.stacking_results:
             ensemble_acc = results.stacking_results['ensemble_accuracy']
-            print(f"\n🤝 Ensemble Accuracy: {ensemble_acc:.4f}")
+            print(f"\n Ensemble Accuracy: {ensemble_acc:.4f}")
         
         return 0
         
     except Exception as e:
-        print(f"\n❌ Analysis failed: {e}")
+        print(f"\n Analysis failed: {e}")
         print("\nTroubleshooting:")
         print("1. Check that model output directories contain the expected structure")
         print("2. Ensure all required packages are installed:")

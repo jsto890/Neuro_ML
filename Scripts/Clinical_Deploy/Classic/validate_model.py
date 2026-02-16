@@ -57,23 +57,23 @@ class ModelValidator:
         try:
             with open(self.model_path, 'rb') as f:
                 self.model = pickle.load(f)
-            print(f"✓ Loaded SVM model: {self.model}")
+            print(f" Loaded SVM model: {self.model}")
             
             with open(self.scaler_path, 'rb') as f:
                 self.scaler = pickle.load(f)
-            print(f"✓ Loaded scaler: {type(self.scaler).__name__}")
+            print(f" Loaded scaler: {type(self.scaler).__name__}")
             
         except Exception as e:
-            print(f"✗ Error loading model: {e}")
+            print(f" Error loading model: {e}")
             sys.exit(1)
     
     def load_feature_importance(self):
         """Load feature importance rankings."""
         try:
             self.feature_importance = pd.read_csv(self.feature_importance_path)
-            print(f"✓ Loaded feature importance for {len(self.feature_importance)} features")
+            print(f" Loaded feature importance for {len(self.feature_importance)} features")
         except Exception as e:
-            print(f"✗ Error loading feature importance: {e}")
+            print(f" Error loading feature importance: {e}")
             self.feature_importance = None
     
     def predict_with_confidence(self, X, threshold=0.8):
@@ -191,7 +191,7 @@ class ModelValidator:
         try:
             # Load test data
             test_data = pd.read_csv(test_data_path)
-            print(f"✓ Loaded test data: {test_data.shape}")
+            print(f" Loaded test data: {test_data.shape}")
             
             # Separate features and target
             X_test = test_data.drop(columns=[target_column])
@@ -255,7 +255,7 @@ class ModelValidator:
             }
             
         except Exception as e:
-            print(f"✗ Error validating model: {e}")
+            print(f" Error validating model: {e}")
             return None
     
     def generate_validation_report(self, output_dir, metrics: dict, cm: np.ndarray, labels: list):
@@ -275,7 +275,7 @@ class ModelValidator:
         json_path = output_dir / 'validation_summary.json'
         with open(json_path, 'w') as f:
             json.dump(summary_json, f, indent=2)
-        print(f"✓ Validation JSON saved to: {json_path}")
+        print(f" Validation JSON saved to: {json_path}")
 
         # Minimal markdown
         report_md = f"""
@@ -295,7 +295,7 @@ Confusion Matrix (rows=actual, cols=pred):
         md_path = output_dir / 'validation_report.md'
         with open(md_path, 'w') as f:
             f.write(report_md)
-        print(f"✓ Validation report saved to: {md_path}
+        print(f" Validation report saved to: {md_path}
 ")
 
 def main():
@@ -359,7 +359,7 @@ def main():
     # Generate validation report files
     validator.generate_validation_report(output_dir, metrics_payload, cm, disease_labels)
 
-    print(f"\n✓ Validation completed!")
+    print(f"\n Validation completed!")
     print(f"Results saved to: {output_dir}")
 
 if __name__ == "__main__":

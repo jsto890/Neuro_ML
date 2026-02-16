@@ -457,7 +457,7 @@ def main():
             # Process all datasets automatically
             logger.info("Starting automatic processing of all datasets...")
             total_processed = runner.process_all_datasets()
-            logger.info(f"🎉 All datasets initiated! Total subjects queued for processing: {total_processed}")
+            logger.info(f" All datasets initiated! Total subjects queued for processing: {total_processed}")
             
         elif args.check_all_datasets:
             # Check completion status for all datasets
@@ -476,9 +476,9 @@ def main():
             complete, incomplete = runner.verify_processing()
             
             if not incomplete:
-                logger.info("🎉 All subjects processed successfully!")
+                logger.info(" All subjects processed successfully!")
             else:
-                logger.warning(f"⚠️  {len(incomplete)} subjects still incomplete")
+                logger.warning(f"️  {len(incomplete)} subjects still incomplete")
         
     except Exception as e:
         logger.error(f"Pipeline failed: {e}")

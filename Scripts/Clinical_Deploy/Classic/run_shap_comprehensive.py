@@ -154,7 +154,7 @@ def get_shap_for_model_fold(fold_dir: Path, model_type: str, data: Dict,
                     per_class_shap[class_name] = shap_values
                     per_class_mean_abs[class_name] = np.abs(shap_values).mean(axis=0)
             
-            logger.info(f"✓ Fold {fold_num}, {model_type}: SHAP computed for {n_classes} classes")
+            logger.info(f" Fold {fold_num}, {model_type}: SHAP computed for {n_classes} classes")
             
             return {
                 'fold_num': fold_num,
@@ -179,7 +179,7 @@ def get_shap_for_model_fold(fold_dir: Path, model_type: str, data: Dict,
             
             mean_abs_shap = np.abs(shap_vals).mean(axis=0)
             
-            logger.info(f"✓ Fold {fold_num}, {model_type}: SHAP computed successfully")
+            logger.info(f" Fold {fold_num}, {model_type}: SHAP computed successfully")
             
             return {
                 'fold_num': fold_num,
@@ -193,7 +193,7 @@ def get_shap_for_model_fold(fold_dir: Path, model_type: str, data: Dict,
             }
     
     except Exception as e:
-        logger.error(f"✗ Fold {fold_num}, {model_type}: {e}")
+        logger.error(f" Fold {fold_num}, {model_type}: {e}")
         return None
 
 

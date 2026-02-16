@@ -88,14 +88,14 @@ Examples:
     
     # Validate input file
     if not os.path.exists(args.input):
-        print(f"❌ Input file not found: {args.input}")
+        print(f" Input file not found: {args.input}")
         sys.exit(1)
     
     # Create output directory
     output_path = Path(args.output)
     output_path.mkdir(parents=True, exist_ok=True)
     
-    print("🚀 Starting FDR Feature Selection Comparison")
+    print(" Starting FDR Feature Selection Comparison")
     print("=" * 50)
     print(f"Input file: {args.input}")
     print(f"Output directory: {args.output}")
@@ -122,12 +122,12 @@ Examples:
         success = classifier.run_complete_pipeline()
         
         if success:
-            print("\n✅ FDR Comparison completed successfully!")
+            print("\n FDR Comparison completed successfully!")
             print("=" * 50)
             
             # Print summary of results
             if hasattr(classifier, 'comparison_results') and classifier.comparison_results:
-                print("\n📊 COMPARISON SUMMARY:")
+                print("\n COMPARISON SUMMARY:")
                 print("-" * 30)
                 
                 for approach, results in classifier.comparison_results.items():
@@ -143,7 +143,7 @@ Examples:
                     print(f"  Ensemble - Accuracy: {ensemble_acc:.3f}, MCC: {ensemble_mcc:.3f}")
                     print()
             
-            print("📁 Generated files:")
+            print(" Generated files:")
             print("  • comparison_report.txt - Detailed comparison report")
             print("  • comparison_results.json - Comparison results")
             print("  • detailed_results.json - Detailed results for each approach")
@@ -152,18 +152,18 @@ Examples:
             print("  • scaler.pkl - Feature scaler")
             print("  • enhanced_fdr_pipeline.log - Execution log")
             
-            print("\n🎯 Key Findings:")
+            print("\n Key Findings:")
             print("  • FDR selection uses statistical correction for multiple testing")
             print("  • Current selection uses MutualInfo + RFECV")
             print("  • No selection uses all features after preprocessing")
             print("  • MCC (Matthews Correlation Coefficient) is the key metric for comparison")
             
         else:
-            print("\n❌ FDR Comparison failed")
+            print("\n FDR Comparison failed")
             sys.exit(1)
             
     except Exception as e:
-        print(f"\n❌ Error running FDR comparison: {e}")
+        print(f"\n Error running FDR comparison: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":

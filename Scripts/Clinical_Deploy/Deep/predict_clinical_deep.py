@@ -1644,8 +1644,8 @@ def main():
     json_path = out_dir / f"{sid}_clinical_prediction_deep.json"
     with open(json_path, 'w') as f:
         json.dump(report, f, indent=2)
-    print(f"\n✓ Prediction: {pred_name} (conf {confidence:.3f})")
-    print(f"✓ JSON report: {json_path}")
+    print(f"\n Prediction: {pred_name} (conf {confidence:.3f})")
+    print(f" JSON report: {json_path}")
 
     # Also export a simple text error log if any errors occurred
     if any(len(v) > 0 for v in interpret_errors.values()):
@@ -1660,7 +1660,7 @@ def main():
                     else:
                         lf.write("- none\n")
                     lf.write("\n")
-            print(f"✓ Error log: {log_path}")
+            print(f" Error log: {log_path}")
         except Exception as e:
             print(f"Warning: failed to write error log: {e}")
 

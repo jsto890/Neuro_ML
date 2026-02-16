@@ -2,7 +2,7 @@
 
 This directory contains tools for deploying trained models in clinical settings, including prediction interfaces, model validation, and interpretability analysis. The clinical deployment tools support both classical machine learning and deep learning models.
 
-## 📁 Directory Structure
+##  Directory Structure
 
 ```
 Clinical_Deploy/
@@ -17,7 +17,7 @@ Clinical_Deploy/
     └── validate_model_deep.py    # Deep model validation
 ```
 
-## 🔬 Classical ML Deployment (`Classic/`)
+##  Classical ML Deployment (`Classic/`)
 
 ### Clinical Prediction (`predict_clinical.py`)
 
@@ -207,7 +207,7 @@ interpreter.create_dependence_plot(X_test, feature_name='feature_1')
 interpreter.create_force_plot(X_test, sample_idx=0)
 ```
 
-## 🧠 Deep Learning Deployment (`Deep/`)
+##  Deep Learning Deployment (`Deep/`)
 
 ### Deep Learning Prediction (`predict_clinical_deep.py`)
 
@@ -344,7 +344,7 @@ python validate_model_deep.py \
 - **Interpretability analysis**: Generate interpretability maps
 - **Statistical analysis**: Statistical significance testing
 
-## 🔍 Interpretability Analysis
+##  Interpretability Analysis
 
 ### SHAP Analysis (Classical ML)
 
@@ -374,7 +374,7 @@ python visualise_gradcam.py \
     --output ~/path/to/gradcam.nii.gz
 ```
 
-## 📊 Clinical Reports
+##  Clinical Reports
 
 ### Report Generation
 - **HTML reports**: Interactive HTML reports
@@ -387,7 +387,7 @@ python visualise_gradcam.py \
 - **Model information**: Model performance and metadata
 - **Clinical context**: Clinical interpretation and recommendations
 
-## 🔧 Configuration
+##  Configuration
 
 ### Model Configuration
 ```yaml
@@ -419,7 +419,7 @@ clinical:
   include_recommendations: true
 ```
 
-## 🚨 Quality Control
+##  Quality Control
 
 ### Input Validation
 - **Data format**: Validate input data format
@@ -439,7 +439,7 @@ clinical:
 - **User feedback**: Clear error messages
 - **Recovery**: Automatic error recovery when possible
 
-## 📈 Performance Monitoring
+##  Performance Monitoring
 
 ### Model Performance
 - **Prediction accuracy**: Monitor prediction accuracy
@@ -453,7 +453,7 @@ clinical:
 - **CPU/GPU usage**: Monitor computational resources
 - **Error rates**: Monitor error rates
 
-## 🔒 Security and Privacy
+##  Security and Privacy
 
 ### Data Privacy
 - **Data encryption**: Encrypt sensitive data
@@ -467,7 +467,7 @@ clinical:
 - **Version control**: Track model versions
 - **Integrity checking**: Verify model integrity
 
-## 📞 Support
+##  Support
 
 For clinical deployment issues:
 - Check model file paths and formats

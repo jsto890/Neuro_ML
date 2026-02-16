@@ -306,9 +306,9 @@ def main() -> None:
         nonbrain_threshold=float(args.nonbrain_threshold),
     )
 
-    print(f"✓ Found {len(paths)} CAMs (after QC)" if excluded else f"✓ Found {len(paths)} CAMs")
-    print(f"✓ Saved mean NIfTI: {out_mean}")
-    print(f"✓ Saved PNG: {out_png}")
+    print(f" Found {len(paths)} CAMs (after QC)" if excluded else f" Found {len(paths)} CAMs")
+    print(f" Saved mean NIfTI: {out_mean}")
+    print(f" Saved PNG: {out_png}")
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 
 This directory contains classical machine learning approaches for neurodegenerative disease detection using radiomics features extracted from medical images. The classical learning pipeline includes feature engineering, model training, evaluation, and deployment.
 
-## 📁 Directory Structure
+##  Directory Structure
 
 ```
 Classic_Learning/
@@ -16,7 +16,7 @@ Classic_Learning/
     └── run_enhanced.py           # Enhanced classifier pipeline
 ```
 
-## 🔄 Complete Workflow
+##  Complete Workflow
 
 ### Main Workflow Script (`complete_workflow.py`)
 
@@ -108,7 +108,7 @@ python run_fdr_comparison.py \
 - **Effect size**: Cohen's d and other effect size measures
 - **Visualization**: Statistical comparison plots
 
-## 🚀 Enhanced Classifiers (`Enhanced/`)
+##  Enhanced Classifiers (`Enhanced/`)
 
 ### Enhanced Classifier (`enhanced_classifier.py`)
 
@@ -173,7 +173,7 @@ models:
     learning_rate: [0.01, 0.1, 0.2]
 ```
 
-## 📊 Model Performance
+##  Model Performance
 
 ### Evaluation Metrics
 - **Accuracy**: Overall classification accuracy
@@ -194,7 +194,7 @@ models:
 - **Random Search**: Randomized hyperparameter search
 - **Bayesian Optimization**: Efficient hyperparameter optimisation
 
-## 🔍 Feature Engineering
+##  Feature Engineering
 
 ### Feature Selection Methods
 - **Variance Threshold**: Remove low-variance features
@@ -213,7 +213,7 @@ models:
 - **Feature Stability**: Cross-validation feature selection
 - **Statistical Significance**: Feature importance testing
 
-## 🎯 Model Deployment
+##  Model Deployment
 
 ### Clinical Deployment
 - **Model Serialization**: Save models in pickle format
@@ -227,7 +227,7 @@ models:
 - **Confidence Intervals**: Uncertainty quantification
 - **Feature Importance**: Explain individual predictions
 
-## 📈 Visualization
+##  Visualization
 
 ### Performance Plots
 - **ROC Curves**: Receiver Operating Characteristic curves
@@ -247,7 +247,7 @@ models:
 - **Effect Size**: Effect size visualisation
 - **Bias Analysis**: Bias detection and visualisation
 
-## 🔧 Configuration
+##  Configuration
 
 ### Default Configuration
 The pipeline uses sensible defaults for most parameters:
@@ -300,7 +300,7 @@ models:
     gamma: ['scale', 'auto']
 ```
 
-## 🚨 Common Issues
+##  Common Issues
 
 ### Data Issues
 1. **Missing values**: Handle missing values in radiomics features
@@ -320,7 +320,7 @@ models:
 3. **Feature scaling**: Ensure proper feature scaling
 4. **Feature selection**: Use appropriate feature selection methods
 
-## 🔍 Debugging
+##  Debugging
 
 ### Logging
 - **Workflow logs**: Detailed execution logs
@@ -334,7 +334,7 @@ models:
 - **Model validation**: Cross-validation results
 - **Output validation**: Check prediction quality
 
-## 📚 Dependencies
+##  Dependencies
 
 ### Required Libraries
 - **scikit-learn**: Machine learning algorithms
@@ -350,7 +350,7 @@ models:
 - **optuna**: Hyperparameter optimisation
 - **imbalanced-learn**: Imbalanced data handling
 
-## 🚀 Performance Optimization
+##  Performance Optimization
 
 ### Memory Management
 - **Batch processing**: Process data in batches
@@ -362,7 +362,7 @@ models:
 - **Vectorization**: Use vectorized operations
 - **Caching**: Cache intermediate results
 
-## 📞 Support
+##  Support
 
 For classical learning issues:
 - Check configuration files and parameters

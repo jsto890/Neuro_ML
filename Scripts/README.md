@@ -2,7 +2,7 @@
 
 This directory contains all the main pipeline scripts for the P4P (Parkinson's Disease Detection Pipeline) project. The scripts are organised into logical modules covering the complete workflow from data preprocessing to model deployment.
 
-## 📁 Directory Structure
+##  Directory Structure
 
 ```
 Scripts/
@@ -37,7 +37,7 @@ Scripts/
     └── [visualisation scripts]
 ```
 
-## 🔄 Complete Pipeline Workflow
+##  Complete Pipeline Workflow
 
 ### 1. Data Preprocessing (`Preprocessing/`)
 
@@ -142,7 +142,7 @@ Scripts/
   - `visualise_middle_slice.py`: Middle slice visualisation
   - `animate_gradcam_overlay.py`: Grad-CAM animation
 
-## 🚀 Quick Start Examples
+##  Quick Start Examples
 
 ### Complete Radiomics Workflow
 
@@ -190,7 +190,7 @@ python predict_clinical.py \
     --output ~/path/to/predictions.json
 ```
 
-## 🔧 Configuration Files
+##  Configuration Files
 
 ### Hardware-Optimized Configuration
 - **File**: `config_hardware_optimised.yaml`
@@ -207,7 +207,7 @@ python predict_clinical.py \
 - **Purpose**: Enhanced classifier settings
 - **Usage**: Advanced ML pipeline configuration
 
-## 📊 Output Structure
+##  Output Structure
 
 ### Training Results
 ```
@@ -245,7 +245,7 @@ clinical_results/
     └── *.pdf                   # PDF reports
 ```
 
-## 🧠 Supported Modalities
+##  Supported Modalities
 
 ### Structural MRI (sMRI)
 - **Preprocessing**: sMRIprep, skull stripping, normalization
@@ -262,7 +262,7 @@ clinical_results/
 - **Features**: Radiomics, deep learning features
 - **Models**: 3D CNN, Vision Transformers, classical ML
 
-## 🔍 Model Interpretability
+##  Model Interpretability
 
 ### SHAP Analysis (Classical ML)
 - **Location**: `Clinical_Deploy/Classic/`
@@ -279,7 +279,7 @@ clinical_results/
 - **Purpose**: Visualize input sensitivity
 - **Features**: Gradient-based saliency analysis
 
-## 📈 Performance Monitoring
+##  Performance Monitoring
 
 ### Training Metrics
 - **Accuracy, Precision, Recall, F1-Score**
@@ -293,7 +293,7 @@ clinical_results/
 - **Calibration Analysis**
 - **Bias Detection**
 
-## 🚨 Error Handling
+##  Error Handling
 
 ### Common Issues
 1. **File Path Errors**: Check configuration files and paths
@@ -306,7 +306,7 @@ clinical_results/
 - **Validation Scripts**: Use validation scripts to check data integrity
 - **Test Scripts**: Run test scripts to verify pipeline components
 
-## 🔧 Customization
+##  Customization
 
 ### Adding New Modalities
 1. Create new preprocessing scripts in `Preprocessing/`
@@ -320,7 +320,7 @@ clinical_results/
 3. Implement evaluation and deployment scripts
 4. Add to comparison pipeline
 
-## 📚 Documentation
+##  Documentation
 
 Each subdirectory contains detailed README files:
 - [Preprocessing Documentation](Preprocessing/README.md)
@@ -331,7 +331,7 @@ Each subdirectory contains detailed README files:
 - [Comparison Documentation](Comparison/README.md)
 - [Visualization Documentation](Visualise/README.md)
 
-## 🤝 Contributing
+##  Contributing
 
 1. Follow the existing code structure and naming conventions
 2. Add comprehensive documentation for new scripts
@@ -339,7 +339,7 @@ Each subdirectory contains detailed README files:
 4. Add appropriate error handling and logging
 5. Test scripts with sample data before submission
 
-## 📞 Support
+##  Support
 
 For script-related issues:
 - Check the specific subdirectory README files

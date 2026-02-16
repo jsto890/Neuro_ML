@@ -84,6 +84,6 @@ print(f"Raw aspect ratio (width/height): {raw_aspect:.3f}")
 print(f"Reoriented aspect ratio (width/height): {reoriented_aspect:.3f}")
 
 if abs(raw_aspect - reoriented_aspect) < 0.1:
-    print("✅ Aspect ratios are similar - no major distortion")
+    print(" Aspect ratios are similar - no major distortion")
 else:
-    print("❌ Aspect ratios differ significantly - possible distortion") 
+    print(" Aspect ratios differ significantly - possible distortion") 

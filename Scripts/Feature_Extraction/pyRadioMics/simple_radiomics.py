@@ -174,10 +174,10 @@ def load_existing_results(output_path):
                 # Store the entire row for potential use
                 existing_results[subject_id] = row
         
-        logger.info(f"📋 Found {len(processed_subjects)} already processed subjects")
+        logger.info(f" Found {len(processed_subjects)} already processed subjects")
         return existing_results, processed_subjects
     except Exception as e:
-        logger.warning(f"⚠️ Could not load existing results: {e}")
+        logger.warning(f"️ Could not load existing results: {e}")
         return {}, set()
 
 def save_progress_checkpoint(checkpoint_path, processed_subjects, failed_subjects, total_subjects):
@@ -206,7 +206,7 @@ def extract_mri_radiomics(config_path, labels_path, output_dir, force_reprocess=
     
     # Load labels
     subjects, labels = load_labels_simple(labels_path)
-    logger.info(f"📊 Found {len(subjects)} subjects in {labels_path}")
+    logger.info(f" Found {len(subjects)} subjects in {labels_path}")
     
     # Determine output file path
     output_filename = f"radiomics_MRI_{Path(labels_path).stem}.csv"
@@ -218,7 +218,7 @@ def extract_mri_radiomics(config_path, labels_path, output_dir, force_reprocess=
         existing_results, processed_subjects = load_existing_results(output_path)
     else:
         existing_results, processed_subjects = {}, set()
-        logger.info("🔄 Force reprocess mode: will reprocess all subjects")
+        logger.info(" Force reprocess mode: will reprocess all subjects")
     
     # Initialize radiomics extractor
     extractor = featureextractor.RadiomicsFeatureExtractor()
@@ -232,7 +232,7 @@ def extract_mri_radiomics(config_path, labels_path, output_dir, force_reprocess=
     
     # Process each subject
     for i, (subject_id, label) in enumerate(zip(subjects, labels)):
-        logger.info(f"🔍 Processing {i+1}/{len(subjects)}: {subject_id} (label: {label})")
+        logger.info(f" Processing {i+1}/{len(subjects)}: {subject_id} (label: {label})")
         
         # Check if already processed
         if subject_id in processed_subjects and not force_reprocess:
@@ -245,7 +245,7 @@ def extract_mri_radiomics(config_path, labels_path, output_dir, force_reprocess=
         image_path = find_mri_path(data_root, subject_id)
         
         if not image_path:
-            logger.warning(f"❌ Image not found for {subject_id}")
+            logger.warning(f" Image not found for {subject_id}")
             failed += 1
             failed_subjects.add(subject_id)
             continue
@@ -254,7 +254,7 @@ def extract_mri_radiomics(config_path, labels_path, output_dir, force_reprocess=
             # Load image and a valid brain mask (prefer sMRIPrep brain mask)
             image, mask = load_image_and_mask(image_path)
             if image is None or mask is None:
-                logger.error(f"❌ Failed to create mask for {subject_id}")
+                logger.error(f" Failed to create mask for {subject_id}")
                 failed += 1
                 failed_subjects.add(subject_id)
                 continue
@@ -269,7 +269,7 @@ def extract_mri_radiomics(config_path, labels_path, output_dir, force_reprocess=
             successful += 1
             
             feature_count = len([k for k in result.keys() if k not in ['subject_id', 'label']])
-            logger.info(f"✅ Extracted {feature_count} features from {subject_id}")
+            logger.info(f" Extracted {feature_count} features from {subject_id}")
             
             # Save checkpoint every 10 successful extractions
             if successful % 10 == 0:
@@ -279,10 +279,10 @@ def extract_mri_radiomics(config_path, labels_path, output_dir, force_reprocess=
                     failed_subjects, 
                     len(subjects)
                 )
-                logger.info(f"💾 Progress checkpoint saved ({successful}/{len(subjects)} completed)")
+                logger.info(f" Progress checkpoint saved ({successful}/{len(subjects)} completed)")
             
         except Exception as e:
-            logger.error(f"❌ Error processing {subject_id}: {e}")
+            logger.error(f" Error processing {subject_id}: {e}")
             failed += 1
             failed_subjects.add(subject_id)
     
@@ -304,13 +304,13 @@ def extract_mri_radiomics(config_path, labels_path, output_dir, force_reprocess=
             len(subjects)
         )
         
-        logger.info(f"\n💾 Saved {len(all_features)} feature sets to {output_path}")
-        logger.info(f"✅ Successful: {successful}, ⏭️ Skipped: {skipped}, ❌ Failed: {failed}")
-        logger.info(f"📊 Progress: {len(all_features)}/{len(subjects)} subjects processed")
+        logger.info(f"\n Saved {len(all_features)} feature sets to {output_path}")
+        logger.info(f" Successful: {successful}, ⏭️ Skipped: {skipped},  Failed: {failed}")
+        logger.info(f" Progress: {len(all_features)}/{len(subjects)} subjects processed")
         
         return output_path
     else:
-        logger.error("❌ No features were successfully extracted")
+        logger.error(" No features were successfully extracted")
         return None
 
 def find_spect_path(data_root, subject_id):
@@ -375,27 +375,27 @@ def extract_spect_radiomics(config_path, labels_path, output_dir, force_reproces
     from pathlib import Path
     data_root_path = Path(data_root)
     if not data_root_path.exists():
-        logger.error(f"❌ SPECT data root does not exist: {data_root}")
+        logger.error(f" SPECT data root does not exist: {data_root}")
         logger.error(f"   Please check your config.yaml file and ensure the path is correct for your system")
         return None
     
-    logger.info(f"📂 SPECT data root: {data_root}")
+    logger.info(f" SPECT data root: {data_root}")
     
     # Check for disease directories
     cn_dir = data_root_path / 'CN_SPECT_PPMI_postprocessed'
     pd_dir = data_root_path / 'PD_SPECT_PPMI_postprocessed'
     if cn_dir.exists():
-        logger.info(f"✓ Found CN directory: {cn_dir}")
+        logger.info(f" Found CN directory: {cn_dir}")
     else:
-        logger.warning(f"⚠️ CN directory not found: {cn_dir}")
+        logger.warning(f"️ CN directory not found: {cn_dir}")
     if pd_dir.exists():
-        logger.info(f"✓ Found PD directory: {pd_dir}")
+        logger.info(f" Found PD directory: {pd_dir}")
     else:
-        logger.warning(f"⚠️ PD directory not found: {pd_dir}")
+        logger.warning(f"️ PD directory not found: {pd_dir}")
 
     # Load labels
     subjects, labels = load_labels_simple(labels_path)
-    logger.info(f"📊 Found {len(subjects)} subjects in {labels_path}")
+    logger.info(f" Found {len(subjects)} subjects in {labels_path}")
 
     # Output and checkpoint
     output_path = Path(output_dir) / "radiomics_spect.csv"
@@ -406,7 +406,7 @@ def extract_spect_radiomics(config_path, labels_path, output_dir, force_reproces
         existing_results, processed_subjects = load_existing_results(output_path)
     else:
         existing_results, processed_subjects = {}, set()
-        logger.info("🔄 Force reprocess mode: will reprocess all subjects")
+        logger.info(" Force reprocess mode: will reprocess all subjects")
 
     extractor = featureextractor.RadiomicsFeatureExtractor()
 
@@ -417,7 +417,7 @@ def extract_spect_radiomics(config_path, labels_path, output_dir, force_reproces
     failed_subjects = set()
 
     for i, (subject_id, label) in enumerate(zip(subjects, labels)):
-        logger.info(f"🔍 Processing {i+1}/{len(subjects)}: {subject_id} (label: {label})")
+        logger.info(f" Processing {i+1}/{len(subjects)}: {subject_id} (label: {label})")
 
         if subject_id in processed_subjects and not force_reprocess:
             logger.info(f"⏭️ Skipping {subject_id} (already processed)")
@@ -427,7 +427,7 @@ def extract_spect_radiomics(config_path, labels_path, output_dir, force_reproces
 
         image_path = find_spect_path(data_root, subject_id)
         if not image_path:
-            logger.warning(f"❌ SPECT image not found for {subject_id}")
+            logger.warning(f" SPECT image not found for {subject_id}")
             failed += 1
             failed_subjects.add(subject_id)
             continue
@@ -435,7 +435,7 @@ def extract_spect_radiomics(config_path, labels_path, output_dir, force_reproces
         try:
             image, mask = load_spect_image_and_mask(image_path)
             if image is None or mask is None:
-                logger.error(f"❌ Failed to create SPECT mask for {subject_id}")
+                logger.error(f" Failed to create SPECT mask for {subject_id}")
                 failed += 1
                 failed_subjects.add(subject_id)
                 continue
@@ -449,7 +449,7 @@ def extract_spect_radiomics(config_path, labels_path, output_dir, force_reproces
             successful += 1
 
             feature_count = len([k for k in result.keys() if k not in ['subject_id', 'label', 'image_path']])
-            logger.info(f"✅ Extracted {feature_count} features from {subject_id}")
+            logger.info(f" Extracted {feature_count} features from {subject_id}")
 
             if successful % 10 == 0:
                 save_progress_checkpoint(
@@ -458,10 +458,10 @@ def extract_spect_radiomics(config_path, labels_path, output_dir, force_reproces
                     failed_subjects,
                     len(subjects)
                 )
-                logger.info(f"💾 Progress checkpoint saved ({successful}/{len(subjects)} completed)")
+                logger.info(f" Progress checkpoint saved ({successful}/{len(subjects)} completed)")
 
         except Exception as e:
-            logger.error(f"❌ Error processing {subject_id}: {e}")
+            logger.error(f" Error processing {subject_id}: {e}")
             failed += 1
             failed_subjects.add(subject_id)
 
@@ -480,11 +480,11 @@ def extract_spect_radiomics(config_path, labels_path, output_dir, force_reproces
             len(subjects)
         )
 
-        logger.info(f"\n💾 Saved {len(all_features)} SPECT feature sets to {output_path}")
-        logger.info(f"✅ Successful: {successful}, ⏭️ Skipped: {skipped}, ❌ Failed: {failed}")
+        logger.info(f"\n Saved {len(all_features)} SPECT feature sets to {output_path}")
+        logger.info(f" Successful: {successful}, ⏭️ Skipped: {skipped},  Failed: {failed}")
         return output_path
     else:
-        logger.error("❌ No SPECT features were successfully extracted")
+        logger.error(" No SPECT features were successfully extracted")
         return None
 
 def extract_pet_radiomics(config_path, labels_path, output_dir, force_reprocess=False):
@@ -498,7 +498,7 @@ def extract_pet_radiomics(config_path, labels_path, output_dir, force_reprocess=
 
     # Load labels
     subjects, labels = load_labels_simple(labels_path)
-    logger.info(f"📊 Found {len(subjects)} subjects in {labels_path}")
+    logger.info(f" Found {len(subjects)} subjects in {labels_path}")
 
     # Output and checkpoint
     output_path = Path(output_dir) / "radiomics_pet.csv"
@@ -509,7 +509,7 @@ def extract_pet_radiomics(config_path, labels_path, output_dir, force_reprocess=
         existing_results, processed_subjects = load_existing_results(output_path)
     else:
         existing_results, processed_subjects = {}, set()
-        logger.info("🔄 Force reprocess mode: will reprocess all subjects")
+        logger.info(" Force reprocess mode: will reprocess all subjects")
 
     extractor = featureextractor.RadiomicsFeatureExtractor()
 
@@ -520,7 +520,7 @@ def extract_pet_radiomics(config_path, labels_path, output_dir, force_reprocess=
     failed_subjects = set()
 
     for i, (subject_id, label) in enumerate(zip(subjects, labels)):
-        logger.info(f"🔍 Processing {i+1}/{len(subjects)}: {subject_id} (label: {label})")
+        logger.info(f" Processing {i+1}/{len(subjects)}: {subject_id} (label: {label})")
 
         if subject_id in processed_subjects and not force_reprocess:
             logger.info(f"⏭️ Skipping {subject_id} (already processed)")
@@ -530,7 +530,7 @@ def extract_pet_radiomics(config_path, labels_path, output_dir, force_reprocess=
 
         image_path = find_pet_path(data_root, subject_id)
         if not image_path:
-            logger.warning(f"❌ PET image not found for {subject_id}")
+            logger.warning(f" PET image not found for {subject_id}")
             failed += 1
             failed_subjects.add(subject_id)
             continue
@@ -538,7 +538,7 @@ def extract_pet_radiomics(config_path, labels_path, output_dir, force_reprocess=
         try:
             image, mask = load_pet_image_and_mask(image_path)
             if image is None or mask is None:
-                logger.error(f"❌ Failed to create PET mask for {subject_id}")
+                logger.error(f" Failed to create PET mask for {subject_id}")
                 failed += 1
                 failed_subjects.add(subject_id)
                 continue
@@ -552,7 +552,7 @@ def extract_pet_radiomics(config_path, labels_path, output_dir, force_reprocess=
             successful += 1
 
             feature_count = len([k for k in result.keys() if k not in ['subject_id', 'label', 'image_path']])
-            logger.info(f"✅ Extracted {feature_count} features from {subject_id}")
+            logger.info(f" Extracted {feature_count} features from {subject_id}")
 
             if successful % 10 == 0:
                 save_progress_checkpoint(
@@ -561,10 +561,10 @@ def extract_pet_radiomics(config_path, labels_path, output_dir, force_reprocess=
                     failed_subjects,
                     len(subjects)
                 )
-                logger.info(f"💾 Progress checkpoint saved ({successful}/{len(subjects)} completed)")
+                logger.info(f" Progress checkpoint saved ({successful}/{len(subjects)} completed)")
 
         except Exception as e:
-            logger.error(f"❌ Error processing {subject_id}: {e}")
+            logger.error(f" Error processing {subject_id}: {e}")
             failed += 1
             failed_subjects.add(subject_id)
 
@@ -583,11 +583,11 @@ def extract_pet_radiomics(config_path, labels_path, output_dir, force_reprocess=
             len(subjects)
         )
 
-        logger.info(f"\n💾 Saved {len(all_features)} PET feature sets to {output_path}")
-        logger.info(f"✅ Successful: {successful}, ⏭️ Skipped: {skipped}, ❌ Failed: {failed}")
+        logger.info(f"\n Saved {len(all_features)} PET feature sets to {output_path}")
+        logger.info(f" Successful: {successful}, ⏭️ Skipped: {skipped},  Failed: {failed}")
         return output_path
     else:
-        logger.error("❌ No PET features were successfully extracted")
+        logger.error(" No PET features were successfully extracted")
         return None
 
 def main():
@@ -627,14 +627,14 @@ def main():
             with open(checkpoint_path, 'r') as f:
                 checkpoint_data = json.load(f)
             
-            logger.info(f"📊 Progress Report:")
+            logger.info(f" Progress Report:")
             logger.info(f"   Processed: {len(checkpoint_data['processed_subjects'])} subjects")
             logger.info(f"   Failed: {len(checkpoint_data['failed_subjects'])} subjects")
             logger.info(f"   Total: {checkpoint_data['total_subjects']} subjects")
             logger.info(f"   Progress: {checkpoint_data['progress_percentage']:.1f}%")
             logger.info(f"   Last update: {checkpoint_data['timestamp']}")
         else:
-            logger.info("📊 No checkpoint found - no previous processing detected")
+            logger.info(" No checkpoint found - no previous processing detected")
         return
     
     # Run extraction by modality
@@ -652,11 +652,11 @@ def main():
         )
     
     if output_path:
-        logger.info(f"🎉 Feature extraction completed successfully!")
-        logger.info(f"📁 Results saved to: {output_path}")
-        logger.info(f"📊 To check progress: python {__file__} --modality {args.modality} --labels {args.labels} --output-dir {args.output_dir} --check-progress")
+        logger.info(f" Feature extraction completed successfully!")
+        logger.info(f" Results saved to: {output_path}")
+        logger.info(f" To check progress: python {__file__} --modality {args.modality} --labels {args.labels} --output-dir {args.output_dir} --check-progress")
     else:
-        logger.error("💥 Feature extraction failed!")
+        logger.error(" Feature extraction failed!")
 
 if __name__ == "__main__":
     main() 

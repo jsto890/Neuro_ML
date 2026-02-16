@@ -2,7 +2,7 @@
 
 This directory contains all preprocessing pipelines for converting raw medical imaging data into machine learning-ready formats. The preprocessing pipelines handle DICOM to NIfTI conversion, image registration, normalization, and quality control.
 
-## 📁 Directory Structure
+##  Directory Structure
 
 ```
 Preprocessing/
@@ -38,7 +38,7 @@ Preprocessing/
         └── [other test scripts]
 ```
 
-## 🔄 Preprocessing Workflow
+##  Preprocessing Workflow
 
 ### 1. DICOM to NIfTI Conversion (`01_DCM_TO_NIFTI/`)
 
@@ -158,7 +158,7 @@ python 6_postprocess.py --diagnosis CN
 - **Quality control**: Comprehensive validation and testing
 - **Flexible masking**: Supports different masking strategies
 
-## 🔧 Configuration
+##  Configuration
 
 ### SPECT Pipeline Configuration
 ```bash
@@ -183,7 +183,7 @@ python run_pipeline.py \
 - **`--mask_type`**: Mask type (occipital, whole_brain)
 - **`--isotropic`**: Resample to isotropic 1mm voxels
 
-## 📊 Output Structure
+##  Output Structure
 
 ### DICOM Conversion Output
 ```
@@ -208,7 +208,7 @@ SPECT/
 └── CN_SPECT_PPMI_postprocessed/
 ```
 
-## 🧪 Testing and Validation
+##  Testing and Validation
 
 ### SPECT Pipeline Testing
 ```bash
@@ -232,7 +232,7 @@ python 6_test.py  # Test postprocessing
 - **Intensity validation**: Checks intensity ranges and distributions
 - **Registration validation**: Validates registration quality
 
-## 🚨 Common Issues
+##  Common Issues
 
 ### DICOM Conversion Issues
 1. **File access**: Check file permissions and paths
@@ -249,7 +249,7 @@ python 6_test.py  # Test postprocessing
 2. **Skull stripping**: Verify brain extraction quality
 3. **Normalization**: Check intensity standardisation
 
-## 🔍 Debugging
+##  Debugging
 
 ### Log Files
 - **Conversion logs**: Check DICOM conversion output
@@ -261,7 +261,7 @@ python 6_test.py  # Test postprocessing
 - **Visual inspection**: Check intermediate results visually
 - **Statistical validation**: Verify preprocessing statistics
 
-## 📚 Dependencies
+##  Dependencies
 
 ### External Tools
 - **dcm2niix**: DICOM to NIfTI conversion
@@ -276,7 +276,7 @@ python 6_test.py  # Test postprocessing
 - **scipy**: Scientific computing
 - **pandas**: Data manipulation
 
-## 🚀 Performance Optimization
+##  Performance Optimization
 
 ### Memory Management
 - **Batch processing**: Process files in batches
@@ -288,7 +288,7 @@ python 6_test.py  # Test postprocessing
 - **GPU acceleration**: Use GPU for registration when available
 - **Distributed processing**: Distribute processing across multiple machines
 
-## 📞 Support
+##  Support
 
 For preprocessing issues:
 - Check log files for detailed error messages

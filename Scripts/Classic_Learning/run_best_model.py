@@ -392,18 +392,18 @@ Examples:
         )
         
         if results.get('success', True):
-            print(f"\n✅ Workflow completed successfully!")
-            print(f"📁 Results saved to: {output_path}")
-            print(f"🎯 Primary model: SVM (optimised_svm_model.pkl)")
-            print(f"🔄 Backup model: Ensemble (optimised_ensemble_model.pkl)")
-            print(f"📊 Check workflow_report.txt for detailed results")
+            print(f"\n Workflow completed successfully!")
+            print(f" Results saved to: {output_path}")
+            print(f" Primary model: SVM (optimised_svm_model.pkl)")
+            print(f" Backup model: Ensemble (optimised_ensemble_model.pkl)")
+            print(f" Check workflow_report.txt for detailed results")
         else:
-            print(f"\n❌ Workflow failed: {results.get('error', 'Unknown error')}")
+            print(f"\n Workflow failed: {results.get('error', 'Unknown error')}")
             sys.exit(1)
             
     except Exception as e:
         logger.error(f"Workflow failed with error: {e}")
-        print(f"\n❌ Workflow failed: {e}")
+        print(f"\n Workflow failed: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":

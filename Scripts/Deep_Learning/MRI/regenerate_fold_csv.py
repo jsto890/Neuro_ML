@@ -97,7 +97,7 @@ def regenerate_fold_csv(master_csv, run_timestamp, model_name, fold_num,
     val_df.to_csv(temp_val_csv, index=False)
     test_df.to_csv(temp_test_csv, index=False)
     
-    print("✅ CSV files regenerated successfully!")
+    print(" CSV files regenerated successfully!")
     
     return temp_train_csv, temp_val_csv, temp_test_csv
 

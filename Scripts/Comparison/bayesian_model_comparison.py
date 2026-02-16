@@ -940,12 +940,12 @@ class BayesianModelComparison:
         # PSIS-LOO with stabilizing kwargs to avoid overflow
         try:
             loo = az.loo(idata, pointwise=True)
-            print("✅ LOO computation successful!")
+            print(" LOO computation successful!")
         except Exception as e:
             print(f"Info: LOO failed: {e}; retrying with scale='deviance'")
             try:
                 loo = az.loo(idata, scale='deviance', pointwise=True)
-                print("✅ LOO (deviance scale) computation successful!")
+                print(" LOO (deviance scale) computation successful!")
             except Exception as e2:
                 print(f"Info: Skipping LOO: {e2}")
             loo = None
@@ -2810,9 +2810,9 @@ class BayesianModelComparison:
         try:
             print("Attempting to create visualisations...")
             self.create_visualisations(results, data_dict)
-            print("✅ Visualizations created successfully")
+            print(" Visualizations created successfully")
         except Exception as e:
-            print(f"❌ Error creating visualisations: {e}")
+            print(f" Error creating visualisations: {e}")
             print(f"Error type: {type(e).__name__}")
             import traceback
             print(f"Traceback: {traceback.format_exc()}")
@@ -2829,9 +2829,9 @@ class BayesianModelComparison:
         try:
             print("Attempting to save results...")
             self.save_results(results, data_dict)
-            print("✅ Results saved successfully")
+            print(" Results saved successfully")
         except Exception as e:
-            print(f"❌ Error saving results: {e}")
+            print(f" Error saving results: {e}")
             print(f"Error type: {type(e).__name__}")
             import traceback
             print(f"Traceback: {traceback.format_exc()}")
@@ -2850,7 +2850,7 @@ class BayesianModelComparison:
         print("="*60)
         
         if results.accuracy_results:
-            print("\n📊 Hierarchical Accuracy Results:")
+            print("\n Hierarchical Accuracy Results:")
             models = results.accuracy_results['models']
             means = results.accuracy_results['accuracy_means']
             ci_lower = results.accuracy_results['accuracy_ci_lower']
@@ -2860,13 +2860,13 @@ class BayesianModelComparison:
                 print(f"  {model}: {means[i]:.4f} ({ci_lower[i]:.4f}, {ci_upper[i]:.4f})")
             
             if 'model_comparisons' in results.accuracy_results:
-                print("\n🔍 Model Comparison Probabilities:")
+                print("\n Model Comparison Probabilities:")
                 comp_df = results.accuracy_results['model_comparisons']
                 for _, row in comp_df.iterrows():
                     print(f"  P({row['model_a']} > {row['model_b']}) = {row['prob_a_better']:.4f}")
         
         if results.stacking_results:
-            print(f"\n🤝 Ensemble Results:")
+            print(f"\n Ensemble Results:")
             
             # Individual model accuracies
             if 'individual_accuracies' in results.stacking_results:
@@ -2876,7 +2876,7 @@ class BayesianModelComparison:
             
             # Ensemble comparison
             if 'ensemble_results' in results.stacking_results:
-                print("\n  📊 Ensemble Comparison:")
+                print("\n   Ensemble Comparison:")
                 ensemble_results = results.stacking_results['ensemble_results']
                 
                 if 'equal_weight' in ensemble_results:
@@ -2922,7 +2922,7 @@ class BayesianModelComparison:
                     best_auc = auc
                     best_name = name
             if best_name is not None:
-                print("\n🏅 Best Ensemble:")
+                print("\n Best Ensemble:")
                 print(f"  {best_name.replace('_',' ').title()}: {best_acc:.4f} (AUC: {best_auc:.4f})")
         
         print("="*60)

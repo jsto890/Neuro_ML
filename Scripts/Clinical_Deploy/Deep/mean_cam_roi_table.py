@@ -215,7 +215,7 @@ def main() -> None:
     with open(str(Path(out_csv).with_suffix(".meta.json")), "w") as f:
         json.dump(meta, f, indent=2)
 
-    print(f"✓ Wrote ROI table: {out_csv}")
+    print(f" Wrote ROI table: {out_csv}")
 
 
 if __name__ == "__main__":

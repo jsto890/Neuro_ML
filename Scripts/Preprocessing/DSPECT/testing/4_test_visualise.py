@@ -25,11 +25,11 @@ try:
             subject_id = f
             break
 except FileNotFoundError:
-    print(f"❌ Could not find masked data directory. Looked in: {masked_base_dir}")
+    print(f" Could not find masked data directory. Looked in: {masked_base_dir}")
     exit(1)
 
 if not subject_id:
-    print(f"❌ No subject found in {masked_base_dir}")
+    print(f" No subject found in {masked_base_dir}")
     exit(1)
 
 print(f"INFO: Testing with subject: {subject_id}")
@@ -83,14 +83,14 @@ try:
     plt.tight_layout()
     plt.show()
 
-    print(f"\n✅ Masking validation:")
+    print(f"\n Masking validation:")
     if after_coverage < before_coverage and after_coverage > 5:
-        print("   ✓ Masking appears successful")
+        print("    Masking appears successful")
     else:
-        print("   ⚠️ Masking results may need review")
+        print("   ️ Masking results may need review")
 
 except FileNotFoundError as e:
-    print(f"\n❌ File not found: {e}")
+    print(f"\n File not found: {e}")
     print("Please ensure you have run steps 3 and 4.")
 except Exception as e:
-    print(f"\n❌ An unexpected error occurred: {e}")
+    print(f"\n An unexpected error occurred: {e}")

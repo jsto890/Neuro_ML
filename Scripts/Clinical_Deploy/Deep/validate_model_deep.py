@@ -517,7 +517,7 @@ def main():
     json_path = out_dir / 'deep_validation_summary.json'
     with open(json_path, 'w') as f:
         json.dump(summary, f, indent=2)
-    print(f"✓ Validation JSON saved to: {json_path}")
+    print(f" Validation JSON saved to: {json_path}")
 
     md = f"""
 # Deep Model Validation (Multiclass)
@@ -538,7 +538,7 @@ Confusion Matrix (rows=actual, cols=pred):
     md_path = out_dir / 'deep_validation_report.md'
     with open(md_path, 'w') as f:
         f.write(md)
-    print(f"✓ Validation report saved to: {md_path}")
+    print(f" Validation report saved to: {md_path}")
 
 
 if __name__ == '__main__':

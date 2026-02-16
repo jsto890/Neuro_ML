@@ -774,7 +774,7 @@ def main():
     create_evaluation_plots(predictions, probabilities, labels, metrics, args.output_dir, 
                            model_name=args.model_name, image_type="sMRI")
     
-    print(f"\n✅ Evaluation completed! Results saved to: {args.output_dir}")
+    print(f"\n Evaluation completed! Results saved to: {args.output_dir}")
     print(f"   - NPY files: predictions.npy, probabilities.npy, labels.npy")
     print(f"   - Evaluation plots: model_evaluation_analysis.png")
     print(f"   - Metrics: evaluation_metrics.json")

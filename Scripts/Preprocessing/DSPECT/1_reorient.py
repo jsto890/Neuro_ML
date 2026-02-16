@@ -33,7 +33,7 @@ if args.diagnosis == 'CN':
 elif args.diagnosis == 'PD':
     input_dir = "/Users/jacksonschofield/Desktop/SPECT/PD_SPECT_PPMI_NIfTI"
 else:
-    print(f"❌ Error: Invalid diagnosis {args.diagnosis}")
+    print(f" Error: Invalid diagnosis {args.diagnosis}")
     exit(1)
 
 # Create dedicated reoriented output directory
@@ -48,7 +48,7 @@ print("========================\n")
 
 # Verify input directory exists
 if not os.path.exists(input_dir):
-    print(f"❌ Error: Input directory does not exist: {input_dir}")
+    print(f" Error: Input directory does not exist: {input_dir}")
     print("Please check that the path is correct and the drive is mounted.")
     exit(1)
 
@@ -115,8 +115,8 @@ def reorient_to_RAS(nifti_path, output_path, isotropic=False):
     reoriented_img = nib.Nifti1Image(data, new_affine)
     nib.save(reoriented_img, output_path)
 
-print(f"\n🔄 Processing {args.diagnosis} subjects from: {input_dir}")
-print(f"📁 Output directory: {output_dir}\n")
+print(f"\n Processing {args.diagnosis} subjects from: {input_dir}")
+print(f" Output directory: {output_dir}\n")
 
 # Process all subjects
 for subject in sorted(os.listdir(input_dir)):
@@ -181,5 +181,5 @@ for subject in sorted(os.listdir(input_dir)):
     except Exception as e:
         print(f"[ERROR] {subject}: failed: {e}")
 
-print(f"\n✅ Reorientation complete! Output saved to: {output_dir}")
-print(f"📁 Each subject now has a dedicated folder with reoriented data and all original files.")
+print(f"\n Reorientation complete! Output saved to: {output_dir}")
+print(f" Each subject now has a dedicated folder with reoriented data and all original files.")

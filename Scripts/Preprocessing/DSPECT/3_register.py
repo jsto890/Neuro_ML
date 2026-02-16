@@ -34,10 +34,10 @@ input_dir = f"/Users/jacksonschofield/Desktop/SPECT/{args.diagnosis}_SPECT_PPMI_
 template_path = "/Users/jacksonschofield/Desktop/P4P/Templates/SPECT/symFPCITtemplate_MNI_norm.nii"
 output_base = f"/Users/jacksonschofield/Desktop/SPECT/{args.diagnosis}_SPECT_PPMI_registered"
 
-print(f"\n🔄 Processing {args.diagnosis} subjects")
-print(f"📁 Input directory: {input_dir}")
-print(f"📁 Output directory: {output_base}")
-print(f"🎯 Template: {template_path}\n")
+print(f"\n Processing {args.diagnosis} subjects")
+print(f" Input directory: {input_dir}")
+print(f" Output directory: {output_base}")
+print(f" Template: {template_path}\n")
 
 # Create output directory
 os.makedirs(output_base, exist_ok=True)
@@ -62,7 +62,7 @@ for subject_id in subject_dirs:
     if subject_id.startswith("._"):
         continue  # skip macOS junk
 
-    print(f"\n🔄 Registering {subject_id}")
+    print(f"\n Registering {subject_id}")
     subj_input_dir = os.path.join(input_dir, subject_id)
     output_dir = os.path.join(output_base, subject_id)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -108,11 +108,11 @@ for subject_id in subject_dirs:
             force_resample=True,
         )
         resampled.to_filename(output_nii)
-        print(f"✅ Saved: {output_nii}")
+        print(f" Saved: {output_nii}")
 
     except BoundingBoxError as e:
-        print(f"❌ BoundingBoxError for {subject_id}: {e}")
-        print("🛠 Trying fallback: recenter affine...")
+        print(f" BoundingBoxError for {subject_id}: {e}")
+        print(" Trying fallback: recenter affine...")
         try:
             recentered_img = recenter_affine(img)
             resampled = resample_to_img(
@@ -123,24 +123,24 @@ for subject_id in subject_dirs:
                 force_resample=True
             )
             resampled.to_filename(output_nii)
-            print(f"✅ Saved after recentering: {output_nii}")
+            print(f" Saved after recentering: {output_nii}")
         except Exception as e2:
-            print(f"❌ Recentered registration failed for {subject_id}: {e2}")
+            print(f" Recentered registration failed for {subject_id}: {e2}")
             failed_subjects.append(subject_id)
 
     except Exception as e:
-        print(f"❌ Unexpected error for {subject_id}: {e}")
+        print(f" Unexpected error for {subject_id}: {e}")
         failed_subjects.append(subject_id)
 
 # === SUMMARY ===
 if failed_subjects:
     print("\n======================")
-    print("❌ FAILED SUBJECTS")
+    print(" FAILED SUBJECTS")
     print("======================")
     for sid in failed_subjects:
         print(sid)
 else:
-    print("\n✅ All subjects registered successfully.")
+    print("\n All subjects registered successfully.")
 
-print(f"\n✅ Registration complete! Output saved to: {output_base}")
-print(f"📁 Each subject now has a dedicated folder with registered data and all original files.")
+print(f"\n Registration complete! Output saved to: {output_base}")
+print(f" Each subject now has a dedicated folder with registered data and all original files.")

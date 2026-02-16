@@ -22,15 +22,15 @@ base_dir = "/Users/jacksonschofield/Desktop/SPECT"
 
 def validate_step(step_name, input_dir, expected_suffix, min_subjects=1):
     """Validate a preprocessing step"""
-    print(f"\n🔍 Validating {step_name}...")
+    print(f"\n Validating {step_name}...")
     
     if not os.path.exists(input_dir):
-        print(f"   ❌ Directory not found: {input_dir}")
+        print(f"    Directory not found: {input_dir}")
         return False
     
     subjects = [d for d in os.listdir(input_dir) if d.startswith('Subject_')]
     if len(subjects) < min_subjects:
-        print(f"   ❌ Too few subjects: {len(subjects)} < {min_subjects}")
+        print(f"    Too few subjects: {len(subjects)} < {min_subjects}")
         return False
     
     valid_subjects = 0
@@ -52,26 +52,26 @@ def validate_step(step_name, input_dir, expected_suffix, min_subjects=1):
                 if np.count_nonzero(data) > 1000:  # Reasonable brain coverage
                     valid_subjects += 1
                 else:
-                    print(f"   ⚠️ {subject}: Low brain coverage")
+                    print(f"   ️ {subject}: Low brain coverage")
             except Exception as e:
-                print(f"   ❌ {subject}: {e}")
+                print(f"    {subject}: {e}")
         else:
-            print(f"   ❌ {subject}: Expected file {expected_file} not found")
+            print(f"    {subject}: Expected file {expected_file} not found")
     
-    print(f"   ✅ {valid_subjects}/{len(subjects[:5])} subjects validated")
+    print(f"    {valid_subjects}/{len(subjects[:5])} subjects validated")
     return valid_subjects > 0
 
 def validate_normalization(input_dir):
     """Special validation for normalization step"""
-    print(f"\n🔍 Validating Normalization (SPECT-specific)...")
+    print(f"\n Validating Normalization (SPECT-specific)...")
     
     if not os.path.exists(input_dir):
-        print(f"   ❌ Directory not found: {input_dir}")
+        print(f"    Directory not found: {input_dir}")
         return False
     
     subjects = [d for d in os.listdir(input_dir) if d.startswith('Subject_')]
     if len(subjects) == 0:
-        print(f"   ❌ No subjects found")
+        print(f"    No subjects found")
         return False
     
     valid_subjects = 0
@@ -86,7 +86,7 @@ def validate_normalization(input_dir):
             non_zero_data = data[data > 0]
             
             if len(non_zero_data) == 0:
-                print(f"   ❌ {subject}: No non-zero voxels")
+                print(f"    {subject}: No non-zero voxels")
                 continue
                 
             mean_val = np.mean(non_zero_data)
@@ -95,27 +95,27 @@ def validate_normalization(input_dir):
             # Check if normalization looks reasonable (broad bounds)
             if 0.01 < mean_val < 20.0 and std_val > 0.01:
                 valid_subjects += 1
-                print(f"   ✅ {subject}: mean={mean_val:.3f}, std={std_val:.3f}")
+                print(f"    {subject}: mean={mean_val:.3f}, std={std_val:.3f}")
             else:
-                print(f"   ⚠️ {subject}: mean={mean_val:.3f}, std={std_val:.3f} (suspicious values)")
+                print(f"   ️ {subject}: mean={mean_val:.3f}, std={std_val:.3f} (suspicious values)")
                 
         except Exception as e:
-            print(f"   ❌ {subject}: {e}")
+            print(f"    {subject}: {e}")
     
-    print(f"   ✅ {valid_subjects}/{len(subjects[:3])} subjects validated")
+    print(f"    {valid_subjects}/{len(subjects[:3])} subjects validated")
     return valid_subjects > 0
 
 def validate_masking(input_dir):
     """Special validation for masking step"""
-    print(f"\n🔍 Validating Masking (SPECT-specific)...")
+    print(f"\n Validating Masking (SPECT-specific)...")
     
     if not os.path.exists(input_dir):
-        print(f"   ❌ Directory not found: {input_dir}")
+        print(f"    Directory not found: {input_dir}")
         return False
     
     subjects = [d for d in os.listdir(input_dir) if d.startswith('Subject_')]
     if len(subjects) == 0:
-        print(f"   ❌ No subjects found")
+        print(f"    No subjects found")
         return False
     
     valid_subjects = 0
@@ -131,28 +131,28 @@ def validate_masking(input_dir):
             
             if 1 < coverage < 70:  # Broader SPECT coverage window to avoid false negatives
                 valid_subjects += 1
-                print(f"   ✅ {subject}: {coverage:.1f}% coverage")
+                print(f"    {subject}: {coverage:.1f}% coverage")
             else:
-                print(f"   ⚠️ {subject}: {coverage:.1f}% coverage (suspicious)")
+                print(f"   ️ {subject}: {coverage:.1f}% coverage (suspicious)")
                 
         except Exception as e:
-            print(f"   ❌ {subject}: {e}")
+            print(f"    {subject}: {e}")
     
-    print(f"   ✅ {valid_subjects}/{len(subjects[:3])} subjects validated")
+    print(f"    {valid_subjects}/{len(subjects[:3])} subjects validated")
     return valid_subjects > 0
 
 # Add ML-specific validation
 def validate_ml_readiness(input_dir, step_name):
     """Validate data is ready for machine learning"""
-    print(f"\n🔍 Validating ML Readiness for {step_name}...")
+    print(f"\n Validating ML Readiness for {step_name}...")
     
     if not os.path.exists(input_dir):
-        print(f"   ❌ Directory not found: {input_dir}")
+        print(f"    Directory not found: {input_dir}")
         return False
     
     subjects = [d for d in os.listdir(input_dir) if d.startswith('Subject_')]
     if len(subjects) == 0:
-        print(f"   ❌ No subjects found")
+        print(f"    No subjects found")
         return False
     
     valid_subjects = 0
@@ -167,7 +167,7 @@ def validate_ml_readiness(input_dir, step_name):
         file_path = os.path.join(subject_dir, expected_file)
         
         if not os.path.exists(file_path):
-            print(f"   ❌ {subject}: {expected_file} not found")
+            print(f"    {subject}: {expected_file} not found")
             continue
         
         try:
@@ -213,25 +213,25 @@ def validate_ml_readiness(input_dir, step_name):
             
             if not issues:
                 valid_subjects += 1
-                print(f"   ✅ {subject}: ML-ready (shape={data.shape}, coverage={coverage:.1f}%, mean={np.mean(non_zero_data):.3f}, std={np.std(non_zero_data):.3f})")
+                print(f"    {subject}: ML-ready (shape={data.shape}, coverage={coverage:.1f}%, mean={np.mean(non_zero_data):.3f}, std={np.std(non_zero_data):.3f})")
             else:
-                print(f"   ⚠️ {subject}: Issues: {', '.join(issues)}")
+                print(f"   ️ {subject}: Issues: {', '.join(issues)}")
                 
         except Exception as e:
-            print(f"   ❌ {subject}: {e}")
+            print(f"    {subject}: {e}")
     
     # Check consistency across subjects
     if len(set(shapes)) > 1:
-        print(f"   ⚠️ Inconsistent shapes: {set(shapes)}")
+        print(f"   ️ Inconsistent shapes: {set(shapes)}")
     else:
-        print(f"   ✅ All subjects have consistent shape: {shapes[0] if shapes else 'None'}")
+        print(f"    All subjects have consistent shape: {shapes[0] if shapes else 'None'}")
     
     if len(intensity_ranges) > 0:
         means = [r[2] for r in intensity_ranges]
         stds = [r[3] for r in intensity_ranges]
-        print(f"   📊 Intensity ranges: mean={np.mean(means):.3f}±{np.std(means):.3f}, std={np.mean(stds):.3f}±{np.std(stds):.3f}")
+        print(f"    Intensity ranges: mean={np.mean(means):.3f}±{np.std(means):.3f}, std={np.mean(stds):.3f}±{np.std(stds):.3f}")
     
-    print(f"   ✅ {valid_subjects}/{len(subjects[:5])} subjects ML-ready")
+    print(f"    {valid_subjects}/{len(subjects[:5])} subjects ML-ready")
     return valid_subjects > 0
 
 # Update main validation to include ML checks
@@ -239,7 +239,7 @@ def main():
     # Use Desktop SPECT folder structure
     spect_base = base_dir
     
-    print(f"🚀 DSPECT Pipeline Validation for {args.diagnosis}")
+    print(f" DSPECT Pipeline Validation for {args.diagnosis}")
     print("=" * 60)
     
     all_valid = True
@@ -284,7 +284,7 @@ def main():
     
     # ML Readiness Validation
     print("\n" + "=" * 60)
-    print("🔍 ML READINESS VALIDATION")
+    print(" ML READINESS VALIDATION")
     print("=" * 60)
     
     ml_final_valid = validate_ml_readiness(os.path.join(spect_base, f"{args.diagnosis}_SPECT_PPMI_postprocessed"), "Final Output")
@@ -293,17 +293,17 @@ def main():
     
     print("\n" + "=" * 60)
     if all_valid:
-        print("✅ All preprocessing steps validated successfully!")
-        print("🎯 Your DSPECT data is ready for machine learning!")
-        print("\n📊 ML Readiness Summary:")
-        print("   ✓ Consistent shapes across subjects")
-        print("   ✓ Appropriate intensity ranges")
-        print("   ✓ No negative values or artifacts")
-        print("   ✓ Reasonable brain coverage")
-        print("   ✓ Proper normalization")
+        print(" All preprocessing steps validated successfully!")
+        print(" Your DSPECT data is ready for machine learning!")
+        print("\n ML Readiness Summary:")
+        print("    Consistent shapes across subjects")
+        print("    Appropriate intensity ranges")
+        print("    No negative values or artifacts")
+        print("    Reasonable brain coverage")
+        print("    Proper normalization")
     else:
-        print("❌ Some preprocessing steps failed validation.")
-        print("🔧 Please check the failed steps and re-run the pipeline.")
+        print(" Some preprocessing steps failed validation.")
+        print(" Please check the failed steps and re-run the pipeline.")
 
 if __name__ == "__main__":
     main() 

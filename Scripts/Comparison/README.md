@@ -2,7 +2,7 @@
 
 This directory contains tools for comparing different machine learning models and approaches using statistical methods, including Bayesian analysis, performance comparison, and model evaluation.
 
-## 📁 Directory Structure
+##  Directory Structure
 
 ```
 Comparison/
@@ -12,7 +12,7 @@ Comparison/
 └── run_bayesian_analysis.py      # Bayesian analysis pipeline
 ```
 
-## 🔬 Bayesian Model Comparison
+##  Bayesian Model Comparison
 
 ### Bayesian Analysis (`bayesian_model_comparison.py`)
 
@@ -154,7 +154,7 @@ python run_bayesian_analysis.py \
 5. **Visualization**: Generate comparison plots
 6. **Report Generation**: Create comprehensive reports
 
-## 📊 Statistical Methods
+##  Statistical Methods
 
 ### Bayesian Statistics
 
@@ -196,7 +196,7 @@ python run_bayesian_analysis.py \
 - **Glass's delta**: Alternative effect size measure
 - **Confidence intervals**: Effect size uncertainty
 
-## 📈 Visualization
+##  Visualization
 
 ### Performance Comparison Plots
 - **Box plots**: Performance distribution comparison
@@ -216,7 +216,7 @@ python run_bayesian_analysis.py \
 - **Credible intervals**: Uncertainty visualisation
 - **Bayes factor plots**: Model comparison visualisation
 
-## 🔧 Configuration
+##  Configuration
 
 ### Bayesian Configuration
 ```yaml
@@ -279,7 +279,7 @@ comparison:
     heatmaps: true
 ```
 
-## 📊 Output Structure
+##  Output Structure
 
 ### Bayesian Analysis Output
 ```
@@ -321,7 +321,7 @@ comparison_results/
     └── summary.json              # Summary results
 ```
 
-## 🚨 Common Issues
+##  Common Issues
 
 ### Bayesian Analysis Issues
 1. **Convergence problems**: Check MCMC convergence
@@ -341,7 +341,7 @@ comparison_results/
 3. **Figure size**: Optimize figure sizes
 4. **Labels**: Include clear labels and legends
 
-## 🔍 Debugging
+##  Debugging
 
 ### Bayesian Analysis Debugging
 - **Check convergence**: Use trace plots and R-hat
@@ -355,7 +355,7 @@ comparison_results/
 - **Validate effect sizes**: Check effect size calculations
 - **Test with known data**: Use datasets with known results
 
-## 📚 Dependencies
+##  Dependencies
 
 ### Bayesian Analysis
 - **PyMC**: Probabilistic programming
@@ -375,7 +375,7 @@ comparison_results/
 - **plotly**: Interactive plotting
 - **bokeh**: Interactive visualisation
 
-## 🚀 Performance Optimization
+##  Performance Optimization
 
 ### Bayesian Analysis Optimization
 - **Parallel sampling**: Use multiple chains
@@ -389,7 +389,7 @@ comparison_results/
 - **Memory mapping**: Use memory-mapped files
 - **Batch processing**: Process data in batches
 
-## 📞 Support
+##  Support
 
 For comparison analysis issues:
 - Check input data format and quality

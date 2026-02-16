@@ -32,11 +32,11 @@ input_dir = f"/Users/jacksonschofield/Desktop/SPECT/{args.diagnosis}_SPECT_PPMI_
 output_dir = f"/Users/jacksonschofield/Desktop/SPECT/{args.diagnosis}_SPECT_PPMI_finalised"
 Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-print(f"\n🔄 Processing {args.diagnosis} subjects")
-print(f"📁 Input directory: {input_dir}")
-print(f"📁 Output directory: {output_dir}")
-print(f"📐 Target shape: {args.shape}")
-print(f"⚖️ Intensity normalisation: {'ON' if args.intensity_norm else 'OFF'}\n")
+print(f"\n Processing {args.diagnosis} subjects")
+print(f" Input directory: {input_dir}")
+print(f" Output directory: {output_dir}")
+print(f" Target shape: {args.shape}")
+print(f"️ Intensity normalisation: {'ON' if args.intensity_norm else 'OFF'}\n")
 
 def pad_or_crop(data, target_shape):
     """Pad or crop a 3D numpy array to the target shape."""
@@ -112,20 +112,20 @@ for subject_id in subjects:
         # --- Save ---
         final_img = nib.Nifti1Image(final_data, img.affine, img.header)
         nib.save(final_img, output_nii)
-        print(f"✅ {subject_id}: Saved {output_nii}")
+        print(f" {subject_id}: Saved {output_nii}")
     except Exception as e:
-        print(f"❌ {subject_id}: {e}")
+        print(f" {subject_id}: {e}")
         failed_subjects.append(subject_id)
 
 # --- Summary ---
 if failed_subjects:
     print("\n======================")
-    print("❌ FAILED SUBJECTS")
+    print(" FAILED SUBJECTS")
     print("======================")
     for sid in failed_subjects:
         print(sid)
 else:
-    print("\n✅ All subjects finalised successfully.")
+    print("\n All subjects finalised successfully.")
 
-print(f"\n✅ Finalization complete! Output saved to: {output_dir}")
-print(f"📁 Each subject now has a dedicated folder with finalised data and all original files.")
+print(f"\n Finalization complete! Output saved to: {output_dir}")
+print(f" Each subject now has a dedicated folder with finalised data and all original files.")

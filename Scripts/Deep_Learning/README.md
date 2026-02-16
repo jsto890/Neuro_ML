@@ -2,7 +2,7 @@
 
 This directory contains deep learning approaches for neurodegenerative disease detection using raw medical imaging data. The deep learning pipeline includes 3D CNN architectures, Vision Transformers, and comprehensive evaluation tools.
 
-## 📁 Directory Structure
+##  Directory Structure
 
 ```
 Deep_Learning/
@@ -47,7 +47,7 @@ Deep_Learning/
     └── regenerate_plots.py
 ```
 
-## 🧠 Model Architectures
+##  Model Architectures
 
 ### Custom Models (Created by P4P Team)
 
@@ -117,7 +117,7 @@ models = {
 }
 ```
 
-## 🚀 Training Pipeline
+##  Training Pipeline
 
 ### Training Script (`train_*.py`)
 
@@ -178,7 +178,7 @@ dataloader = DataLoader(
 )
 ```
 
-## 📊 Model Evaluation
+##  Model Evaluation
 
 ### Evaluation Script (`evaluate_model.py`)
 
@@ -209,7 +209,7 @@ python evaluate_model.py \
 - **PR-AUC**: Area under precision-recall curve
 - **Matthews Correlation Coefficient**: Balanced accuracy measure
 
-## 🔍 Model Interpretability
+##  Model Interpretability
 
 ### Grad-CAM (`gradcam.py`)
 
@@ -235,7 +235,7 @@ python visualise_gradcam.py \
 - **Integrated gradients**: More stable saliency maps
 - **Occlusion sensitivity**: Systematic occlusion analysis
 
-## 🎨 Visualization Tools
+##  Visualization Tools
 
 ### Plot Regeneration (`regenerate_plots.py`)
 
@@ -260,7 +260,7 @@ python regenerate_plots.py \
 - **Overlay display**: Show activation maps overlaid on images
 - **Animation**: Animate through image slices
 
-## 🔧 Configuration
+##  Configuration
 
 ### Hardware Optimization (`config_hardware_optimised.yaml`)
 
@@ -297,7 +297,7 @@ transformer:
   attention_dropout: 0.1
 ```
 
-## 📈 Training Monitoring
+##  Training Monitoring
 
 ### Logging
 - **TensorBoard**: Real-time training monitoring
@@ -316,7 +316,7 @@ transformer:
 - **Best model**: Save best performing model
 - **Resume training**: Resume from checkpoints
 
-## 🚨 Common Issues
+##  Common Issues
 
 ### Training Issues
 1. **Memory errors**: Reduce batch size or use gradient accumulation
@@ -336,7 +336,7 @@ transformer:
 3. **Driver issues**: Update GPU drivers
 4. **Performance**: Optimize hardware configuration
 
-## 🔍 Debugging
+##  Debugging
 
 ### Training Debugging
 - **Check data loading**: Verify data loader output
@@ -350,7 +350,7 @@ transformer:
 - **Memory profiling**: Profile memory usage
 - **Performance profiling**: Profile training speed
 
-## 📚 Dependencies
+##  Dependencies
 
 ### Core Libraries
 - **PyTorch**: Deep learning framework
@@ -365,7 +365,7 @@ transformer:
 - **wandb**: Weights & Biases
 - **tensorboard**: TensorBoard logging
 
-## 🚀 Performance Optimization
+##  Performance Optimization
 
 ### Training Optimization
 - **Mixed precision**: Use FP16 for faster training
@@ -379,7 +379,7 @@ transformer:
 - **Data streaming**: Stream data from disk
 - **Memory mapping**: Use memory-mapped files
 
-## 📞 Support
+##  Support
 
 For deep learning issues:
 - Check GPU memory and CUDA compatibility

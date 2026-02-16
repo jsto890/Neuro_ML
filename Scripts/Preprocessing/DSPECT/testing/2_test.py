@@ -24,11 +24,11 @@ try:
             subject_id = f
             break
 except FileNotFoundError:
-    print(f"❌ Could not find normalised data directory. Looked in: {normalised_base_dir}")
+    print(f" Could not find normalised data directory. Looked in: {normalised_base_dir}")
     exit(1)
 
 if not subject_id:
-    print(f"❌ No subject found in {normalised_base_dir}")
+    print(f" No subject found in {normalised_base_dir}")
     exit(1)
 
 print(f"INFO: Testing with subject: {subject_id}")
@@ -57,7 +57,7 @@ try:
     before_stats = get_stats(before_path)
     after_stats = get_stats(after_path)
 
-    print(f"\n📊 SPECT Normalization Quality Check for {subject_id}_RAS.nii.gz\n")
+    print(f"\n SPECT Normalization Quality Check for {subject_id}_RAS.nii.gz\n")
     print(f"{'Metric':<15} {'Before':>18} {'After':>18}")
     print("-" * 55)
     
@@ -68,21 +68,21 @@ try:
     print(f"{'shape':<15} {str(before_stats['shape']):>18} {str(after_stats['shape']):>18}")
     print(f"{'non_zero_count':<15} {before_stats['non_zero_count']:>18,} {after_stats['non_zero_count']:>18,}")
     
-    print(f"\n✅ Normalization validation:")
+    print(f"\n Normalization validation:")
     if after_stats['non_zero_mean'] > 0 and after_stats['non_zero_mean'] < 10:
-        print("   ✓ Reference region normalization appears successful")
+        print("    Reference region normalization appears successful")
     elif after_stats['max'] <= 1.0 and after_stats['min'] >= 0.0:
-        print("   ✓ Percentile normalization appears successful")
+        print("    Percentile normalization appears successful")
     else:
-        print("   ⚠️ Normalization results may need review")
+        print("   ️ Normalization results may need review")
     
     if after_stats['std'] > 0:
-        print("   ✓ Standard deviation is non-zero")
+        print("    Standard deviation is non-zero")
     else:
-        print("   ❌ Standard deviation is zero - normalization may have failed")
+        print("    Standard deviation is zero - normalization may have failed")
 
 except FileNotFoundError as e:
-    print(f"\n❌ File not found: {e}")
+    print(f"\n File not found: {e}")
     print("Please ensure you have run steps 1 and 2.")
 except Exception as e:
-    print(f"\n❌ An unexpected error occurred: {e}")
+    print(f"\n An unexpected error occurred: {e}")

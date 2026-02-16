@@ -18,7 +18,7 @@ print(f"INFO: Using data root: {data_root}")
 def find_first_valid_subject_file(base_dir):
     """Finds the first valid (non-empty) registered subject file."""
     if not os.path.isdir(base_dir):
-        print(f"❌ Base directory not found: {base_dir}")
+        print(f" Base directory not found: {base_dir}")
         return None, None
     
     for subject_dir in sorted(os.listdir(base_dir)):
@@ -36,7 +36,7 @@ def find_first_valid_subject_file(base_dir):
                     else:
                         print(f"WARN: Skipping empty registered file for subject: {subject_dir}")
                         
-    print(f"❌ Could not find any valid (non-empty) registered files in: {base_dir}")
+    print(f" Could not find any valid (non-empty) registered files in: {base_dir}")
     return None, None
 
 # === CONFIG ===
@@ -59,7 +59,7 @@ except NameError:
     # __file__ is not defined in some interactive environments, assume CWD is project root
     template_path = "Templates/SPECT/symFPCITtemplate_MNI_norm.nii"
 
-print(f"\n🧪 Registration Quality Test for {subject_id}\n")
+print(f"\n Registration Quality Test for {subject_id}\n")
 print(f"Found registered file: {registered_path}")
 print(f"Using template file: {template_path}\n")
 
@@ -92,10 +92,10 @@ try:
     print(f"{'Min Intensity':<18} {reg_info['min']:>18.4f} {tmpl_info['min']:>18.4f}")
 
     if reg_info["nonzero_voxels"] < 1000:
-        print("\n⚠️ WARNING: Too few non-zero voxels. This might indicate a failed registration.")
+        print("\n️ WARNING: Too few non-zero voxels. This might indicate a failed registration.")
 
 except FileNotFoundError as e:
-    print(f"\n❌ File not found: {e}")
+    print(f"\n File not found: {e}")
     print("Please ensure that step 3 (registration) has been run and that the paths are correct.")
 except Exception as e:
-    print(f"\n❌ An unexpected error occurred: {e}")
+    print(f"\n An unexpected error occurred: {e}")
