@@ -14,7 +14,7 @@ summary panel in a report/manuscript.
 import argparse
 import os
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
 import numpy as np
 
@@ -64,6 +64,70 @@ def _find_inputs(input_root: str, pattern: str) -> List[str]:
         raise ValueError(f"--input_root is not a directory: {input_root}")
     hits = sorted([str(x) for x in p.rglob(pattern) if x.is_file()])
     return hits
+
+
+def _affine_axis_dominance(aff: np.ndarray) -> float:
+    """
+    Return a score in [0,1] where 1 means the affine's rotation part is close to axis-aligned
+    (one dominant axis per column), and lower means more slanted/sheared.
+    """
+    m = np.asarray(aff[:3, :3], dtype=np.float64)
+    # column scales
+    scales = np.linalg.norm(m, axis=0)
+    scales = np.where(scales < 1e-12, 1.0, scales)
+    n = np.abs(m / scales)  # normalised direction cosines
+    col_max = np.max(n, axis=0)  # dominant axis per column
+    return float(np.min(col_max))
+
+
+def _axcodes(aff: np.ndarray) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    try:
+        return nib.orientations.aff2axcodes(aff)  # type: ignore
+    except Exception:
+        return (None, None, None)
+
+
+def _qc_filter_paths(
+    paths: List[str],
+    ref_affine: np.ndarray,
+    min_axis_dominance: float,
+    max_trans_mm: float,
+    require_same_axcodes: bool,
+) -> Tuple[List[str], List[Tuple[str, str]]]:
+    """
+    Returns (keep_paths, excluded) where excluded is list of (path, reason).
+    """
+    keep: List[str] = []
+    excluded: List[Tuple[str, str]] = []
+    ref_aff = np.asarray(ref_affine, dtype=np.float64)
+    ref_dom = _affine_axis_dominance(ref_aff)
+    ref_axes = _axcodes(ref_aff)
+    ref_t = ref_aff[:3, 3]
+
+    for p in paths:
+        try:
+            img = nib.load(p)
+            aff = np.asarray(img.affine, dtype=np.float64)
+        except Exception as e:
+            excluded.append((p, f"load_failed:{e}"))
+            continue
+        dom = _affine_axis_dominance(aff)
+        axes = _axcodes(aff)
+        t = aff[:3, 3]
+        trans = float(np.linalg.norm(t - ref_t))
+
+        if require_same_axcodes and (axes != ref_axes):
+            excluded.append((p, f"axcodes_mismatch:{axes}!=ref{ref_axes}"))
+            continue
+        if dom < float(min_axis_dominance):
+            excluded.append((p, f"low_axis_dominance:{dom:.4f}< {min_axis_dominance:.4f} (ref {ref_dom:.4f})"))
+            continue
+        if trans > float(max_trans_mm):
+            excluded.append((p, f"translation_delta_mm:{trans:.2f}> {max_trans_mm:.2f}"))
+            continue
+        keep.append(p)
+
+    return keep, excluded
 
 
 def _stack_mean(paths: List[str], normalise_each: bool = False) -> Tuple[nib.Nifti1Image, np.ndarray]:
@@ -142,6 +206,11 @@ def main() -> None:
     ap.add_argument("--output_dir", required=True, type=str, help="Absolute output directory.")
     ap.add_argument("--name", type=str, default="cam_mean", help="Output name prefix.")
     ap.add_argument("--base_nifti", type=str, default=None, help="Optional base anatomical NIfTI for overlay (will be resampled to CAM grid if needed).")
+    ap.add_argument("--qc_affine", action="store_true", help="Enable affine QC to exclude slanted/wrong-grid inputs before averaging.")
+    ap.add_argument("--qc_ref_nifti", type=str, default=None, help="Optional reference NIfTI whose affine defines the expected orientation/translation.")
+    ap.add_argument("--qc_min_axis_dominance", type=float, default=0.995, help="Minimum axis-dominance score to keep a file (1.0 is perfectly axis-aligned).")
+    ap.add_argument("--qc_max_trans_mm", type=float, default=50.0, help="Maximum allowed translation difference (mm) vs reference affine.")
+    ap.add_argument("--qc_require_same_axcodes", action="store_true", help="Require same orientation axcodes as the reference affine.")
     ap.add_argument("--alpha", type=float, default=0.45, help="Overlay alpha.")
     ap.add_argument("--white_bg", action="store_true", help="Save PNG with a white background (recommended for manuscripts).")
     ap.add_argument("--dpi", type=int, default=300, help="PNG DPI (300 recommended for manuscripts).")
@@ -164,6 +233,43 @@ def main() -> None:
     paths = _find_inputs(input_root, args.pattern)
     if not paths:
         raise SystemExit(f"No inputs found under {input_root} matching pattern {args.pattern!r}")
+
+    # Optional affine QC filter (useful to exclude misregistered/slanted preprocessed cases)
+    excluded: List[Tuple[str, str]] = []
+    if bool(getattr(args, "qc_affine", False)):
+        # Choose reference affine
+        if getattr(args, "qc_ref_nifti", None):
+            ref_img = nib.load(_expand(str(getattr(args, "qc_ref_nifti"))))
+            ref_aff = ref_img.affine
+        elif args.base_nifti:
+            ref_img = nib.load(_expand(str(args.base_nifti)))
+            ref_aff = ref_img.affine
+        else:
+            ref_aff = nib.load(paths[0]).affine
+
+        keep, excluded = _qc_filter_paths(
+            paths,
+            ref_affine=ref_aff,
+            min_axis_dominance=float(getattr(args, "qc_min_axis_dominance", 0.995)),
+            max_trans_mm=float(getattr(args, "qc_max_trans_mm", 50.0)),
+            require_same_axcodes=bool(getattr(args, "qc_require_same_axcodes", False)),
+        )
+        # Write keep/exclude lists for reproducibility (in output_dir)
+        keep_path = os.path.join(out_dir, f"{args.name}_qc_keep.txt")
+        excl_path = os.path.join(out_dir, f"{args.name}_qc_exclude.txt")
+        with open(keep_path, "w") as f:
+            for p in keep:
+                f.write(p + "\n")
+        with open(excl_path, "w") as f:
+            for p, reason in excluded:
+                f.write(f"{p}\t{reason}\n")
+        print(f"[QC] Inputs: {len(paths)} | Kept: {len(keep)} | Excluded: {len(excluded)}")
+        print(f"[QC] keep list: {keep_path}")
+        print(f"[QC] exclude list: {excl_path}")
+        paths = keep
+
+    if not paths:
+        raise SystemExit("All inputs were excluded by QC; relax thresholds or inspect exclude list.")
 
     ref_img, mean_cam = _stack_mean(paths, normalise_each=bool(args.normalise_each))
 
@@ -200,7 +306,7 @@ def main() -> None:
         nonbrain_threshold=float(args.nonbrain_threshold),
     )
 
-    print(f"✓ Found {len(paths)} CAMs")
+    print(f"✓ Found {len(paths)} CAMs (after QC)" if excluded else f"✓ Found {len(paths)} CAMs")
     print(f"✓ Saved mean NIfTI: {out_mean}")
     print(f"✓ Saved PNG: {out_png}")
 
