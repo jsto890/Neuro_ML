@@ -20,6 +20,7 @@ import shutil
 from sklearn.model_selection import train_test_split
 import contextlib
 import math
+import logging
 
 def get_train_transform(args):
     """Return a callable that applies light 3D augmentations on tensors [1, D, H, W].
@@ -66,7 +67,7 @@ def get_train_transform(args):
             return x + noise
 
         transforms.extend([intensity_jitter, gaussian_noise])
-        augmentation_info.extend(["Intensity jitter (±5% brightness, ±5% contrast)", "Gaussian noise (σ=0.02)"])
+        augmentation_info.extend(["Intensity jitter (5% brightness, 5% contrast)", "Gaussian noise (=0.02)"])
         print(f"[AUGMENTATION] Using basic transforms: intensity jitter, Gaussian noise")
 
     # Track augmentation statistics
@@ -104,6 +105,8 @@ from evaluate_model import evaluate_model, calculate_metrics, create_evaluation_
 # Set style for plots
 plt.style.use('default')
 sns.set_palette("husl")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
 
 def compute_summary_stats(values):
     """Compute mean, std, 95% CI, min, max, range for a list of numeric values."""
@@ -154,9 +157,9 @@ def balance_dataset(df, random_state=None):
     class_counts = df['label'].value_counts()
     min_count = class_counts.min()
     
-    print(f"Original class distribution:")
+    logger.info("Original class distribution:")
     for label, count in class_counts.items():
-        print(f"  Label {label}: {count} subjects")
+        logger.info("  Label %s: %s subjects", label, count)
     
     balanced_dfs = []
     
@@ -175,10 +178,10 @@ def balance_dataset(df, random_state=None):
     # Shuffle the final dataset
     balanced_df = balanced_df.sample(frac=1, random_state=random_state).reset_index(drop=True)
     
-    print(f"\nBalanced class distribution (undersampled):")
+    logger.info("Balanced class distribution (undersampled):")
     balanced_counts = balanced_df['label'].value_counts()
     for label, count in balanced_counts.items():
-        print(f"  Label {label}: {count} subjects")
+        logger.info("  Label %s: %s subjects", label, count)
     
     return balanced_df
 
@@ -205,9 +208,9 @@ def balance_and_split_dataset(df, val_ratio=0.2, test_ratio=0.1, random_state=No
     class_counts = df['label'].value_counts()
     min_count = class_counts.min()
     
-    print(f"Original class distribution:")
+    logger.info("Original class distribution:")
     for label, count in class_counts.items():
-        print(f"  Label {label}: {count} subjects")
+        logger.info("  Label %s: %s subjects", label, count)
     
     balanced_dfs = []
     removed_subjects_dfs = []
@@ -235,19 +238,24 @@ def balance_and_split_dataset(df, val_ratio=0.2, test_ratio=0.1, random_state=No
     # Shuffle the balanced dataset
     balanced_df = balanced_df.sample(frac=1, random_state=random_state).reset_index(drop=True)
     
-    print(f"\nBalanced class distribution (undersampled):")
+    logger.info("Balanced class distribution (undersampled):")
     balanced_counts = balanced_df['label'].value_counts()
     for label, count in balanced_counts.items():
-        print(f"  Label {label}: {count} subjects")
+        logger.info("  Label %s: %s subjects", label, count)
     
-    print(f"Removed subjects: {len(removed_subjects_df)} subjects")
+    logger.info("Removed subjects: %s subjects", len(removed_subjects_df))
     if len(removed_subjects_df) > 0:
         removed_counts = removed_subjects_df['label'].value_counts()
         for label, count in removed_counts.items():
-            print(f"  Label {label}: {count} subjects")
+            logger.info("  Label %s: %s subjects", label, count)
     
     # Split balanced dataset into train/val/test (70/20/10)
-    print(f"\nSplitting balanced dataset (train: {1-val_ratio-test_ratio:.1%}, val: {val_ratio:.1%}, test: {test_ratio:.1%})")
+    logger.info(
+        "Splitting balanced dataset (train: %.1f%%, val: %.1f%%, test: %.1f%%)",
+        (1 - val_ratio - test_ratio) * 100,
+        val_ratio * 100,
+        test_ratio * 100,
+    )
     
     # First split: train+val vs test
     train_val, test_balanced = train_test_split(
@@ -269,10 +277,15 @@ def balance_and_split_dataset(df, val_ratio=0.2, test_ratio=0.1, random_state=No
     # Add removed subjects to test set
     test_final = pd.concat([test_balanced, removed_subjects_df], ignore_index=True)
     
-    print(f"\nFinal dataset splits:")
-    print(f"Training set: {len(train)} subjects")
-    print(f"Validation set: {len(val)} subjects")
-    print(f"Test set: {len(test_final)} subjects (balanced: {len(test_balanced)}, added: {len(removed_subjects_df)})")
+    logger.info("Final dataset splits:")
+    logger.info("Training set: %s subjects", len(train))
+    logger.info("Validation set: %s subjects", len(val))
+    logger.info(
+        "Test set: %s subjects (balanced: %s, added: %s)",
+        len(test_final),
+        len(test_balanced),
+        len(removed_subjects_df),
+    )
     
     return train, val, test_final, removed_subjects_df
 
@@ -652,7 +665,7 @@ def create_training_plots(folds_data, output_dir="./deep_learning_plots", model_
     print("="*60)
     print(f"Model: {model_name}")
     print(f"Total folds: {summary['total_folds']}")
-    print(f"Average best AUC: {summary['average_best_auc']:.4f} ± {summary['std_best_auc']:.4f}")
+    print(f"Average best AUC: {summary['average_best_auc']:.4f}  {summary['std_best_auc']:.4f}")
     print(f"AUC range: {summary['min_best_auc']:.4f} - {summary['max_best_auc']:.4f}")
     print(f"Average Precision: {summary['average_precision_macro']:.4f}")
     print(f"Average Recall: {summary['average_recall_macro']:.4f}")
@@ -774,7 +787,7 @@ def create_test_summary_plots(fold_test_metrics, output_dir="./deep_learning_plo
         ax5.text(0.5, 0.5, 'No confusion matrix data', ha='center', va='center', transform=ax5.transAxes)
         ax5.set_title('Confusion Matrix (No Data)')
 
-    # 6. Mean ± 95% CI for all metrics
+    # 6. Mean  95% CI for all metrics
     ax6 = axes[1, 2]
     metric_names = ['Accuracy', 'Precision', 'Recall', 'F1', 'AUC', 'MCC']
     metric_values = [accs, precs, recalls, f1s, aucs, mccs]
@@ -784,7 +797,7 @@ def create_test_summary_plots(fold_test_metrics, output_dir="./deep_learning_plo
     bars = ax6.bar(metric_names, means, yerr=cis, capsize=4, alpha=0.8, color='mediumpurple', edgecolor='black')
     ax6.set_ylim(0, 1)
     ax6.set_ylabel('Score')
-    ax6.set_title('Test Metrics: Mean ± 95% CI')
+    ax6.set_title('Test Metrics: Mean  95% CI')
     for bar, mean in zip(bars, means):
         ax6.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01, f'{mean:.3f}', ha='center', va='bottom')
     ax6.grid(True, alpha=0.3)
@@ -819,7 +832,7 @@ def create_test_summary_plots(fold_test_metrics, output_dir="./deep_learning_plo
     print(f"DEEP LEARNING TEST SUMMARY - {model_name}")
     print("="*60)
     for name, stat in summary['metrics'].items():
-        print(f"{name.capitalize():<10}: {stat['mean']:.4f}  (95% CI ± {stat['ci95']:.4f}; range {stat['min']:.4f}-{stat['max']:.4f})")
+        print(f"{name.capitalize():<10}: {stat['mean']:.4f}  (95% CI  {stat['ci95']:.4f}; range {stat['min']:.4f}-{stat['max']:.4f})")
     print("="*60)
 
     return summary
@@ -2028,8 +2041,8 @@ def k_fold_training(args, k_folds=5, models_to_run=None):
     # Plot 1: Validation AUC and Accuracy with 95% CI error bars
     x = np.arange(len(model_names))
     width = 0.35
-    ax1.bar(x - width/2, val_auc_means, width, yerr=val_auc_cis, capsize=4, label='Val AUC (mean ± 95% CI)', alpha=0.85, color='skyblue', edgecolor='black')
-    ax1.bar(x + width/2, val_acc_means, width, yerr=val_acc_cis, capsize=4, label='Val Acc (mean ± 95% CI)', alpha=0.85, color='lightcoral', edgecolor='black')
+    ax1.bar(x - width/2, val_auc_means, width, yerr=val_auc_cis, capsize=4, label='Val AUC (mean  95% CI)', alpha=0.85, color='skyblue', edgecolor='black')
+    ax1.bar(x + width/2, val_acc_means, width, yerr=val_acc_cis, capsize=4, label='Val Acc (mean  95% CI)', alpha=0.85, color='lightcoral', edgecolor='black')
     ax1.set_xticks(x)
     ax1.set_xticklabels(model_names, rotation=20)
     ax1.set_ylabel('Score')
@@ -2230,7 +2243,7 @@ def ensemble_evaluate_models(model_name, model_dir, test_loader, device, args, f
     
     print(f"Ensemble evaluation completed:")
     print(f"  Models used: {len(models)}")
-    print(f"  Average fold AUC: {np.mean(fold_aucs):.4f} ± {np.std(fold_aucs):.4f}")
+    print(f"  Average fold AUC: {np.mean(fold_aucs):.4f}  {np.std(fold_aucs):.4f}")
     print(f"  Ensemble accuracy: {ensemble_metrics['accuracy']:.4f}")
     print(f"  Ensemble AUC: {ensemble_metrics['auc']:.4f}")
     
@@ -2345,7 +2358,7 @@ def auto_find_base_channels(model_name, num_classes, device, args, test_batch_si
             dummy_loss.backward()
             
             # If we get here, it worked!
-            print(f"[MEMORY] ✅ base_channels={base_channels} works!")
+            print(f"[MEMORY]  base_channels={base_channels} works!")
             
             # Clean up
             del test_model, dummy_input, logits, dummy_loss
@@ -2355,7 +2368,7 @@ def auto_find_base_channels(model_name, num_classes, device, args, test_batch_si
             return base_channels
             
         except torch.cuda.OutOfMemoryError as e:
-            print(f"[MEMORY] ❌ base_channels={base_channels} failed (OOM)")
+            print(f"[MEMORY]  base_channels={base_channels} failed (OOM)")
             
             # Clean up
             if 'test_model' in locals():
@@ -2369,7 +2382,7 @@ def auto_find_base_channels(model_name, num_classes, device, args, test_batch_si
             continue
             
         except Exception as e:
-            print(f"[MEMORY] ❌ base_channels={base_channels} failed: {e}")
+            print(f"[MEMORY]  base_channels={base_channels} failed: {e}")
             
             # Clean up
             if 'test_model' in locals():
@@ -2381,7 +2394,7 @@ def auto_find_base_channels(model_name, num_classes, device, args, test_batch_si
             continue
     
     # If nothing worked, return minimum
-    print(f"[MEMORY] ⚠️  All base_channels tests failed, using minimum: 32")
+    print(f"[MEMORY]   All base_channels tests failed, using minimum: 32")
     return 32
 
 
@@ -2419,41 +2432,41 @@ def auto_reduce_batch_size(model, initial_batch_size, min_batch_size, device, ar
             dummy_loss = logits.sum()
             dummy_loss.backward()
             
-            print(f"[MEMORY] ✅ Batch size {batch_size} works! Using this for training.")
+            print(f"[MEMORY]  Batch size {batch_size} works! Using this for training.")
             return batch_size
             
         except torch.cuda.OutOfMemoryError as e:
-            print(f"[MEMORY] ❌ Batch size {batch_size} failed: {e}")
+            print(f"[MEMORY]  Batch size {batch_size} failed: {e}")
             
             # Clear GPU memory
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             
             if batch_size <= min_batch_size:
-                print(f"[MEMORY] ⚠️  Reached minimum batch size {min_batch_size}. Training may be slow.")
+                print(f"[MEMORY]   Reached minimum batch size {min_batch_size}. Training may be slow.")
                 return min_batch_size
         except RuntimeError as e:
             if "Input type" in str(e) and "weight type" in str(e):
-                print(f"[MEMORY] ❌ Device mismatch error: {e}")
+                print(f"[MEMORY]  Device mismatch error: {e}")
                 print(f"[MEMORY] Attempting to fix device placement...")
                 try:
                     model = model.to(device)
                     # Retry with corrected device placement
                     with torch.no_grad():
                         _ = model(dummy_input)
-                    print(f"[MEMORY] ✅ Device issue fixed! Batch size {batch_size} works.")
+                    print(f"[MEMORY]  Device issue fixed! Batch size {batch_size} works.")
                     return batch_size
                 except Exception as retry_e:
-                    print(f"[MEMORY] ❌ Device fix failed: {retry_e}")
+                    print(f"[MEMORY]  Device fix failed: {retry_e}")
                     return min_batch_size
             else:
-                print(f"[MEMORY] ❌ Runtime error: {e}")
+                print(f"[MEMORY]  Runtime error: {e}")
                 return min_batch_size
         except Exception as e:
-            print(f"[MEMORY] ❌ Unexpected error: {e}")
+            print(f"[MEMORY]  Unexpected error: {e}")
             return min_batch_size
     
-    print(f"[MEMORY] ⚠️  Could not find working batch size. Using minimum: {min_batch_size}")
+    print(f"[MEMORY]   Could not find working batch size. Using minimum: {min_batch_size}")
     return min_batch_size
 
 

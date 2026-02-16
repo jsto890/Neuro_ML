@@ -1,71 +1,64 @@
 #!/usr/bin/env python3
-"""
-Test script to verify the new Desktop SPECT folder structure
-"""
+"""Validate DSPECT folder structure for CN and PD cohorts."""
 
-import os
+from __future__ import annotations
+
+import argparse
+import logging
 from pathlib import Path
 
-def test_desktop_paths():
-    """Test if the new Desktop SPECT paths exist and contain data"""
-    
-    base_dir = "/Users/jacksonschofield/Desktop/SPECT"
-    
-    print("🔍 Testing Desktop SPECT folder structure...")
-    print(f"Base directory: {base_dir}")
-    
-    # Check if base directory exists
-    if not os.path.exists(base_dir):
-        print(f"❌ Base directory not found: {base_dir}")
+
+def count_subject_niftis(subject_dir: Path) -> int:
+    """Count NIfTI files in a single subject directory."""
+    return sum(1 for p in subject_dir.glob("*.nii.gz") if p.is_file())
+
+
+def validate_group(group_dir: Path) -> bool:
+    """Validate that a group directory exists and contains subject subfolders."""
+    if not group_dir.exists():
+        logging.error("Missing directory: %s", group_dir)
         return False
-    
-    # Check for CN and PD folders
-    cn_dir = os.path.join(base_dir, "CN_SPECT_PPMI_NIfTI")
-    pd_dir = os.path.join(base_dir, "PD_SPECT_PPMI_NIfTI")
-    
-    print(f"\n📁 CN directory: {cn_dir}")
-    print(f"📁 PD directory: {pd_dir}")
-    
-    # Test CN directory
-    if os.path.exists(cn_dir):
-        cn_subjects = [d for d in os.listdir(cn_dir) if d.startswith('sub-')]
-        print(f"✅ CN directory found with {len(cn_subjects)} subjects")
-        
-        if cn_subjects:
-            # Check first subject for NIfTI files
-            first_subject = cn_subjects[0]
-            subject_dir = os.path.join(cn_dir, first_subject)
-            nii_files = [f for f in os.listdir(subject_dir) if f.endswith('.nii.gz')]
-            print(f"   📊 First subject '{first_subject}' has {len(nii_files)} NIfTI files")
-            
-            if nii_files:
-                print(f"   📄 Files: {nii_files[:5]}...")  # Show first 5 files
-            else:
-                print(f"   ⚠️ No NIfTI files found in {first_subject}")
-    else:
-        print(f"❌ CN directory not found: {cn_dir}")
-    
-    # Test PD directory
-    if os.path.exists(pd_dir):
-        pd_subjects = [d for d in os.listdir(pd_dir) if d.startswith('sub-')]
-        print(f"✅ PD directory found with {len(pd_subjects)} subjects")
-        
-        if pd_subjects:
-            # Check first subject for NIfTI files
-            first_subject = pd_subjects[0]
-            subject_dir = os.path.join(pd_dir, first_subject)
-            nii_files = [f for f in os.listdir(subject_dir) if f.endswith('.nii.gz')]
-            print(f"   📊 First subject '{first_subject}' has {len(nii_files)} NIfTI files")
-            
-            if nii_files:
-                print(f"   📄 Files: {nii_files[:5]}...")  # Show first 5 files
-            else:
-                print(f"   ⚠️ No NIfTI files found in {first_subject}")
-    else:
-        print(f"❌ PD directory not found: {pd_dir}")
-    
-    print("\n🎯 Path structure test completed!")
-    return True
+
+    subject_dirs = sorted([p for p in group_dir.iterdir() if p.is_dir() and p.name.startswith("sub-")])
+    logging.info("Found %s subject folders in %s", len(subject_dirs), group_dir.name)
+    if not subject_dirs:
+        return False
+
+    first_subject = subject_dirs[0]
+    nifti_count = count_subject_niftis(first_subject)
+    logging.info("First subject '%s' has %s NIfTI files", first_subject.name, nifti_count)
+    return nifti_count > 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Validate DSPECT directory structure")
+    parser.add_argument(
+        "--base_dir",
+        type=Path,
+        required=True,
+        help="Root folder containing CN_SPECT_PPMI_NIfTI and PD_SPECT_PPMI_NIfTI",
+    )
+    return parser
+
+
+def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    args = build_parser().parse_args()
+
+    cn_dir = args.base_dir / "CN_SPECT_PPMI_NIfTI"
+    pd_dir = args.base_dir / "PD_SPECT_PPMI_NIfTI"
+
+    logging.info("Validating base directory: %s", args.base_dir)
+    cn_ok = validate_group(cn_dir)
+    pd_ok = validate_group(pd_dir)
+
+    if cn_ok and pd_ok:
+        logging.info("Path structure validation passed")
+        return 0
+
+    logging.error("Path structure validation failed")
+    return 1
+
 
 if __name__ == "__main__":
-    test_desktop_paths()
+    raise SystemExit(main())

@@ -1,0 +1,14 @@
+steps:
+  - script: "1_reorient.py"
+    description: "Step 1: Reorientation"
+  - script: "2_normalise.py"
+    description: "Step 2: SPECT normalisation"
+    extra_args: ["--method", "reference"]
+  - script: "3_register.py"
+    description: "Step 3: Registration"
+  - script: "4_masking.py"
+    description: "Step 4: SPECT masking"
+  - script: "5_padding.py"
+    description: "Step 5: Finalisation"
+  - script: "6_postprocess.py"
+    description: "Step 6: Postprocessing"

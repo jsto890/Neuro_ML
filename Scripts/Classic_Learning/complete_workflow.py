@@ -10,23 +10,13 @@ Author: P4P Team
 Date: 2024
 """
 
-import os
 import sys
 import yaml
 import logging
 import argparse
 from pathlib import Path
 from datetime import datetime
-
-# Add the Optimised directory to the path
-sys.path.append(str(Path(__file__).parent / "Optimised"))
-
-try:
-    from improved_optimised_classifier import ImprovedOptimizedRadiomicsClassifier
-except ImportError as e:
-    print(f"Error importing ImprovedOptimizedRadiomicsClassifier: {e}")
-    print("Please ensure you're running this from the Classic_Learning directory")
-    sys.exit(1)
+from importlib.util import module_from_spec, spec_from_file_location
 
 def setup_logging(output_dir):
     """Setup comprehensive logging for the workflow."""
@@ -41,6 +31,25 @@ def setup_logging(output_dir):
         ]
     )
     return logging.getLogger(__name__)
+
+
+def load_classifier_class():
+    """Load EnhancedRadiomicsClassifier from the local Enhanced module."""
+    classifier_path = Path(__file__).parent / "Enhanced" / "enhanced_classifier.py"
+    if not classifier_path.exists():
+        raise FileNotFoundError(f"Classifier module not found: {classifier_path}")
+
+    spec = spec_from_file_location("enhanced_classifier", classifier_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load module spec from {classifier_path}")
+
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    classifier_class = getattr(module, "EnhancedRadiomicsClassifier", None)
+    if classifier_class is None:
+        raise ImportError("EnhancedRadiomicsClassifier is not defined in enhanced_classifier.py")
+    return classifier_class
 
 def validate_input_data(input_path):
     """Validate that the input radiomics file exists and has required format."""
@@ -177,9 +186,10 @@ def run_complete_workflow(input_path, output_dir, config_path=None, random_state
     # Load configuration
     config = load_config(config_path)
     
-    # Step 2: Initialize the improved optimised classifier
-    logger.info("Step 2: Initializing Improved Optimized Radiomics Classifier...")
-    classifier = ImprovedOptimizedRadiomicsClassifier(
+    # Step 2: Initialize classifier
+    logger.info("Step 2: Initialising enhanced radiomics classifier...")
+    classifier_class = load_classifier_class()
+    classifier = classifier_class(
         input_path=input_path,
         output_dir=str(output_path),
         random_state=random_state,
@@ -188,7 +198,7 @@ def run_complete_workflow(input_path, output_dir, config_path=None, random_state
     
     # Step 3: Run the complete pipeline
     logger.info("Step 3: Running complete pipeline...")
-    success = classifier.run_improved_pipeline()
+    success = classifier.run_pipeline()
     
     if not success:
         logger.error("Pipeline failed to complete successfully")
@@ -390,18 +400,17 @@ Examples:
         )
         
         if results.get('success', True):
-            print(f"\n✅ Workflow completed successfully!")
-            print(f"📁 Results saved to: {output_path}")
-            print(f"🎯 Primary model: SVM (optimised_svm_model.pkl)")
-            print(f"🔄 Backup model: Ensemble (optimised_ensemble_model.pkl)")
-            print(f"📊 Check workflow_report.txt for detailed results")
+            logger.info("Workflow completed successfully")
+            logger.info("Results saved to: %s", output_path)
+            logger.info("Primary model: SVM (optimised_svm_model.pkl)")
+            logger.info("Backup model: Ensemble (optimised_ensemble_model.pkl)")
+            logger.info("See workflow_report.txt for detailed results")
         else:
-            print(f"\n❌ Workflow failed: {results.get('error', 'Unknown error')}")
+            logger.error("Workflow failed: %s", results.get('error', 'Unknown error'))
             sys.exit(1)
             
     except Exception as e:
         logger.error(f"Workflow failed with error: {e}")
-        print(f"\n❌ Workflow failed: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
