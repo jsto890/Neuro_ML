@@ -29,7 +29,7 @@ except ImportError:
 
 class Simple3DCNN(nn.Module):
     """
-    A straightforward 3DxCNN for binary classification (e.g. AD vs PD vs CN).
+    A straightforward 3DxCNN for multiclass classification (e.g. AD vs PD vs CN).
     Input:  [B, 1, D, H, W]  single‐channel sMRI
     Output: [B, num_classes] logits
     """
@@ -352,7 +352,7 @@ def get_pretrained_model_info():
             "pretrained_on": "None",
             "input_size": "Flexible (3D)",
             "pretrained_available": False,
-            "notes": "Baseline model, trained from scratch"
+            "notes": "Baseline model, trained from scratch, fully personalisable"
         }
     }
     return info

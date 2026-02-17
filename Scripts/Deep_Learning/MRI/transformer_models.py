@@ -25,7 +25,7 @@ class VisionTransformer3D(nn.Module):
     3D Vision Transformer for medical image classification.
     Adapted from ViT architecture for 3D volumes.
     
-    Input:  [B, 1, D, H, W]  single-channel sMRI
+    Input:  [B, 1, D, H, W]  single-channel sMRI, 97 x 115 x 97 is needed
     Output: [B, num_classes] logits
     """
     

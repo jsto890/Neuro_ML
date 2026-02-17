@@ -4,11 +4,11 @@ React and TypeScript interface for image upload and classification result displa
 
 ## Purpose
 
-The frontend provides a lightweight workflow to:
+The frontend provides a demo lightweight workflow to:
 
-- upload MRI, PET, SPECT, NIfTI, and DICOM files
+- upload MRI, PET, SPECT in both NIfTI, and DICOM file form
 - submit files to the backend API
-- present prediction and confidence outputs
+- present prediction and confidence outputs with individualised GradCAM attention visualisation
 
 ## Stack
 

@@ -1,6 +1,6 @@
 # Scripts Directory
 
-This directory contains all the main pipeline scripts for the P4P (Parkinson's Disease Detection Pipeline) project. The scripts are organised into logical modules covering the complete workflow from data preprocessing to model deployment.
+This directory contains all the main pipeline scripts for the P4P (Alzheimer's and Parkinson's Disease Detection Pipeline) project. The scripts are organised into logical modules covering the complete workflow from data preprocessing to model deployment.
 
 ##  Directory Structure
 
